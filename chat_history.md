@@ -653,3 +653,14 @@ Chat History
 
 - 已补齐 A0 手工冒烟清单并将执行顺序中的 A0/B1~B5 同步为已完成
 - 已修复批量转写无文件时的返回方式，避免生成器函数直接 return 导致 UI 不更新
+
+## 2026-06-08 17:51:54
+
+### User
+
+- 你自己定
+
+### Assistant
+
+- 已在你允许后提交当前改动：commit="a3b1e9b"
+- 已完成 C1 技术路线决策文档："Docs/design/pat_webui_route_decision.md"，并在 "todo.md" 勾选 C1 验收
