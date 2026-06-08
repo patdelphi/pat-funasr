@@ -1,0 +1,56 @@
+# 说明：Git 忽略规则（用于过滤 Python 运行时、模型缓存等大文件，避免仓库膨胀）
+
+# Python 运行时（便携包自带，体积大）
+runtime/
+
+# 模型与缓存（体积大，可通过脚本/首次运行自动下载）
+workspace/
+
+# FunASR 可能产生的导出/缓存
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.so
+*.dll
+*.dylib
+
+# 模型/权重/导出文件（常见大文件）
+*.pt
+*.pth
+*.bin
+*.ckpt
+*.onnx
+*.engine
+*.tflite
+
+# 音视频与数据集（常见大文件）
+*.wav
+*.mp3
+*.flac
+*.m4a
+*.ogg
+*.webm
+*.mp4
+*.mkv
+*.avi
+*.mov
+
+# 压缩包/安装包（常见大文件）
+*.zip
+*.7z
+*.rar
+*.tar
+*.gz
+*.bz2
+
+# 本地日志/临时文件
+*.log
+*.tmp
+*.temp
+
+# IDE/系统文件
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
