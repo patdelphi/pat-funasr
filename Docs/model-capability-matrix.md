@@ -1,4 +1,4 @@
-﻿#
+#
 ASR 模型能力矩阵与 API 参数说明
 
 目的：让你快速理解“不同模型能做到什么/不能做到什么”，以及在本项目里“可调用的 API、可用参数、可得到的输出格式”分别是什么。
@@ -30,9 +30,12 @@ API 实现：[server.py](file:///y:/NewStore/AI/FunASR-Portable-GPU/app/openai_a
 - model：模型别名（默认 "sensevoice"）
   - 可选：sensevoice / paraformer / paraformer-en / fun-asr-nano
 - language：语言提示（可选，透传给 FunASR generate）
-- response_format：输出结构（默认 "json"）
-  - 已实现：json / verbose_json
-  - 规划：txt / srt / vtt / tsv / all(zip)
+- response_format：输出格式（默认 "json"）
+  - 已实现：json / verbose_json / txt / srt / vtt / tsv / all(zip)
+- max_line_width：每行最大字符数（可选，仅影响 txt/srt/vtt 渲染）
+- vad_preset：default / anti_hallucination（可选）
+- merge_vad：true/false（可选）
+- merge_length_s：合并段长度（秒，可选，需要 merge_vad=true）
 
 ### 3) 输出字段（已实现）
 
@@ -103,4 +106,3 @@ API 实现：[server.py](file:///y:/NewStore/AI/FunASR-Portable-GPU/app/openai_a
   - paraformer：中文字幕强；标点强；时间戳更有希望
 - API 层面：对不同模型做参数兼容性校验
   - 例如：对 sensevoice 提示 use_itn；对 paraformer 提示 punc/hotword；对无时间戳模型默认走 VAD 段时间戳
-

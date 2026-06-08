@@ -1,4 +1,4 @@
-﻿#
+﻿﻿#
 OpenAI 兼容 API 说明（API）
 
 实现文件：["app/openai_api/server.py"](file:///y:/NewStore/AI/FunASR-Portable-GPU/app/openai_api/server.py)
@@ -45,7 +45,20 @@ OpenAI 兼容 API 说明（API）
 - "file"（必填）：音频文件（wav/mp3/flac/m4a/ogg/webm 等）
 - "model"（可选，默认 "sensevoice"）：模型名
 - "language"（可选）：语言提示（透传给 FunASR 的 generate）
-- "response_format"（可选，默认 "json"）：支持 "json" 或 "verbose_json"
+- "response_format"（可选，默认 "json"）：输出格式
+  - "json"：只返回 {"text"}
+  - "verbose_json"：返回 {"text","segments",...}
+  - "txt"：纯文本（分段分行）
+  - "srt"：SRT 字幕
+  - "vtt"：VTT 字幕
+  - "tsv"：TSV（start/end/text）
+  - "all"：zip 打包（含 txt/json/srt/vtt/tsv）
+- "max_line_width"（可选）：每行最大字符数（仅影响 txt/srt/vtt 渲染）
+- "vad_preset"（可选）：VAD 预设
+  - "default"
+  - "anti_hallucination"：更激进过滤静音/噪声段
+- "merge_vad"（可选）：true/false（优先级高于 vad_preset）
+- "merge_length_s"（可选）：合并段长度（秒，需要 merge_vad=true）
 
 响应：
 
@@ -53,6 +66,16 @@ OpenAI 兼容 API 说明（API）
   - {"text": "<识别文本>"}
 - "response_format=verbose_json"
   - {"text","segments","language","duration","model"}
+- "response_format=txt"
+  - text/plain
+- "response_format=srt"
+  - application/x-subrip
+- "response_format=vtt"
+  - text/vtt
+- "response_format=tsv"
+  - text/tab-separated-values
+- "response_format=all"
+  - application/zip（Content-Disposition: attachment; filename="output.zip"）
 
 错误约定：
 
@@ -85,4 +108,3 @@ OpenAI 兼容 API 说明（API）
 - 删除 "<|...|>" 形态的特殊标记
 - 删除残留的 "<...>" 形态 token
 - 合并多空格与控制字符
-

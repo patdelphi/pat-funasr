@@ -25,6 +25,7 @@ from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import JSONResponse, Response
 
 import renderers
+import vad_presets
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -120,6 +121,9 @@ async def transcribe(
     language: Optional[str] = Form(default=None),
     response_format: Optional[str] = Form(default="json"),
     max_line_width: Optional[int] = Form(default=None),
+    vad_preset: Optional[str] = Form(default=None),
+    merge_vad: Optional[bool] = Form(default=None),
+    merge_length_s: Optional[int] = Form(default=None),
 ):
     """
     OpenAI-compatible audio transcription endpoint.
@@ -129,6 +133,9 @@ async def transcribe(
     - model: Model to use (sensevoice, paraformer, fun-asr-nano)
     - language: Optional language hint
     - response_format: json/verbose_json/txt/srt/vtt/tsv/all
+    - vad_preset: default/anti_hallucination（可选）
+    - merge_vad: true/false（可选，优先级高于 preset）
+    - merge_length_s: 合并段长度（秒，可选，需要配合 merge_vad=true）
     """
     # Validate model
     if model not in MODEL_CONFIGS:
@@ -142,6 +149,12 @@ async def transcribe(
         raise HTTPException(
             status_code=400,
             detail=f"Unsupported response_format '{response_format}'. Allowed: {sorted(allowed_formats)}",
+        )
+
+    if vad_preset is not None and vad_preset not in vad_presets.allowed_presets():
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported vad_preset '{vad_preset}'. Allowed: {sorted(vad_presets.allowed_presets())}",
         )
 
     # Save uploaded file
@@ -158,6 +171,15 @@ async def transcribe(
         generate_kwargs = {"input": tmp_path, "batch_size": 1}
         if language:
             generate_kwargs["language"] = language
+        try:
+            generate_kwargs = vad_presets.apply_vad_controls(
+                generate_kwargs=generate_kwargs,
+                vad_preset=vad_preset,
+                merge_vad=merge_vad,
+                merge_length_s=merge_length_s,
+            )
+        except ValueError as ve:
+            raise HTTPException(status_code=400, detail=str(ve))
 
         result = asr_model.generate(**generate_kwargs)
         elapsed = time.time() - t0

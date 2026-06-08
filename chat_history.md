@@ -143,3 +143,13 @@ Chat History
 - 已按 todo 开始开发：新增输出渲染器 "app/openai_api/renderers.py" 与单元测试 "tests/test_renderers.py"
 - API 已扩展支持 response_format：txt/srt/vtt/tsv/all(zip)（并新增 max_line_width）
 - 校验通过：`python -m unittest discover -s "tests"`、`python -m compileall "app/openai_api"`
+
+## 2026-06-08 09:24:48
+
+### User
+
+- 1 ok 2 你自己定
+
+### Assistant
+
+- 已继续开发：新增 VAD 预设与参数控制（vad_preset/merge_vad/merge_length_s），并补充单元测试与 API 文档更新
