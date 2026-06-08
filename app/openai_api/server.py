@@ -53,6 +53,20 @@ MODEL_CONFIGS = {
         "vad_model": "fsmn-vad",
     },
     "fun-asr-nano": {
+        "model": "FunAudioLLM/Fun-ASR-Nano-2512",
+        "hub": "hf",
+        "trust_remote_code": True,
+        "vad_model": "fsmn-vad",
+        "vad_kwargs": {"max_single_segment_time": 30000},
+    },
+    "qwen3-asr": {
+        "model": "Qwen/Qwen3-ASR-1.7B",
+        "hub": "hf",
+        "trust_remote_code": True,
+        "vad_model": "fsmn-vad",
+        "vad_kwargs": {"max_single_segment_time": 30000},
+    },
+    "qwen3-asr-0.6b": {
         "model": "Qwen/Qwen3-ASR-0.6B",
         "hub": "hf",
         "trust_remote_code": True,

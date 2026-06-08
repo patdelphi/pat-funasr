@@ -98,6 +98,15 @@ OpenAI 兼容 API 说明（API）
   - 模型："paraformer-en"
   - VAD："fsmn-vad"
 - "fun-asr-nano"
+  - 模型："FunAudioLLM/Fun-ASR-Nano-2512"（hub=hf，trust_remote_code=True）
+  - VAD："fsmn-vad"
+
+补充：
+
+- "qwen3-asr"
+  - 模型："Qwen/Qwen3-ASR-1.7B"（hub=hf，trust_remote_code=True）
+  - VAD："fsmn-vad"
+- "qwen3-asr-0.6b"
   - 模型："Qwen/Qwen3-ASR-0.6B"（hub=hf，trust_remote_code=True）
   - VAD："fsmn-vad"
 

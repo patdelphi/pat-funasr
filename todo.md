@@ -1,4 +1,4 @@
-﻿﻿#
+﻿#
 输出模板/字幕（多格式）开发 Todo
 
 目标：修复并增强输出质量：txt/srt/vtt/tsv/all(zip) 输出具备“标点 + 分段 + 合理时间戳”；修复 "fun-asr-nano" 无输出；并允许在线下载/更新到最新可用模型。
@@ -73,3 +73,76 @@
 
 - 更新 "Docs/api.md"：补充 response_format 与新增参数说明
 - 更新 "Docs/model-capability-matrix.md"：补充“字幕输出回退策略”一节
+
+## 7. WebUI 分支（为大改做隔离）
+
+目标：保留原 WebUI（"app/openai_api/gradio_app.py" 与 "run_ui.bat"）不动，复制一套新的 "pat-funasr WebUI" 作为后续大改入口。
+
+计划：
+
+- 新建目录："app/pat_funasr_webui/"
+- 复制现有 UI 入口为："app/pat_funasr_webui/gradio_app.py"（先做到功能等价，可跑通）
+- 新增启动脚本（不影响原脚本）：
+  - "run_ui_pat.bat"：仅启动 pat WebUI
+  - （可选）"FunASR_pat.bat"：同时启动 API + pat WebUI
+
+可配置项（建议默认不与原 UI 冲突）：
+
+- pat WebUI 默认端口：7861（原 UI 为 7860）
+- API base_url：默认 http://localhost:8000（与现有一致）
+
+验收：
+
+- 运行 "run_ui_pat.bat" 后可打开 pat WebUI，并能正常调用 API 完成一次转写
+
+## 8. Pat WebUI 大改（分阶段）
+
+范围：只改 "app/pat_funasr_webui/gradio_app.py"（以及必要的同目录新模块），不动原 "app/openai_api/gradio_app.py"。
+
+### 8.1 动态模型列表
+
+- 启动时调用 `GET /v1/models`，将下拉框改为动态列表，并显示 ready 状态
+- 刷新按钮：允许手动刷新模型列表
+
+### 8.2 多格式输出 + 下载
+
+- 输出格式选择：txt/srt/vtt/tsv/json/verbose_json/all(zip)
+- 对非 JSON（txt/srt/vtt/tsv/zip）：
+  - UI 侧改为保存二进制响应到临时文件
+  - 提供下载组件（File）与预览（Textbox/Code）
+
+### 8.3 高级参数面板
+
+- 在 Accordion 中暴露：vad_preset/merge_vad/merge_length_s/max_line_width/hotword 等
+- 请求体按白名单拼接，避免把 UI 任意字段透传到后端
+
+### 8.4 批量/队列
+
+- 支持多文件上传（文件列表）
+- 队列执行、进度展示、失败项保留错误详情与可重试
+
+验收（每阶段）：
+
+- 能在 "run_ui_pat.bat" 启动的 UI 中完成一次真实转写，并产出对应格式的可下载文件
+
+## 9. 对齐官方能力（“功能完整 WebUI”）
+
+依据官方教程（tutorial.html）建议的核心场景，把 pat WebUI 拆成多 Tab（或多页面）：
+
+- 离线识别（ASR）：Paraformer / SenseVoice / Fun-ASR-Nano / Qwen3-ASR
+- 流式识别（Streaming ASR）：Paraformer-Streaming（chunk_size/cache/is_final/look_back）
+- 说话人分离（Diarization）：ASR + VAD +（可选）PUNC + spk_model="cam++"，支持 spk_mode
+- 情感识别（Emotion）：emotion2vec（或 SenseVoice 的情感标签）
+- 语音活动检测（VAD）：离线与流式（返回区间 ms）
+- 标点恢复（PUNC）：ct-punc（输入文本→输出带标点文本）
+
+关键参数（来自官方示例，后续需要在 UI 中可配置）：
+
+- 通用：model / device / hub(ms|hf) / disable_update / ncpu / log_level / disable_pbar
+- ASR：batch_size_s / hotword(s) / language / use_itn / merge_vad / merge_length_s
+- VAD：vad_kwargs.max_single_segment_time
+- Streaming：chunk_size / encoder_chunk_look_back / decoder_chunk_look_back / cache / is_final
+- Diarization：spk_model / spk_mode
+- Emotion：granularity（utterance 等）
+
+说明：当前项目的后端是 OpenAI-Compatible API（/v1/audio/transcriptions）。要覆盖以上全部能力，需要扩展后端 API 或让 WebUI 直接调用 FunASR 推理链路（二选一）。

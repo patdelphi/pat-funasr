@@ -312,3 +312,69 @@ Chat History
 - 已补充忽略规则：在 ".gitignore" 中忽略 "test/" 跑批输出目录（避免提交 ASR 产物）
 - 已通过幂等校验：unittest discover、compileall
 - 等你确认后执行 git add/commit/push
+
+## 2026-06-08 13:39:58
+
+### User
+
+- 目录名字FunASR-Portable-GPU 与仓库名字不一致，有没有问题？
+
+### Assistant
+
+- 没问题：本地目录名（如 "FunASR-Portable-GPU"）与远端仓库名（如 "pat-funasr"）彼此独立，不影响 git 的 commit/push/pull
+- 只有当文档/脚本里写死了本地绝对路径（例如包含 "Y:\\NewStore\\AI\\FunASR-Portable-GPU"）时，你改目录名才需要同步更新这些引用
+
+## 2026-06-08 13:43:06
+
+### User
+
+- 你看下现在的webui是怎么配置的
+
+### Assistant
+
+- WebUI 是 Gradio：入口在 "app/openai_api/gradio_app.py"，通过 HTTP 调用后端 `POST /v1/audio/transcriptions`
+- UI 默认配置：`BASE_URL=http://localhost:8000`，`GRADIO_HOST=127.0.0.1`，`GRADIO_PORT=7860`，`TIMEOUT=300`；也可用命令行参数覆盖
+- 启动方式：
+  - 仅 UI：运行 "run_ui.bat"（会执行 `python gradio_app.py --base-url http://localhost:8000 --port 7860`）
+  - API+UI：运行 "FunASR.bat"（内部 start "FunASR-API" 调 "run_api.bat"，start "FunASR-UI" 调 "run_ui.bat"）
+
+## 2026-06-08 13:52:31
+
+### User
+
+- 保留原webui app，复制一套为 pat-funasr app，我要大改webui
+- 你先替我梳理下，现在的webui有哪些可以升级的
+
+### Assistant
+
+- 已新增 pat WebUI 隔离副本：
+  - 新目录："app/pat_funasr_webui/"
+  - 新入口："app/pat_funasr_webui/gradio_app.py"（默认端口 7861）
+  - 新启动脚本："run_ui_pat.bat"（`--base-url http://localhost:8000 --port 7861`）
+- 已把后续大改拆成 4 个方向并写入 "todo.md"：
+  - 动态模型列表（对接 `GET /v1/models`）
+  - 多格式输出与下载（txt/srt/vtt/tsv/all(zip)）
+  - 高级参数面板（vad_preset/merge_vad/max_line_width/hotword 等白名单）
+  - 批量/队列（多文件、进度、失败重试）
+
+## 2026-06-08 13:57:20
+
+### User
+
+- 你仔细研究一下官方文档： https://modelscope.github.io/FunASR/zh/tutorial.html  https://modelscope.github.io/FunASR/api.html  我要一个功能完整的webui
+
+### Assistant
+
+- 已按官方教程梳理“功能完整 WebUI”需要覆盖的能力：离线识别、流式识别、说话人分离、情感识别、VAD、标点恢复，并整理了关键参数（chunk_size/cache/is_final、spk_model/spk_mode、use_itn/merge_vad 等）写入 "todo.md"
+- 已确认采用方案：扩展后端 API（新增 "/v1/funasr/*"），pat WebUI 负责调用与展示；第一版包含全部 Tab（ASR/Streaming/Spk/Emotion+VAD+PUNC）
+
+## 2026-06-08 14:02:38
+
+### User
+
+- 文档里面，Fun-ASR-Nano 对应的是FunAudioLLM/Fun-ASR-Nano-2512，Qwen3-AS 对应的是 Qwen/Qwen3-ASR-1.7B ，你是不是搞错了？需要修正
+
+### Assistant
+
+- 已修正文档表述：明确“官方文档口径”与“本项目默认映射”不同，避免把别名与上游 model id 混淆
+- 已更新："Docs/model-capability-matrix.md"、"Docs/api.md"、"Docs/changelog.md"
