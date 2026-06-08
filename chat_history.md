@@ -477,3 +477,14 @@ Chat History
 - 已确认关键模型缓存目录存在（均在 "workspace\\models\\models\\*" 下）：SenseVoiceSmall / fsmn-vad / ct-punc / Qwen3-ASR-1.7B / Fun-ASR-Nano-2512
 - 已检查 "test\\sensevoice\\"、"test\\paraformer\\"、"test\\fun-asr-nano\\"、"test\\qwen3-asr\\"：对 "1/2" 的 "txt/srt/vtt/tsv/json/zip/wav" 文件齐全（无缺失）
 - 四个模型的 "run.log" 尾部均为 done（最近一次：fun-asr-nano 15:30:15、qwen3-asr 15:31:36）
+
+## 2026-06-08 15:45:16
+
+### User
+
+- commit and push
+
+### Assistant
+
+- 已通过幂等校验：`python -m unittest discover -s "tests"`、`python -m compileall "app" "scripts"`
+- 已提交并推送到 "origin/main"：commit="b81914d"
