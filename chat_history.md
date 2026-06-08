@@ -547,3 +547,109 @@ Chat History
 
 - 已确认当前工作区仅包含本轮文档整理改动：`todo.md`、`Docs/README.md`、`chat_history.md`
 - 将先提交当前文档整理结果，再按 `todo.md` 开始执行 `A0/A1`：补最小测试骨架、搭建 `Pat WebUI` 独立目录与启动入口
+
+## 2026-06-08 16:14:40
+
+### User
+
+- commit，然后开始执行
+
+### Assistant
+
+- 已提交当前文档整理：commit=`21a6593`（未执行 push）
+- 已开始执行 `Pat WebUI` 第一阶段：新增 `app/pat_funasr_webui/app_utils.py`，抽出模型列表解析、请求字段白名单、输出文件名映射等辅助逻辑
+- 已更新 `app/pat_funasr_webui/gradio_app.py`：支持动态读取 `/v1/models`、显示 ready 状态、刷新模型列表、扩展输出格式到 `txt/srt/vtt/tsv/json/verbose_json/all`，并为非 JSON 结果生成下载文件
+- 已新增测试 `tests/test_pat_webui_utils.py`
+- 已通过校验：`python -m unittest discover -s "tests"`、`python -m compileall "app/pat_funasr_webui"`
+- 已验证 `"run_ui_pat.bat"` 可启动监听在 `127.0.0.1:7861`
+
+## 2026-06-08 16:32:31
+
+### User
+
+- 不需要问我，你自己执行
+
+### Assistant
+
+- 已继续执行 `Pat WebUI` 开发而未中途确认：补充了后端 `hotword/use_itn` 参数白名单与 `build_generate_kwargs()`，并新增测试 `tests/test_server_generate_kwargs.py`
+- 已更新 `app/pat_funasr_webui/app_utils.py` 与 `app/pat_funasr_webui/gradio_app.py`：高级参数区支持 `language`、`hotword`、`vad_preset`、`merge_vad`、`use_itn`、`merge_length_s`、`max_line_width`
+- 已将布尔参数改为“自动/启用/禁用”模式，避免 UI 默认值误覆盖后端默认行为
+- 已通过浏览器实际验证：页面可加载，模型下拉、全部输出格式、高级参数面板均已真实渲染
+- 已通过全量校验：`python -m unittest discover -s "tests"`（22 项通过），并已停止临时启动的 WebUI 进程释放端口
+
+## 2026-06-08 16:36:27
+
+### User
+
+- 不需要问我，你自己执行
+
+### Assistant
+
+- 已继续推进 `B4`：为 `Pat WebUI` 增加批量文件上传、批量执行、失败项重试、批量结果汇总与批量 zip 下载
+- 已新增辅助能力：`normalize_uploaded_paths()`、`summarize_batch_results()`，并补测试到 `tests/test_pat_webui_utils.py`
+- 已为后端新增 `build_generate_kwargs()`，补测试到 `tests/test_server_generate_kwargs.py`
+- 已通过浏览器重新验证：页面已渲染 `批量文件`、`批量执行`、`重试失败项`
+- 已通过全量测试：`python -m unittest discover -s "tests"`（24 项通过）
+
+## 2026-06-08 16:49:56
+
+### User
+
+- 继续
+
+### Assistant
+
+- 已完成 `B4` 剩余项：批量执行改为流式状态更新，`批量结果` 现在会实时显示总进度、待处理、进行中、成功、失败，以及逐文件状态
+- 已补测试：`tests/test_pat_webui_utils.py` 新增批量初始化与进度汇总校验；全量测试已提升到 `25` 项通过
+- 已继续推进 `B5`：尝试本地启动 API，并用 Windows 本地语音合成生成测试 wav 做闭环验证准备
+- 已确认 `Pat WebUI` 页面仍可正常渲染：模型列表、输出格式、高级参数区、批量文件区、批量执行与失败重试按钮均可见
+- 已停止本轮临时启动的 API/UI 进程，并删除临时生成的 `sample_tts.wav`
+
+## 2026-06-08 17:03:08
+
+### User
+
+- 继续
+
+### Assistant
+
+- 已修复后端启动稳定性：`app/openai_api/server.py` 启动时会自动把自身目录加入 `sys.path`，避免 `renderers` 等同目录模块找不到
+- 已新增 B5 回归脚本：`aipython/asr_b5_regression.py`，支持自定义 formats，便于做正向/异常回归
+- 已新增测试：`tests/test_aipython_asr_b5_regression.py`
+- 已本地生成 TTS 音频并完成单文件多格式回归（sensevoice / paraformer）：json / verbose_json / txt / srt / vtt / tsv / all(zip)
+- 已完成异常回归：不支持格式(HTTP 400)、空文件(HTTP 500)、后端不可用(非 200)
+
+## 2026-06-08 17:26:24
+
+### User
+
+- 继续
+
+### Assistant
+
+- 已修复 `fun-asr-nano` 无法启动的问题根因：之前在同一终端里执行其他命令会终止运行中的服务；现在使用独立终端启动并通过日志确认完成模型加载
+- 已完成 `fun-asr-nano` 的 B5 单文件多格式回归：json / verbose_json / txt / srt / vtt / tsv / all(zip) 全部 OK（使用本地 TTS wav）
+- 已同步更新 `todo.md`：B5 的 fun-asr-nano 回归项已勾选为完成
+
+## 2026-06-08 17:37:00
+
+### User
+
+- 下一步是什么
+- 你自己定
+
+### Assistant
+
+- 下一步聚焦补齐“人工冒烟验收”与“阶段 A 的 UI->API 真转写验收”，再做一次干净提交
+- 已新增手工冒烟清单："Docs/smoke_pat_webui.md"，并在 "todo.md" 勾选 A0 对应条目
+
+## 2026-06-08 17:40:58
+
+### User
+
+- 你自己定
+
+### Assistant
+
+- 已补齐 A0 手工冒烟清单并将执行顺序中的 A0/B1~B5 同步为已完成
+- 已修复批量转写无文件时的返回方式，避免生成器函数直接 return 导致 UI 不更新

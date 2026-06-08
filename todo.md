@@ -33,6 +33,7 @@ Pat WebUI 开发 Todo
 ## 当前进行中
 
 - [ ] 阶段 A：Pat WebUI 分支隔离
+- [ ] 阶段 B：Pat WebUI 第一版
 
 ## 范围边界
 
@@ -42,14 +43,14 @@ Pat WebUI 开发 Todo
 
 ## 执行顺序
 
-- [ ] A0. 补最小化测试与验证骨架
-- [ ] A1. 搭建独立目录与启动入口
+- [x] A0. 补最小化测试与验证骨架
+- [x] A1. 搭建独立目录与启动入口
 - [ ] A2. 打通基础转写链路
-- [ ] B1. 动态模型列表
-- [ ] B2. 多格式输出与下载
-- [ ] B3. 高级参数面板
-- [ ] B4. 批量与队列
-- [ ] B5. 第一版回归验证
+- [x] B1. 动态模型列表
+- [x] B2. 多格式输出与下载
+- [x] B3. 高级参数面板
+- [x] B4. 批量与队列
+- [x] B5. 第一版回归验证
 - [ ] C1. 技术路线决策
 - [ ] C2. 官方增强能力逐项落地
 
@@ -73,28 +74,28 @@ Pat WebUI 开发 Todo
 
 目标：先补最小测试与手工验证清单，满足“新功能先写测试，再实现”。
 
-- [ ] 新增 "tests/" 下与 Pat WebUI 相关的最小测试文件
-- [ ] 为请求体白名单拼装增加单测
-- [ ] 为响应格式到下载文件的映射逻辑增加单测
-- [ ] 为模型列表解析逻辑增加单测
-- [ ] 准备 1 份手工冒烟清单：启动、上传、转写、下载、报错展示
+- [x] 新增 "tests/" 下与 Pat WebUI 相关的最小测试文件
+- [x] 为请求体白名单拼装增加单测
+- [x] 为响应格式到下载文件的映射逻辑增加单测
+- [x] 为模型列表解析逻辑增加单测
+- [x] 准备 1 份手工冒烟清单：启动、上传、转写、下载、报错展示（"Docs/smoke_pat_webui.md"）
 
 验收：
 
-- [ ] `python -m unittest discover -s "tests"` 通过
-- [ ] 手工冒烟清单可覆盖 MVP 主流程
+- [x] `python -m unittest discover -s "tests"` 通过
+- [x] 手工冒烟清单可覆盖 MVP 主流程
 
 ## 阶段 A：WebUI 分支隔离
 
 目标：复制一套新的 "Pat WebUI" 入口，保证后续大改不影响现有 UI。
 
-- [ ] 新建目录："app/pat_funasr_webui/"
-- [ ] 复制现有 UI 入口到："app/pat_funasr_webui/gradio_app.py"
-- [ ] 如有必要，提取 Pat WebUI 自己的工具模块（如请求构建、响应保存、模型列表适配）
-- [ ] 新增启动脚本："run_ui_pat.bat"
+- [x] 新建目录："app/pat_funasr_webui/"
+- [x] 复制现有 UI 入口到："app/pat_funasr_webui/gradio_app.py"
+- [x] 如有必要，提取 Pat WebUI 自己的工具模块（如请求构建、响应保存、模型列表适配）
+- [x] 新增启动脚本："run_ui_pat.bat"
 - [ ] 评估是否新增："FunASR_pat.bat"（同时启动 API + Pat WebUI）
-- [ ] 设定默认端口为 "7861"，避免与原 UI 冲突
-- [ ] 设定默认 API base_url 为 "http://localhost:8000"
+- [x] 设定默认端口为 "7861"，避免与原 UI 冲突
+- [x] 设定默认 API base_url 为 "http://localhost:8000"
 
 验收：
 
@@ -118,10 +119,10 @@ Pat WebUI 开发 Todo
 
 ### B1. 动态模型列表
 
-- [ ] 启动时调用 `GET /v1/models`
-- [ ] 下拉框改为动态模型列表
-- [ ] 显示模型 ready 状态
-- [ ] 增加“刷新模型列表”按钮
+- [x] 启动时调用 `GET /v1/models`
+- [x] 下拉框改为动态模型列表
+- [x] 显示模型 ready 状态
+- [x] 增加“刷新模型列表”按钮
 
 验收：
 
@@ -130,10 +131,10 @@ Pat WebUI 开发 Todo
 
 ### B2. 多格式输出与下载
 
-- [ ] 输出格式支持：txt / srt / vtt / tsv / json / verbose_json / all(zip)
-- [ ] 对非 JSON 响应保存为临时文件
-- [ ] 提供下载组件（File）
-- [ ] 提供预览组件（Textbox/Code）
+- [x] 输出格式支持：txt / srt / vtt / tsv / json / verbose_json / all(zip)
+- [x] 对非 JSON 响应保存为临时文件
+- [x] 提供下载组件（File）
+- [x] 提供预览组件（Textbox/Code）
 
 验收：
 
@@ -142,16 +143,16 @@ Pat WebUI 开发 Todo
 
 ### B3. 高级参数面板
 
-- [ ] 基础模型参数：`model`
-- [ ] 输出参数：`response_format`
-- [ ] 在 Accordion 中暴露："vad_preset"
-- [ ] 在 Accordion 中暴露："merge_vad"
-- [ ] 在 Accordion 中暴露："merge_length_s"
-- [ ] 在 Accordion 中暴露："max_line_width"
-- [ ] 在 Accordion 中暴露："hotword"
-- [ ] 在 Accordion 中暴露："language"
-- [ ] 在 Accordion 中暴露："use_itn"
-- [ ] 请求体按白名单拼接，禁止 UI 任意字段透传
+- [x] 基础模型参数：`model`
+- [x] 输出参数：`response_format`
+- [x] 在 Accordion 中暴露："vad_preset"
+- [x] 在 Accordion 中暴露："merge_vad"
+- [x] 在 Accordion 中暴露："merge_length_s"
+- [x] 在 Accordion 中暴露："max_line_width"
+- [x] 在 Accordion 中暴露："hotword"
+- [x] 在 Accordion 中暴露："language"
+- [x] 在 Accordion 中暴露："use_itn"
+- [x] 请求体按白名单拼接，禁止 UI 任意字段透传
 
 验收：
 
@@ -160,11 +161,11 @@ Pat WebUI 开发 Todo
 
 ### B4. 批量与队列
 
-- [ ] 支持多文件上传
-- [ ] 支持队列执行
-- [ ] 显示整体进度与单文件状态
-- [ ] 失败项保留错误详情
-- [ ] 支持失败项重试
+- [x] 支持多文件上传
+- [x] 支持队列执行
+- [x] 显示整体进度与单文件状态
+- [x] 失败项保留错误详情
+- [x] 支持失败项重试
 
 验收：
 
@@ -173,10 +174,12 @@ Pat WebUI 开发 Todo
 
 ### B5. 第一版回归验证
 
-- [ ] 单文件转写回归：txt / srt / vtt / tsv / json / zip
-- [ ] 多模型回归：至少覆盖 "sensevoice"、"paraformer"、"fun-asr-nano"
-- [ ] 异常回归：后端不可用、返回非 200、文件为空、格式不支持
-- [ ] 下载回归：文件名、扩展名、内容预览一致
+- [x] 单文件转写回归：txt / srt / vtt / tsv / json / zip（已覆盖 sensevoice / paraformer）
+- [x] 多模型回归："sensevoice"
+- [x] 多模型回归："paraformer"
+- [x] 多模型回归："fun-asr-nano"
+- [x] 异常回归：后端不可用、返回非 200、文件为空、格式不支持
+- [x] 下载回归：文件名、扩展名、内容预览一致
 
 验收：
 

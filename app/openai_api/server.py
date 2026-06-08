@@ -12,6 +12,16 @@ Then use with any OpenAI-compatible client:
       -F file=@audio.wav -F model=sensevoice
 """
 
+from pathlib import Path
+import sys
+
+_THIS_DIR = Path(__file__).resolve().parent
+if str(_THIS_DIR) not in sys.path:
+    sys.path.insert(0, str(_THIS_DIR))
+_APP_DIR = _THIS_DIR.parent
+if str(_APP_DIR) not in sys.path:
+    sys.path.insert(0, str(_APP_DIR))
+
 import argparse
 import tempfile
 import time
@@ -135,6 +145,35 @@ def clean_text(text: str) -> str:
     return text.strip()
 
 
+def build_generate_kwargs(
+    *,
+    tmp_path: str,
+    model: str,
+    language: Optional[str],
+    hotword: Optional[str],
+    use_itn: Optional[bool],
+    vad_preset: Optional[str],
+    merge_vad: Optional[bool],
+    merge_length_s: Optional[int],
+):
+    """构建传给 FunASR generate() 的白名单参数。"""
+    generate_kwargs = {"input": tmp_path, "batch_size": 1}
+    if language:
+        generate_kwargs["language"] = language
+    if hotword:
+        generate_kwargs["hotword"] = hotword
+    if use_itn is not None:
+        generate_kwargs["use_itn"] = use_itn
+    if model in {"paraformer", "fun-asr-nano"}:
+        generate_kwargs["sentence_timestamp"] = True
+    return vad_presets.apply_vad_controls(
+        generate_kwargs=generate_kwargs,
+        vad_preset=vad_preset,
+        merge_vad=merge_vad,
+        merge_length_s=merge_length_s,
+    )
+
+
 @app.post("/v1/audio/transcriptions")
 async def transcribe(
     file: UploadFile = File(...),
@@ -145,6 +184,8 @@ async def transcribe(
     vad_preset: Optional[str] = Form(default=None),
     merge_vad: Optional[bool] = Form(default=None),
     merge_length_s: Optional[int] = Form(default=None),
+    hotword: Optional[str] = Form(default=None),
+    use_itn: Optional[bool] = Form(default=None),
 ):
     """
     OpenAI-compatible audio transcription endpoint.
@@ -157,6 +198,8 @@ async def transcribe(
     - vad_preset: default/anti_hallucination（可选）
     - merge_vad: true/false（可选，优先级高于 preset）
     - merge_length_s: 合并段长度（秒，可选，需要配合 merge_vad=true）
+    - hotword: 热词字符串（可选，逗号/空格分隔）
+    - use_itn: 是否开启逆文本正规化（可选）
     """
     # Validate model
     if model not in MODEL_CONFIGS:
@@ -190,14 +233,13 @@ async def transcribe(
         t0 = time.time()
 
         duration_s = segmentation.ffprobe_duration_s(tmp_path)
-        generate_kwargs = {"input": tmp_path, "batch_size": 1}
-        if language:
-            generate_kwargs["language"] = language
-        if model in {"paraformer", "fun-asr-nano"}:
-            generate_kwargs["sentence_timestamp"] = True
         try:
-            generate_kwargs = vad_presets.apply_vad_controls(
-                generate_kwargs=generate_kwargs,
+            generate_kwargs = build_generate_kwargs(
+                tmp_path=tmp_path,
+                model=model,
+                language=language,
+                hotword=hotword,
+                use_itn=use_itn,
                 vad_preset=vad_preset,
                 merge_vad=merge_vad,
                 merge_length_s=merge_length_s,
