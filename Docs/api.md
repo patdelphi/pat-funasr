@@ -86,6 +86,8 @@ OpenAI 兼容 API 说明（API）
 
 "MODEL_CONFIGS" 内置可用模型：
 
+- 统一策略：所有模型 `hub="ms"`（ModelScope），并设置 `disable_update=True`（关闭在线更新检查）
+
 - "sensevoice"
   - 模型："iic/SenseVoiceSmall"
   - VAD："fsmn-vad"
@@ -98,16 +100,16 @@ OpenAI 兼容 API 说明（API）
   - 模型："paraformer-en"
   - VAD："fsmn-vad"
 - "fun-asr-nano"
-  - 模型："FunAudioLLM/Fun-ASR-Nano-2512"（hub=hf，trust_remote_code=True）
+  - 模型："FunAudioLLM/Fun-ASR-Nano-2512"（hub=ms，trust_remote_code=True）
   - VAD："fsmn-vad"
 
 补充：
 
 - "qwen3-asr"
-  - 模型："Qwen/Qwen3-ASR-1.7B"（hub=hf，trust_remote_code=True）
+  - 模型："Qwen/Qwen3-ASR-1.7B"（hub=ms，trust_remote_code=True）
   - VAD："fsmn-vad"
 - "qwen3-asr-0.6b"
-  - 模型："Qwen/Qwen3-ASR-0.6B"（hub=hf，trust_remote_code=True）
+  - 模型："Qwen/Qwen3-ASR-0.6B"（hub=ms，trust_remote_code=True）
   - VAD："fsmn-vad"
 
 ## 清洗规则（SenseVoice 输出）

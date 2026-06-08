@@ -296,6 +296,8 @@ class AutoModel:
         """
         assert "model" in kwargs
         if "model_conf" not in kwargs:
+            if kwargs.get("disable_update", False):
+                kwargs.setdefault("check_latest", False)
             logging.info("download models from model hub: {}".format(kwargs.get("hub", "ms")))
             kwargs = download_model(**kwargs)
 

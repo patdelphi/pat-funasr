@@ -80,6 +80,10 @@ def download_from_ms(**kwargs):
     elif os.path.exists(os.path.join(model_or_path, "config.yaml")):
         config = OmegaConf.load(os.path.join(model_or_path, "config.yaml"))
         kwargs = OmegaConf.merge(config, kwargs)
+        if "llm_conf" in kwargs and kwargs["llm_conf"] is not None:
+            init_param_path = kwargs["llm_conf"].get("init_param_path", None)
+            if init_param_path and not os.path.isabs(init_param_path):
+                kwargs["llm_conf"]["init_param_path"] = os.path.join(model_or_path, init_param_path)
         init_param = os.path.join(model_or_path, "model.pt")
         if "init_param" not in kwargs or not os.path.exists(kwargs["init_param"]):
             kwargs["init_param"] = init_param

@@ -37,7 +37,8 @@ $env:PATH = "$Repo\runtime\python\Lib\site-packages\torch\lib;$env:PATH"
 $Models = @(
   "sensevoice",
   "paraformer",
-  "fun-asr-nano"
+  "fun-asr-nano",
+  "qwen3-asr"
 )
 
 # 扫描 test 目录的输入文件
@@ -63,7 +64,7 @@ foreach ($Model in $Models) {
     "--out-dir", "`"$OutDir`"",
     "--log-path", "`"$LogPath`""
   ) -join " "
-  ("[{0}] ps_cmd={1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $CmdLine) | Out-File -LiteralPath "$LogPath" -Append -Encoding utf8
+  ("[{0}] ps_cmd={1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $CmdLine) | Out-File -LiteralPath "$LogPath" -Encoding utf8
 
   # 实际执行（把 test 目录下所有输入文件路径传给 python）
   & "$Python" -u -X utf8 "$Runner" --model-alias "$Model" --out-dir "$OutDir" --log-path "$LogPath" @($Inputs.FullName)

@@ -378,3 +378,102 @@ Chat History
 
 - 已修正文档表述：明确“官方文档口径”与“本项目默认映射”不同，避免把别名与上游 model id 混淆
 - 已更新："Docs/model-capability-matrix.md"、"Docs/api.md"、"Docs/changelog.md"
+
+## 2026-06-08 14:28:43
+
+### User
+
+- 你先跑一次test目录的测试，应该产生四组结果
+
+### Assistant
+
+- 已启动跑批脚本：`pwsh -NoProfile -ExecutionPolicy Bypass -File ".\run_test_all_models.ps1"`（4 个模型：sensevoice / paraformer / fun-asr-nano / qwen3-asr）
+- 当前进度：
+  - 已完成："test\sensevoice\" 与 "test\paraformer\"（均生成 1/2 的 txt/tsv/srt/vtt/json/zip/wav + run.log）
+  - 进行中："test\fun-asr-nano\"（模型下载/初始化中），完成后将继续跑 "test\qwen3-asr\"
+
+## 2026-06-08 14:32:18
+
+### User
+
+- 模型下载卡主了，重试
+
+### Assistant
+
+- 已重新执行跑批脚本以触发断点续下/重试下载：`pwsh -NoProfile -ExecutionPolicy Bypass -File ".\run_test_all_models.ps1"`
+
+## 2026-06-08 14:45:21
+
+### User
+
+- 怎么会用cpu？我这里明明是gpu环境
+
+### Assistant
+
+- 预下载脚本里用 cpu 是刻意的：只为触发下载/落盘缓存，不需要占用 GPU 显存；真正转写（跑批/服务端）仍会自动用 cuda
+- 如你坚持预下载也走 cuda，可以停止当前预下载并改用 `--device cuda` 重跑
+
+## 2026-06-08 14:52:28
+
+### User
+
+- hf 与 ms 下载的模型能混用吗？会分开更新吗？ hf下载模型用ms更新可以吗？
+- 全部模型统一 hub="ms"
+- 全部 disable_update=True
+
+### Assistant
+
+- 已按你的要求统一：所有模型固定 `hub="ms"`（ModelScope）并设置 `disable_update=True`
+- 已更新的关键文件："app/openai_api/server.py"、"scripts/batch_transcribe.py"、"Docs/api.md"、"Docs/model-capability-matrix.md"
+
+## 2026-06-08 14:59:18
+
+### User
+
+- 重跑测试
+- 模型下载卡主了，重试
+- Fun-ASR-Nano 对应的是FunAudioLLM/Fun-ASR-Nano-2512，Qwen3-AS 对应的是 Qwen/Qwen3-ASR-1.7B  ，你先下载模型，用魔塔加速，然后关闭在线update模式，重新跑测试
+- 怎么会用cpu？我这里明明是gpu环境
+- hf 与 ms 下载的模型能混用吗？会分开更新吗？ hf下载模型用ms更新可以吗？
+- 全部模型统一 hub="ms"
+- 全部 disable_update=True
+
+### Assistant
+
+- 已按要求：统一 hub="ms"，并全局 disable_update=True；正在重跑 "run_test_all_models.ps1"
+- 当前控制台出现的 "Downloading Model from https://www.modelscope.cn" 属于首次缺缓存时的正常下载，与 update 检查无关
+
+## 2026-06-08 15:14:14
+
+### User
+
+- 测试卡住了，是不是音频or视频文件，都需要先转成wav，才能识别？我看到测试结果目录下面都有wav
+
+### Assistant
+
+- 不是“必须先手工转 wav 才能识别”，但为了稳定与一致性，我们的跑批脚本会把所有输入统一转成 16k 单声道 wav 再喂给模型
+- 你看到每个模型目录下都有 wav，是脚本缓存出来的中间产物（方便复用与排错），不代表原始 mp4/mp3 不能直接识别
+
+## 2026-06-08 15:24:49
+
+### User
+
+- 重跑测试
+
+### Assistant
+
+- 已重新执行 "run_test_all_models.ps1"
+- 已确认四组目录 "test\\sensevoice\\"、"test\\paraformer\\"、"test\\fun-asr-nano\\"、"test\\qwen3-asr\\" 均存在，且对 "1/2" 的 "txt/srt/vtt/tsv/json/zip/wav" 文件不缺
+- 当前跑批进度：\"sensevoice\"、\"paraformer\" 已完成（各自 "run.log" 尾部含 done）；\"fun-asr-nano\" 正在模型初始化/推理中（"run.log" 已打印 device=cuda 与 AutoModel 配置）
+
+## 2026-06-08 15:32:53
+
+### User
+
+- 汇报状态，模型是不是都下好了，检查测试结果
+
+### Assistant
+
+- 已确认关键模型缓存目录存在（均在 "workspace\\models\\models\\*" 下）：SenseVoiceSmall / fsmn-vad / ct-punc / Qwen3-ASR-1.7B / Fun-ASR-Nano-2512
+- 已检查 "test\\sensevoice\\"、"test\\paraformer\\"、"test\\fun-asr-nano\\"、"test\\qwen3-asr\\"：对 "1/2" 的 "txt/srt/vtt/tsv/json/zip/wav" 文件齐全（无缺失）
+- 四个模型的 "run.log" 尾部均为 done（最近一次：fun-asr-nano 15:30:15、qwen3-asr 15:31:36）

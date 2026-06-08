@@ -62,19 +62,19 @@ API 实现：[server.py](file:///y:/NewStore/AI/FunASR-Portable-GPU/app/openai_a
 | 模型别名 | 本项目 model id | 官方文档常见对应 | hub | 语言覆盖 | 标点 | 句/段级时间戳 | sentence_info 分段 | 热词 | 典型用途 |
 |---|---|---|---|---|---|---|---|---|---|
 | sensevoice | iic/SenseVoiceSmall | iic/SenseVoiceSmall | ms | 多语（上游示例支持 auto/zh/en/yue/ja/ko…） | ⚠️（建议 use_itn + 后处理） | ⚠️（常见做法：用 VAD 段当“段级时间戳”） | ⚠️ | ⚠️ | 多语通用转写、文案；可做“粗字幕” |
-| paraformer | paraformer-zh | paraformer-zh | ms/hf | 中文 | ✅（已配置 ct-punc） | ✅/⚠️（上游文档描述“带时间戳输出”，仍需实测字段形态） | ⚠️（若开启 sentence_timestamp 且具备 timestamp+punc_array） | ✅（hotword） | 中文字幕/文案（可读性优先） |
-| paraformer-en | paraformer-en | paraformer-en | ms/hf | 英文 | ⚠️（可接 punc_model，但当前配置未启用） | ⚠️ | ⚠️ | ⚠️ | 英文转写 |
-| fun-asr-nano | FunAudioLLM/Fun-ASR-Nano-2512 | FunAudioLLM/Fun-ASR-Nano-2512 | hf | 多语 | ⚠️ | ⚠️ | ⚠️ | ⚠️ | 多语/方言/歌词等通用 ASR（官方 Fun-ASR-Nano） |
-| qwen3-asr | Qwen/Qwen3-ASR-1.7B | Qwen/Qwen3-ASR-1.7B | hf | 多语 | ⚠️ | ⚠️ | ⚠️ | ⚠️ | 最高质量（大模型，延迟更高） |
-| qwen3-asr-0.6b | Qwen/Qwen3-ASR-0.6B | Qwen/Qwen3-ASR-0.6B | hf | 多语 | ⚠️ | ⚠️ | ⚠️ | ⚠️ | 更轻量的 Qwen3-ASR（可选） |
+| paraformer | paraformer-zh | paraformer-zh | ms | 中文 | ✅（已配置 ct-punc） | ✅/⚠️（上游文档描述“带时间戳输出”，仍需实测字段形态） | ⚠️（若开启 sentence_timestamp 且具备 timestamp+punc_array） | ✅（hotword） | 中文字幕/文案（可读性优先） |
+| paraformer-en | paraformer-en | paraformer-en | ms | 英文 | ⚠️（可接 punc_model，但当前配置未启用） | ⚠️ | ⚠️ | ⚠️ | 英文转写 |
+| fun-asr-nano | FunAudioLLM/Fun-ASR-Nano-2512 | FunAudioLLM/Fun-ASR-Nano-2512 | ms | 多语 | ⚠️ | ⚠️ | ⚠️ | ⚠️ | 多语/方言/歌词等通用 ASR（官方 Fun-ASR-Nano） |
+| qwen3-asr | Qwen/Qwen3-ASR-1.7B | Qwen/Qwen3-ASR-1.7B | ms | 多语 | ⚠️ | ⚠️ | ⚠️ | ⚠️ | 最高质量（大模型，延迟更高） |
+| qwen3-asr-0.6b | Qwen/Qwen3-ASR-0.6B | Qwen/Qwen3-ASR-0.6B | ms | 多语 | ⚠️ | ⚠️ | ⚠️ | ⚠️ | 更轻量的 Qwen3-ASR（可选） |
 
 补充：本项目在 MODEL_CONFIGS 中的链路配置
 
 - sensevoice：vad_model=fsmn-vad，vad_kwargs.max_single_segment_time=30000
 - paraformer：vad_model=fsmn-vad，punc_model=ct-punc
-- fun-asr-nano：hub=hf，trust_remote_code=True，vad_model=fsmn-vad
-- qwen3-asr：hub=hf，trust_remote_code=True，vad_model=fsmn-vad
-- qwen3-asr-0.6b：hub=hf，trust_remote_code=True，vad_model=fsmn-vad
+- fun-asr-nano：hub=ms，trust_remote_code=False，vad_model=fsmn-vad
+- qwen3-asr：hub=ms，trust_remote_code=False，dtype=fp16，vad_model=fsmn-vad
+- qwen3-asr-0.6b：hub=ms，trust_remote_code=False，dtype=fp16，vad_model=fsmn-vad
 
 ## 四、功能实现路径（按能力来源拆解）
 

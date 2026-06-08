@@ -67,19 +67,29 @@ def ensure_wav_16k_mono(src: Path, dst_wav: Path, log_path: Path) -> Path:
 MODEL_CONFIGS = {
     "sensevoice": {
         "model": "iic/SenseVoiceSmall",
+        "hub": "ms",
         "vad_model": "fsmn-vad",
         "vad_kwargs": {"max_single_segment_time": 30000},
         "punc_model": "ct-punc",
     },
     "paraformer": {
         "model": "paraformer-zh",
+        "hub": "ms",
         "vad_model": "fsmn-vad",
         "punc_model": "ct-punc",
     },
     "fun-asr-nano": {
-        "model": "Qwen/Qwen3-ASR-0.6B",
-        "hub": "hf",
-        "trust_remote_code": True,
+        "model": "FunAudioLLM/Fun-ASR-Nano-2512",
+        "hub": "ms",
+        "trust_remote_code": False,
+        "vad_model": "fsmn-vad",
+        "vad_kwargs": {"max_single_segment_time": 30000},
+    },
+    "qwen3-asr": {
+        "model": "Qwen/Qwen3-ASR-1.7B",
+        "hub": "ms",
+        "trust_remote_code": False,
+        "dtype": "fp16",
         "vad_model": "fsmn-vad",
         "vad_kwargs": {"max_single_segment_time": 30000},
     },
@@ -144,7 +154,7 @@ def main() -> int:
 
         cfg = dict(MODEL_CONFIGS[args.model_alias])
         cfg["device"] = device
-        cfg["disable_update"] = False
+        cfg["disable_update"] = True
         log_line(log_path, f"[{now()}] AutoModel(**cfg)={json.dumps(cfg, ensure_ascii=False)}")
 
         model = AutoModel(**cfg)

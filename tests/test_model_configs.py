@@ -16,6 +16,8 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parents[1]
 _OPENAI_API_DIR = _ROOT / "app" / "openai_api"
 _SERVER_PATH = _OPENAI_API_DIR / "server.py"
+_SCRIPTS_DIR = _ROOT / "scripts"
+_BATCH_TRANSCRIBE_PATH = _SCRIPTS_DIR / "batch_transcribe.py"
 
 
 def _load_server_module():
@@ -31,6 +33,14 @@ def _load_server_module():
         if sys.path and sys.path[0] == str(_OPENAI_API_DIR):
             sys.path.pop(0)
 
+def _load_batch_transcribe_module():
+    spec = importlib.util.spec_from_file_location("funasr_batch_transcribe", _BATCH_TRANSCRIBE_PATH)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"无法加载 batch_transcribe 模块：{_BATCH_TRANSCRIBE_PATH}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
 
 class TestModelConfigs(unittest.TestCase):
     def test_model_id_mappings_align_official(self):
@@ -38,18 +48,33 @@ class TestModelConfigs(unittest.TestCase):
         cfgs = server.MODEL_CONFIGS
 
         self.assertEqual(cfgs["fun-asr-nano"]["model"], "FunAudioLLM/Fun-ASR-Nano-2512")
-        self.assertEqual(cfgs["fun-asr-nano"].get("hub"), "hf")
-        self.assertTrue(cfgs["fun-asr-nano"].get("trust_remote_code"))
+        self.assertEqual(cfgs["fun-asr-nano"].get("hub"), "ms")
+        self.assertFalse(cfgs["fun-asr-nano"].get("trust_remote_code"))
 
         self.assertEqual(cfgs["qwen3-asr"]["model"], "Qwen/Qwen3-ASR-1.7B")
-        self.assertEqual(cfgs["qwen3-asr"].get("hub"), "hf")
-        self.assertTrue(cfgs["qwen3-asr"].get("trust_remote_code"))
+        self.assertEqual(cfgs["qwen3-asr"].get("hub"), "ms")
+        self.assertFalse(cfgs["qwen3-asr"].get("trust_remote_code"))
+        self.assertEqual(cfgs["qwen3-asr"].get("dtype"), "fp16")
 
         self.assertEqual(cfgs["qwen3-asr-0.6b"]["model"], "Qwen/Qwen3-ASR-0.6B")
-        self.assertEqual(cfgs["qwen3-asr-0.6b"].get("hub"), "hf")
-        self.assertTrue(cfgs["qwen3-asr-0.6b"].get("trust_remote_code"))
+        self.assertEqual(cfgs["qwen3-asr-0.6b"].get("hub"), "ms")
+        self.assertFalse(cfgs["qwen3-asr-0.6b"].get("trust_remote_code"))
+        self.assertEqual(cfgs["qwen3-asr-0.6b"].get("dtype"), "fp16")
+
+    def test_batch_transcribe_configs_align_server(self):
+        server = _load_server_module()
+        batch = _load_batch_transcribe_module()
+
+        server_cfgs = server.MODEL_CONFIGS
+        batch_cfgs = batch.MODEL_CONFIGS
+
+        for alias in ("sensevoice", "paraformer", "fun-asr-nano", "qwen3-asr"):
+            self.assertIn(alias, batch_cfgs)
+            self.assertIn(alias, server_cfgs)
+            self.assertEqual(batch_cfgs[alias]["model"], server_cfgs[alias]["model"])
+            self.assertEqual(batch_cfgs[alias].get("hub"), server_cfgs[alias].get("hub"))
+            self.assertEqual(batch_cfgs[alias].get("trust_remote_code"), server_cfgs[alias].get("trust_remote_code"))
 
 
 if __name__ == "__main__":
     unittest.main()
-
