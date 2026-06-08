@@ -1,4 +1,4 @@
-﻿"""
+"""
 程序说明：
 VAD 预设映射单元测试（unittest）。
 """
@@ -54,4 +54,3 @@ class TestVadPresets(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

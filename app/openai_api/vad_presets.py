@@ -58,4 +58,3 @@ def apply_vad_controls(
         out["merge_length_s"] = int(merge_length_s)
 
     return out
-

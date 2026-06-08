@@ -1,4 +1,4 @@
-﻿﻿#
+﻿﻿﻿#
 OpenAI 兼容 API 说明（API）
 
 实现文件：["app/openai_api/server.py"](file:///y:/NewStore/AI/FunASR-Portable-GPU/app/openai_api/server.py)
@@ -98,7 +98,7 @@ OpenAI 兼容 API 说明（API）
   - 模型："paraformer-en"
   - VAD："fsmn-vad"
 - "fun-asr-nano"
-  - 模型："FunAudioLLM/Fun-ASR-Nano-2512"（hub=hf，trust_remote_code=True）
+  - 模型："Qwen/Qwen3-ASR-0.6B"（hub=hf，trust_remote_code=True）
   - VAD："fsmn-vad"
 
 ## 清洗规则（SenseVoice 输出）
@@ -108,3 +108,28 @@ OpenAI 兼容 API 说明（API）
 - 删除 "<|...|>" 形态的特殊标记
 - 删除残留的 "<...>" 形态 token
 - 合并多空格与控制字符
+
+## 分段与时间戳（字幕/TSV）
+
+说明：本项目对不同模型的时间戳能力做了“主路径 + 兜底”。
+
+- 主路径：优先使用模型输出中的 "sentence_info"（若存在）来构建 "segments" 并渲染为 SRT/VTT/TSV
+- 兜底：当模型不返回 "sentence_info" 时，会用 ffprobe 获取音频时长，并按标点/长度对文本切分为多段，避免字幕只有“一整句/整段”
+
+## 跑批测试（test 目录）
+
+用途：遍历 "test\\" 下音视频文件，输出 ASR 结果到各模型目录（每个模型一个目录）。
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File ".\run_test_all_models.ps1"
+```
+
+输出目录：
+
+- "test\\sensevoice\\"
+- "test\\paraformer\\"
+- "test\\fun-asr-nano\\"
+
+说明：
+
+- 跑批脚本默认不跑 "paraformer-en"（如需英文模型，可自行调用 "scripts/batch_transcribe.py" 指定 "--model-alias paraformer-en"）

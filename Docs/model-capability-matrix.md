@@ -6,7 +6,7 @@ ASR 模型能力矩阵与 API 参数说明
 范围：
 
 - 当前项目已接入的 OpenAI 兼容 API（FastAPI）："app/openai_api/server.py"
-- 当前 API 已内置的模型别名（model 参数）：sensevoice / paraformer / paraformer-en / fun-asr-nano
+- 当前 API 已内置的模型别名（model 参数）：sensevoice / paraformer / paraformer-en / fun-asr-nano（其中 fun-asr-nano 固定映射到 Qwen/Qwen3-ASR-0.6B）
 - 输出格式：当前已实现（json/verbose_json）+ 已规划（txt/srt/vtt/tsv/all-zip，见升级策划文档）
 
 ## 一、先讲结论：两层能力
@@ -56,7 +56,7 @@ API 实现：[server.py](file:///y:/NewStore/AI/FunASR-Portable-GPU/app/openai_a
 | sensevoice | iic/SenseVoiceSmall | ms | 多语（上游示例支持 auto/zh/en/yue/ja/ko…） | ⚠️（建议 use_itn + 后处理） | ⚠️（常见做法：用 VAD 段当“段级时间戳”） | ⚠️ | ⚠️ | 多语通用转写、文案；可做“粗字幕” |
 | paraformer | paraformer-zh | ms/hf | 中文 | ✅（已配置 ct-punc） | ✅/⚠️（上游文档描述“带时间戳输出”，仍需实测字段形态） | ⚠️（若开启 sentence_timestamp 且具备 timestamp+punc_array） | ✅（hotword） | 中文字幕/文案（可读性优先） |
 | paraformer-en | paraformer-en | ms/hf | 英文 | ⚠️（可接 punc_model，但当前配置未启用） | ⚠️ | ⚠️ | ⚠️ | 英文转写 |
-| fun-asr-nano | FunAudioLLM/Fun-ASR-Nano-2512 | hf | 多语 | ⚠️（模型输出可能带标点，但不作为强保证） | ⚠️ | ⚠️ | ⚠️ | 低延迟/生态相关（vLLM/批处理等） |
+| fun-asr-nano | Qwen/Qwen3-ASR-0.6B | hf | 多语 | ⚠️ | ⚠️ | ⚠️ | ⚠️ | 轻量级/通用 ASR（固定模型，避免反复下载与仓库不稳定） |
 
 补充：本项目在 MODEL_CONFIGS 中的链路配置
 

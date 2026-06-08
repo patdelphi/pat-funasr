@@ -22,3 +22,9 @@ FunASR-Portable-GPU 项目分析文档
 - API 服务：["app/openai_api/server.py"](file:///y:/NewStore/AI/FunASR-Portable-GPU/app/openai_api/server.py)
 - UI：["app/openai_api/gradio_app.py"](file:///y:/NewStore/AI/FunASR-Portable-GPU/app/openai_api/gradio_app.py)
 
+## 测试（test 目录跑批）
+
+用途：遍历 "test\\" 下音视频文件，分别用各模型生成 ASR 输出（txt/srt/vtt/tsv/json/zip）。
+
+- 脚本：["run_test_all_models.ps1"](file:///y:/NewStore/AI/FunASR-Portable-GPU/run_test_all_models.ps1)
+- 默认模型：sensevoice / paraformer / fun-asr-nano（不包含 paraformer-en）

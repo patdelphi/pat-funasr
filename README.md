@@ -1,4 +1,4 @@
-﻿#
+﻿﻿#
 FunASR-Portable-GPU
 
 说明：本仓库是 FunASR 的 GPU 便携版封装（Windows）。

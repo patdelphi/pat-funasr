@@ -795,7 +795,7 @@ class AutoModel:
             # step.3 compute punc model
             raw_text = None
             punc_res = None
-            if self.punc_model is not None and "timestamps" not in result:
+            if self.punc_model is not None:
                 deep_update(self.punc_kwargs, cfg)
                 punc_res = self.inference(
                     result["text"], model=self.punc_model, kwargs=self.punc_kwargs, **cfg

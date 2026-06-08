@@ -26,6 +26,7 @@ from fastapi.responses import JSONResponse, Response
 
 import renderers
 import vad_presets
+import segmentation
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -40,6 +41,7 @@ MODEL_CONFIGS = {
         "model": "iic/SenseVoiceSmall",
         "vad_model": "fsmn-vad",
         "vad_kwargs": {"max_single_segment_time": 30000},
+        "punc_model": "ct-punc",
     },
     "paraformer": {
         "model": "paraformer-zh",
@@ -51,7 +53,7 @@ MODEL_CONFIGS = {
         "vad_model": "fsmn-vad",
     },
     "fun-asr-nano": {
-        "model": "FunAudioLLM/Fun-ASR-Nano-2512",
+        "model": "Qwen/Qwen3-ASR-0.6B",
         "hub": "hf",
         "trust_remote_code": True,
         "vad_model": "fsmn-vad",
@@ -73,7 +75,7 @@ def load_model(model_name: str):
 
     cfg = MODEL_CONFIGS[model_name].copy()
     cfg["device"] = DEVICE
-    cfg["disable_update"] = True
+    cfg["disable_update"] = False
 
     # Try to find local model cache first
     model_id = cfg["model"]
@@ -168,9 +170,12 @@ async def transcribe(
         asr_model = load_model(model)
         t0 = time.time()
 
+        duration_s = segmentation.ffprobe_duration_s(tmp_path)
         generate_kwargs = {"input": tmp_path, "batch_size": 1}
         if language:
             generate_kwargs["language"] = language
+        if model in {"paraformer", "fun-asr-nano"}:
+            generate_kwargs["sentence_timestamp"] = True
         try:
             generate_kwargs = vad_presets.apply_vad_controls(
                 generate_kwargs=generate_kwargs,
@@ -181,33 +186,28 @@ async def transcribe(
         except ValueError as ve:
             raise HTTPException(status_code=400, detail=str(ve))
 
-        result = asr_model.generate(**generate_kwargs)
+        try:
+            result = asr_model.generate(**generate_kwargs)
+        except KeyError as ke:
+            if str(ke) == "'timestamp'" and "sentence_timestamp" in generate_kwargs:
+                generate_kwargs.pop("sentence_timestamp", None)
+                result = asr_model.generate(**generate_kwargs)
+            else:
+                raise
         elapsed = time.time() - t0
 
-        text = clean_text(result[0]["text"])
-
-        segments = []
-        if "sentence_info" in result[0] and isinstance(result[0]["sentence_info"], list):
-            for seg in result[0]["sentence_info"]:
-                segments.append(
-                    {
-                        "start": seg.get("start", 0) / 1000.0,
-                        "end": seg.get("end", 0) / 1000.0,
-                        "text": clean_text(seg.get("text", "")),
-                        "speaker": seg.get("spk", None),
-                    }
-                )
-
-        # 兜底：至少给字幕渲染器一个段（避免空列表导致生成空文件）
+        duration_s = duration_s if duration_s > 0 else elapsed
+        text = clean_text(result[0].get("text", ""))
+        segments = segmentation.build_segments(result0=result[0], duration_s=duration_s, clean_text=clean_text)
         if not segments:
-            segments = [{"start": 0.0, "end": round(elapsed, 3), "text": text, "speaker": None}]
+            segments = [{"start": 0.0, "end": round(duration_s, 3), "text": text, "speaker": None}]
 
         verbose_payload = renderers.build_verbose_json_payload(
             full_text=text,
             segments=segments,
             meta={
                 "language": language or "auto",
-                "duration": round(elapsed, 3),
+                "duration": round(duration_s, 3),
                 "model": model,
             },
         )

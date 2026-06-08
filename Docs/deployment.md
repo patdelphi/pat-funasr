@@ -21,15 +21,15 @@
 
 注意（从脚本逻辑可见）：
 
-- "FunASR.bat" 虽然会检测 GPU，但目前只是打印提示；"run_api.bat" 固定使用 "--device cuda"
-- 若需要在无 CUDA 的机器上运行，优先使用 "start_services.py"（它会真正把 device 切到 cpu）
+- "FunASR.bat" 会检测 GPU，并把探测到的 device 传给 "run_api.bat"
+- 若需要在无 CUDA 的机器上运行，建议优先使用 "start_services.py"（它会自动选择 cpu/cuda 并等待 API 就绪）
 
 ## 停止服务
 
 脚本：["停止服务.bat"](file:///y:/NewStore/AI/FunASR-Portable-GPU/停止服务.bat)
 
 - 通过窗口标题过滤杀进程：WINDOWTITLE = "FunASR-API*" / "FunASR-UI*"
-- 额外会按内存阈值杀 "python.exe"（可能误伤同机其他 Python 进程，使用时需注意）
+- 不再按内存阈值误杀 "python.exe"
 
 ## 模型下载与离线
 
@@ -45,8 +45,15 @@
 
 ### 发现的问题：下载脚本缺失
 
-- "下载模型.bat" 会调用 "scripts/download_model.py"，但当前仓库中未找到该文件
-- 建议替代方案：直接启动 API（首次 load_model 会自动下载），或按模型 README 使用 modelscope/huggingface 的下载方式离线准备
+- "下载模型.bat" 会调用 "scripts/download_model.py" 进行模型下载与缓存预热
+
+## 跑批测试（test 目录）
+
+用途：遍历 "test\\" 下音视频文件，按模型分别输出 ASR 结果到 "test\\<模型名>\\"。
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File ".\run_test_all_models.ps1"
+```
 
 ## 常见排错点（便携包特有）
 
@@ -54,4 +61,3 @@
   - 已在 "run_api.bat"/"run_ui.bat" 里做了追加
 - Python/依赖不匹配：用 ["检查环境.bat"](file:///y:/NewStore/AI/FunASR-Portable-GPU/检查环境.bat) 快速验证
 - 端口占用：确认 8000/7860 未被其他程序占用
-
