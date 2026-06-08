@@ -44,11 +44,13 @@ echo [PASS] Python and source OK
 echo.
 
 REM --- GPU detection ----------------------------------------------------
+set "DEVICE=cpu"
 set "PATH=%~dp0runtime\python\Lib\site-packages\torch\lib;%PATH%"
 "%PYTHON%" "%DETECT%" > "%TEMP%\funasr_gpu.txt" 2>nul
 if errorlevel 1 goto no_gpu
 set /p GPU_NAME=<"%TEMP%\funasr_gpu.txt"
 echo [GPU]  Detected: %GPU_NAME%
+set "DEVICE=cuda"
 goto gpu_done
 
 :no_gpu
@@ -63,7 +65,7 @@ echo Starting services...
 echo.
 
 echo Launching API server on http://localhost:8000 ...
-start "FunASR-API" cmd /c ""%~dp0run_api.bat""
+start "FunASR-API" cmd /c ""%~dp0run_api.bat" %DEVICE%""
 
 echo.
 echo Launching Gradio UI on http://localhost:7860 ...

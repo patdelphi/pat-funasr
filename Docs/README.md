@@ -1,4 +1,4 @@
-﻿#
+#
 FunASR-Portable-GPU 项目分析文档
 
 本目录用于存放对 "FunASR-Portable-GPU" 的项目结构、运行机制、API 以及部署/优化建议的分析文档。
@@ -10,6 +10,8 @@ FunASR-Portable-GPU 项目分析文档
 - "api.md"：OpenAI 兼容 API 说明（端点、参数、响应、错误约定）
 - "deployment.md"：本地运行与发布建议（Windows 便携包形态、脚本说明、排错要点）
 - "optimization-plan.md"：性能与稳定性优化计划（GPU/并发/缓存/可观测性）
+- "upgrade-plan-output-template.md"：输出模板/字幕升级策划（对标 Whisper-CTranslate2 参数体系）
+- "model-capability-matrix.md"：模型能力矩阵与 API 参数说明（不同模型能力/参数/输出差异）
 - "tasks.md"：待办事项清单（从代码/脚本中发现的改进点与风险项）
 - "changelog.md"：分析文档变更记录
 
