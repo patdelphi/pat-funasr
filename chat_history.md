@@ -120,3 +120,26 @@ Chat History
 ### Assistant
 
 - 准备提交当前变更（文档与脚本修复）；提交后将按策划文档先写测试，再实现输出渲染与多格式输出
+
+## 2026-06-08 09:12:23
+
+### User
+
+- commit进度，然后开始按文档、计划开发、
+
+### Assistant
+
+- 已提交 commit："ae3fc6f docs: plan output templates and model matrix"
+- 已新增开发任务清单："todo.md"（按“先测试后实现”的顺序）
+
+## 2026-06-08 09:20:01
+
+### User
+
+- commit进度，然后开始按文档、计划开发、
+
+### Assistant
+
+- 已按 todo 开始开发：新增输出渲染器 "app/openai_api/renderers.py" 与单元测试 "tests/test_renderers.py"
+- API 已扩展支持 response_format：txt/srt/vtt/tsv/all(zip)（并新增 max_line_width）
+- 校验通过：`python -m unittest discover -s "tests"`、`python -m compileall "app/openai_api"`

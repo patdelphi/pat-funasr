@@ -22,7 +22,9 @@ from typing import Optional
 
 import uvicorn
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
+
+import renderers
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -117,6 +119,7 @@ async def transcribe(
     model: str = Form(default="sensevoice"),
     language: Optional[str] = Form(default=None),
     response_format: Optional[str] = Form(default="json"),
+    max_line_width: Optional[int] = Form(default=None),
 ):
     """
     OpenAI-compatible audio transcription endpoint.
@@ -125,13 +128,20 @@ async def transcribe(
     - file: Audio file (wav, mp3, flac, m4a, ogg, webm)
     - model: Model to use (sensevoice, paraformer, fun-asr-nano)
     - language: Optional language hint
-    - response_format: json or verbose_json
+    - response_format: json/verbose_json/txt/srt/vtt/tsv/all
     """
     # Validate model
     if model not in MODEL_CONFIGS:
         raise HTTPException(
             status_code=400,
             detail=f"Model '{model}' not found. Available: {list(MODEL_CONFIGS.keys())}"
+        )
+
+    allowed_formats = {"json", "verbose_json", "txt", "srt", "vtt", "tsv", "all"}
+    if response_format not in allowed_formats:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported response_format '{response_format}'. Allowed: {sorted(allowed_formats)}",
         )
 
     # Save uploaded file
@@ -154,25 +164,59 @@ async def transcribe(
 
         text = clean_text(result[0]["text"])
 
-        if response_format == "verbose_json":
-            segments = []
-            if "sentence_info" in result[0]:
-                for seg in result[0]["sentence_info"]:
-                    segments.append({
+        segments = []
+        if "sentence_info" in result[0] and isinstance(result[0]["sentence_info"], list):
+            for seg in result[0]["sentence_info"]:
+                segments.append(
+                    {
                         "start": seg.get("start", 0) / 1000.0,
                         "end": seg.get("end", 0) / 1000.0,
                         "text": clean_text(seg.get("text", "")),
                         "speaker": seg.get("spk", None),
-                    })
-            return JSONResponse({
-                "text": text,
-                "segments": segments,
+                    }
+                )
+
+        # 兜底：至少给字幕渲染器一个段（避免空列表导致生成空文件）
+        if not segments:
+            segments = [{"start": 0.0, "end": round(elapsed, 3), "text": text, "speaker": None}]
+
+        verbose_payload = renderers.build_verbose_json_payload(
+            full_text=text,
+            segments=segments,
+            meta={
                 "language": language or "auto",
                 "duration": round(elapsed, 3),
                 "model": model,
-            })
-        else:
+            },
+        )
+
+        if response_format == "json":
             return JSONResponse({"text": text})
+        if response_format == "verbose_json":
+            return JSONResponse(verbose_payload)
+        if response_format == "txt":
+            content = renderers.render_txt(segments, max_line_width=max_line_width)
+            return Response(content=content, media_type="text/plain; charset=utf-8")
+        if response_format == "tsv":
+            content = renderers.render_tsv(segments)
+            return Response(content=content, media_type="text/tab-separated-values; charset=utf-8")
+        if response_format == "srt":
+            content = renderers.render_srt(segments, max_line_width=max_line_width)
+            return Response(content=content, media_type="application/x-subrip; charset=utf-8")
+        if response_format == "vtt":
+            content = renderers.render_vtt(segments, max_line_width=max_line_width)
+            return Response(content=content, media_type="text/vtt; charset=utf-8")
+        if response_format == "all":
+            zbytes = renderers.render_all_zip(
+                full_text=text,
+                segments=segments,
+                json_payload=verbose_payload,
+                max_line_width=max_line_width,
+            )
+            headers = {"Content-Disposition": "attachment; filename=\"output.zip\""}
+            return Response(content=zbytes, media_type="application/zip", headers=headers)
+
+        return JSONResponse({"text": text})
 
     except Exception as e:
         logger.error(f"Transcription error: {e}")

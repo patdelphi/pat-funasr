@@ -6,6 +6,9 @@ runtime/
 # 模型与缓存（体积大，可通过脚本/首次运行自动下载）
 workspace/
 
+# 参考项目/对照脚本（不属于当前发布产物）
+Whisper-CTranslate2/
+
 # FunASR 可能产生的导出/缓存
 __pycache__/
 *.pyc
