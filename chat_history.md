@@ -488,3 +488,62 @@ Chat History
 
 - 已通过幂等校验：`python -m unittest discover -s "tests"`、`python -m compileall "app" "scripts"`
 - 已提交并推送到 "origin/main"：commit="b81914d"
+
+## 2026-06-08 15:55:01
+
+### User
+
+- 系统文档混乱，到底按todo还是按tasks干活？todo为什么没有checkbox，如何跟踪完成进度？
+
+### Assistant
+
+- 已核对 `todo.md`、`Docs/tasks.md`、`Docs/README.md`：正式入口当前指向 `Docs/tasks.md`，而 `todo.md` 更像某次专项的执行清单，职责发生重叠
+- 当前进度难跟踪的原因有两点：`todo.md` 没有统一状态字段/checkbox，`Docs/tasks.md` 也没有回链到专项执行清单，导致“总清单”和“执行清单”分裂
+- 建议口径：`Docs/tasks.md` 作为唯一总任务看板，`todo.md` 仅在复杂专项中临时创建为可勾选执行清单，并在完成后回写到 `Docs/tasks.md`
+
+## 2026-06-08 15:57:46
+
+### User
+
+- todo里面有很多是已经完成的项目，而新的webui是下一步要开发目标
+
+### Assistant
+
+- 已确认：当前 `todo.md` 混合了“已完成事项”和“下一步目标”，不适合继续直接当执行清单
+- 更合理的口径是：把已完成部分迁入 `Docs/tasks.md` 的已完成区或单独归档；把 `Pat WebUI` 相关内容提升为下一阶段唯一主目标，并拆成可勾选任务
+
+## 2026-06-08 15:59:35
+
+### User
+
+- 执行，不需要 tasks.md t太乱
+
+### Assistant
+
+- 已按要求执行：将 `todo.md` 重构为当前唯一执行清单，只保留 `Pat WebUI` 下一阶段开发目标，并补上 checkbox、阶段拆分、验收项与已完成归档
+- 已更新 `Docs/README.md`：将根目录 `todo.md` 明确为当前执行入口，并把 `Docs/tasks.md` 调整为历史任务草稿说明，不再作为日常开发入口
+
+## 2026-06-08 16:04:36
+
+### User
+
+- 你增加一下官方文档网址，然后仔细再review一次，优化下todo，确保计划完善
+- `https://modelscope.github.io/FunASR/zh/tutorial.html`
+- `https://modelscope.github.io/FunASR/api.html`
+
+### Assistant
+
+- 已加入官方参考链接到 `todo.md` 与 `Docs/README.md`
+- 已按官方教程与官方 API 复核并优化 `todo.md`：补充复核结论、范围边界、执行顺序、完成定义、最小化测试骨架、阶段回归验证、依赖前提、官方能力映射和风险项
+- 已确认 `todo.md` 与 `Docs/README.md` 无诊断错误
+
+## 2026-06-08 16:07:56
+
+### User
+
+- commit，然后开始执行
+
+### Assistant
+
+- 已确认当前工作区仅包含本轮文档整理改动：`todo.md`、`Docs/README.md`、`chat_history.md`
+- 将先提交当前文档整理结果，再按 `todo.md` 开始执行 `A0/A1`：补最小测试骨架、搭建 `Pat WebUI` 独立目录与启动入口

@@ -1,7 +1,13 @@
 #
 FunASR-Portable-GPU 项目分析文档
 
-本目录用于存放对 "FunASR-Portable-GPU" 的项目结构、运行机制、API 以及部署/优化建议的分析文档。
+
+说明：当前执行清单统一使用根目录的 "todo.md"；本目录主要存放分析、设计、接口与规划文档，不再作为日常开发的任务入口。
+
+## 外部参考
+
+- 官方教程：[FunASR 使用教程](https://modelscope.github.io/FunASR/zh/tutorial.html)
+- 官方 API：[FunASR API 文档](https://modelscope.github.io/FunASR/api.html)
 
 ## 文档索引
 
@@ -12,7 +18,7 @@ FunASR-Portable-GPU 项目分析文档
 - "optimization-plan.md"：性能与稳定性优化计划（GPU/并发/缓存/可观测性）
 - "upgrade-plan-output-template.md"：输出模板/字幕升级策划（对标 Whisper-CTranslate2 参数体系）
 - "model-capability-matrix.md"：模型能力矩阵与 API 参数说明（不同模型能力/参数/输出差异）
-- "tasks.md"：待办事项清单（从代码/脚本中发现的改进点与风险项）
+- "tasks.md"：历史任务草稿（保留参考，不作为当前执行入口）
 - "changelog.md"：分析文档变更记录
 
 ## 代码入口速览

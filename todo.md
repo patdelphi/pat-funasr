@@ -1,148 +1,257 @@
 ﻿#
-输出模板/字幕（多格式）开发 Todo
+Pat WebUI 开发 Todo
 
-目标：修复并增强输出质量：txt/srt/vtt/tsv/all(zip) 输出具备“标点 + 分段 + 合理时间戳”；修复 "fun-asr-nano" 无输出；并允许在线下载/更新到最新可用模型。
+说明：本文件是当前唯一执行清单，只跟踪下一阶段的 "Pat WebUI" 开发工作；已完成的旧事项仅保留归档摘要，不再作为当前待办继续维护。
 
-## 0. 约束与口径
+## 官方参考
 
-- all：返回 zip（包含 output.txt/output.json/output.srt/output.vtt/output.tsv）
-- 时间戳：句/段级（优先 sentence_info，其次 VAD 段；禁止整段 0~duration 兜底当作正常结果）
-- 参数：仅开放白名单，避免任意 kwargs 注入
-- 新功能：先写测试，再实现
-- 批量脚本：不再跑 "paraformer-en"，只跑 "sensevoice/paraformer/fun-asr-nano"
-- 模型下载：开放在线下载，默认允许更新到最新（disable_update=false）
+- 官方教程："https://modelscope.github.io/FunASR/zh/tutorial.html"
+- 官方 API："https://modelscope.github.io/FunASR/api.html"
+- 本 Todo 已按上述两份官方文档复核：当前规划覆盖了离线识别、流式识别、说话人分离、情感识别、VAD、标点恢复等主场景
 
-## 1. 补测试框架（最小化）
+## 复核结论
 
-- 新增 "tests/"（使用 Python 内置 unittest，不引入 pytest 依赖）
-- 新增渲染器单测夹具（来自 "Docs/upgrade-plan-output-template.md" 的验收样例）
+- 当前第一优先级仍然是做出独立、可运行、不影响旧版的 "Pat WebUI"
+- 阶段 A / B 先尽量复用现有 OpenAI-Compatible API，避免一开始就把后端链路一起推翻
+- 阶段 C 再评估是否要直连 FunASR 推理链路，以覆盖流式识别、说话人分离、情感识别、VAD、PUNC 等官方完整能力
+- Paraformer / Paraformer-Streaming 需要单独考虑 `punc_model="ct-punc"`；Fun-ASR-Nano / SenseVoice / Qwen3-ASR 原生带标点
+- 流式识别必须考虑 `cache`、`is_final`、`chunk_size`、`encoder_chunk_look_back`、`decoder_chunk_look_back`
+- 说话人分离必须考虑 `spk_model="cam++"`；若未来对接 Qwen3-ASR 说话人分离，还需评估 `forced_aligner`
+- VAD 相关参数至少要覆盖 `vad_kwargs.max_single_segment_time`
+- 按你的开发规则，新功能要先补最小化测试，再做实现
 
-验收：
+## 当前口径
 
-- 运行 `python -m unittest discover -s "tests"` 通过
+- 原 WebUI 保持不动：保留 "app/openai_api/gradio_app.py" 与 "run_ui.bat"
+- 新 WebUI 单独开发：在 "app/pat_funasr_webui/" 下演进
+- 当前主目标：先做可运行、可下载、可扩展的 Pat WebUI，再逐步对齐官方完整能力
+- 阶段 A / B 默认继续走现有 "/v1/models" 与 "/v1/audio/transcriptions"
+- 阶段 C 如需支持官方完整能力，再决定“扩后端 API”或“WebUI 直连 FunASR”
+- 进度跟踪方式：只使用标准 checkbox；`[ ]` 未开始，`[x]` 已完成；进行中通过单独写“当前进行中”跟踪
+- 当前不再以 "Docs/tasks.md" 作为执行入口
 
-## 2. 新增输出渲染器模块（纯后处理）
+## 当前进行中
 
-- 新增 "app/openai_api/renderers.py"（或同目录模块）
-  - 输入：segments[{start,end,text}]、full_text、meta
-  - 输出：txt/json/srt/vtt/tsv
-  - 提供 `render_all_zip()`：打包 zip（内含多文件）
-- 统一时间戳格式化：SRT（逗号毫秒），VTT（点毫秒）
-- 断行规则：max_line_width/max_words_per_line/max_line_count（先支持最常用的 max_line_width）
+- [ ] 阶段 A：Pat WebUI 分支隔离
 
-验收：
+## 范围边界
 
-- 单测覆盖：srt/vtt/tsv/json/txt/all(zip)
+- 本轮先做本地可运行的 WebUI，不涉及部署、数据库迁移、外部服务调用等危险操作
+- 本轮不改原 "app/openai_api/gradio_app.py" 的功能与入口
+- 本轮优先支持单机本地调用现有 API，暂不把“官方所有能力”一次性做完
 
-## 3. 扩展 API：response_format 与参数白名单
+## 执行顺序
 
-- 扩展 "/v1/audio/transcriptions"：
-  - 新增 response_format：txt/srt/vtt/tsv/all
-  - 新增字幕参数：max_line_width/max_words_per_line/max_line_count
-  - 新增 VAD 预设：vad_preset（default/anti_hallucination）并映射到 vad_kwargs 白名单
-- 兼容性策略：
-  - 如果模型未返回 sentence_info：使用 VAD 段级时间戳生成字幕
-  - 如果连 VAD 段也不可用：降级为无时间戳 txt/json（并在 verbose_json.meta 里标明降级原因）
+- [ ] A0. 补最小化测试与验证骨架
+- [ ] A1. 搭建独立目录与启动入口
+- [ ] A2. 打通基础转写链路
+- [ ] B1. 动态模型列表
+- [ ] B2. 多格式输出与下载
+- [ ] B3. 高级参数面板
+- [ ] B4. 批量与队列
+- [ ] B5. 第一版回归验证
+- [ ] C1. 技术路线决策
+- [ ] C2. 官方增强能力逐项落地
 
-验收：
+## 当前目标
 
-- API 级单测：对不同 response_format 的分支输出结构正确
+- [ ] 先完成 "Pat WebUI" MVP，可独立启动并完成一次真实转写
+- [ ] 搭建 "Pat WebUI" 独立目录与启动入口
+- [ ] 完成基础转写链路打通
+- [ ] 补齐多格式输出与下载
+- [ ] 增加高级参数面板
+- [ ] 增加批量/队列能力
+- [ ] 评估并落地“功能完整 WebUI”的技术路线
 
-## 4. 批量脚本修复与复跑
+## 完成定义
 
-- 更新 "run_test_all_models.ps1"
-  - 移除 "paraformer-en"
-  - 默认开启 sentence_timestamp（用于分段时间戳）
-  - 为 "sensevoice" 增加 punc_model（保证 txt 有标点）
-  - 修复 "fun-asr-nano" 无输出：捕获异常并把 traceback 写入 "run.log"，确保失败可定位
-  - 允许下载/更新：移除“离线缓存缺失就 skip”的逻辑，保持可重复运行（覆盖输出文件）
+- 阶段 A 完成：Pat WebUI 可独立启动，能调用现有 API 做一次真实转写
+- 阶段 B 完成：Pat WebUI 具备模型列表、多格式下载、参数面板、批量任务四项基础能力
+- 阶段 C 完成：至少完成 1 个非基础 ASR 能力的真实闭环，并有明确技术路线沉淀
 
-验收：
+## 阶段 A0：最小化测试与验证骨架
 
-- 运行脚本后：
-  - "test\\sensevoice\\"、"test\\paraformer\\"、"test\\fun-asr-nano\\" 均生成 "1/2" 的 txt/tsv/srt/vtt/json/zip/wav + run.log
-  - srt/vtt 不是单条 0~duration，而是多条 cue
-  - txt 含标点且有分段（至少多段）
+目标：先补最小测试与手工验证清单，满足“新功能先写测试，再实现”。
 
-## 5. 冒烟校验（幂等）
-
-- `python -m compileall "app"`
-- `python -m unittest`
-
-## 6. 文档同步（仅更新既有 Docs）
-
-- 更新 "Docs/api.md"：补充 response_format 与新增参数说明
-- 更新 "Docs/model-capability-matrix.md"：补充“字幕输出回退策略”一节
-
-## 7. WebUI 分支（为大改做隔离）
-
-目标：保留原 WebUI（"app/openai_api/gradio_app.py" 与 "run_ui.bat"）不动，复制一套新的 "pat-funasr WebUI" 作为后续大改入口。
-
-计划：
-
-- 新建目录："app/pat_funasr_webui/"
-- 复制现有 UI 入口为："app/pat_funasr_webui/gradio_app.py"（先做到功能等价，可跑通）
-- 新增启动脚本（不影响原脚本）：
-  - "run_ui_pat.bat"：仅启动 pat WebUI
-  - （可选）"FunASR_pat.bat"：同时启动 API + pat WebUI
-
-可配置项（建议默认不与原 UI 冲突）：
-
-- pat WebUI 默认端口：7861（原 UI 为 7860）
-- API base_url：默认 http://localhost:8000（与现有一致）
+- [ ] 新增 "tests/" 下与 Pat WebUI 相关的最小测试文件
+- [ ] 为请求体白名单拼装增加单测
+- [ ] 为响应格式到下载文件的映射逻辑增加单测
+- [ ] 为模型列表解析逻辑增加单测
+- [ ] 准备 1 份手工冒烟清单：启动、上传、转写、下载、报错展示
 
 验收：
 
-- 运行 "run_ui_pat.bat" 后可打开 pat WebUI，并能正常调用 API 完成一次转写
+- [ ] `python -m unittest discover -s "tests"` 通过
+- [ ] 手工冒烟清单可覆盖 MVP 主流程
 
-## 8. Pat WebUI 大改（分阶段）
+## 阶段 A：WebUI 分支隔离
 
-范围：只改 "app/pat_funasr_webui/gradio_app.py"（以及必要的同目录新模块），不动原 "app/openai_api/gradio_app.py"。
+目标：复制一套新的 "Pat WebUI" 入口，保证后续大改不影响现有 UI。
 
-### 8.1 动态模型列表
+- [ ] 新建目录："app/pat_funasr_webui/"
+- [ ] 复制现有 UI 入口到："app/pat_funasr_webui/gradio_app.py"
+- [ ] 如有必要，提取 Pat WebUI 自己的工具模块（如请求构建、响应保存、模型列表适配）
+- [ ] 新增启动脚本："run_ui_pat.bat"
+- [ ] 评估是否新增："FunASR_pat.bat"（同时启动 API + Pat WebUI）
+- [ ] 设定默认端口为 "7861"，避免与原 UI 冲突
+- [ ] 设定默认 API base_url 为 "http://localhost:8000"
 
-- 启动时调用 `GET /v1/models`，将下拉框改为动态列表，并显示 ready 状态
-- 刷新按钮：允许手动刷新模型列表
+验收：
 
-### 8.2 多格式输出 + 下载
+- [ ] 运行 "run_ui_pat.bat" 后可打开 Pat WebUI
+- [ ] Pat WebUI 能正常调用 API 完成一次转写
 
-- 输出格式选择：txt/srt/vtt/tsv/json/verbose_json/all(zip)
-- 对非 JSON（txt/srt/vtt/tsv/zip）：
-  - UI 侧改为保存二进制响应到临时文件
-  - 提供下载组件（File）与预览（Textbox/Code）
+## 阶段 B：Pat WebUI 第一版
 
-### 8.3 高级参数面板
+范围：只改 "app/pat_funasr_webui/gradio_app.py" 及其同目录新模块，不动原 "app/openai_api/gradio_app.py"。
 
-- 在 Accordion 中暴露：vad_preset/merge_vad/merge_length_s/max_line_width/hotword 等
-- 请求体按白名单拼接，避免把 UI 任意字段透传到后端
+### B0. 页面骨架与状态管理
 
-### 8.4 批量/队列
+- [ ] 明确页面结构：基础转写区 / 高级参数区 / 结果预览区 / 下载区 / 批量区
+- [ ] 明确单文件与多文件两条处理流程
+- [ ] 明确错误展示区、运行状态区、结果缓存区
 
-- 支持多文件上传（文件列表）
-- 队列执行、进度展示、失败项保留错误详情与可重试
+验收：
 
-验收（每阶段）：
+- [ ] 页面结构已固定，后续功能项可直接挂载
+- [ ] 单文件与批量流程的状态流转清晰
 
-- 能在 "run_ui_pat.bat" 启动的 UI 中完成一次真实转写，并产出对应格式的可下载文件
+### B1. 动态模型列表
 
-## 9. 对齐官方能力（“功能完整 WebUI”）
+- [ ] 启动时调用 `GET /v1/models`
+- [ ] 下拉框改为动态模型列表
+- [ ] 显示模型 ready 状态
+- [ ] 增加“刷新模型列表”按钮
 
-依据官方教程（tutorial.html）建议的核心场景，把 pat WebUI 拆成多 Tab（或多页面）：
+验收：
 
-- 离线识别（ASR）：Paraformer / SenseVoice / Fun-ASR-Nano / Qwen3-ASR
-- 流式识别（Streaming ASR）：Paraformer-Streaming（chunk_size/cache/is_final/look_back）
-- 说话人分离（Diarization）：ASR + VAD +（可选）PUNC + spk_model="cam++"，支持 spk_mode
-- 情感识别（Emotion）：emotion2vec（或 SenseVoice 的情感标签）
-- 语音活动检测（VAD）：离线与流式（返回区间 ms）
-- 标点恢复（PUNC）：ct-punc（输入文本→输出带标点文本）
+- [ ] 页面加载后可看到后端当前模型列表
+- [ ] 点击刷新后模型列表可更新
 
-关键参数（来自官方示例，后续需要在 UI 中可配置）：
+### B2. 多格式输出与下载
 
-- 通用：model / device / hub(ms|hf) / disable_update / ncpu / log_level / disable_pbar
-- ASR：batch_size_s / hotword(s) / language / use_itn / merge_vad / merge_length_s
-- VAD：vad_kwargs.max_single_segment_time
-- Streaming：chunk_size / encoder_chunk_look_back / decoder_chunk_look_back / cache / is_final
-- Diarization：spk_model / spk_mode
-- Emotion：granularity（utterance 等）
+- [ ] 输出格式支持：txt / srt / vtt / tsv / json / verbose_json / all(zip)
+- [ ] 对非 JSON 响应保存为临时文件
+- [ ] 提供下载组件（File）
+- [ ] 提供预览组件（Textbox/Code）
 
-说明：当前项目的后端是 OpenAI-Compatible API（/v1/audio/transcriptions）。要覆盖以上全部能力，需要扩展后端 API 或让 WebUI 直接调用 FunASR 推理链路（二选一）。
+验收：
+
+- [ ] 可在 UI 中下载 txt / srt / vtt / tsv / zip
+- [ ] 预览内容与下载文件一致
+
+### B3. 高级参数面板
+
+- [ ] 基础模型参数：`model`
+- [ ] 输出参数：`response_format`
+- [ ] 在 Accordion 中暴露："vad_preset"
+- [ ] 在 Accordion 中暴露："merge_vad"
+- [ ] 在 Accordion 中暴露："merge_length_s"
+- [ ] 在 Accordion 中暴露："max_line_width"
+- [ ] 在 Accordion 中暴露："hotword"
+- [ ] 在 Accordion 中暴露："language"
+- [ ] 在 Accordion 中暴露："use_itn"
+- [ ] 请求体按白名单拼接，禁止 UI 任意字段透传
+
+验收：
+
+- [ ] UI 参数修改后可正确传到后端
+- [ ] 白名单外参数不会被提交
+
+### B4. 批量与队列
+
+- [ ] 支持多文件上传
+- [ ] 支持队列执行
+- [ ] 显示整体进度与单文件状态
+- [ ] 失败项保留错误详情
+- [ ] 支持失败项重试
+
+验收：
+
+- [ ] 多文件任务可顺序执行完成
+- [ ] 单个文件失败不会中断整个批次
+
+### B5. 第一版回归验证
+
+- [ ] 单文件转写回归：txt / srt / vtt / tsv / json / zip
+- [ ] 多模型回归：至少覆盖 "sensevoice"、"paraformer"、"fun-asr-nano"
+- [ ] 异常回归：后端不可用、返回非 200、文件为空、格式不支持
+- [ ] 下载回归：文件名、扩展名、内容预览一致
+
+验收：
+
+- [ ] 第一版主路径均可重复通过
+- [ ] 常见异常可见、可定位、不会导致页面状态错乱
+
+## 阶段 C：对齐官方能力
+
+说明：这一阶段是增强目标，需先确定技术路线，再逐项落地。
+
+### C1. 技术路线决策
+
+- [ ] 明确采用哪条路线：
+  - 扩展后端 API，继续走 "/v1/audio/transcriptions"
+  - 或让 Pat WebUI 直接调用 FunASR 推理链路
+- [ ] 记录选型原因、影响范围、接口变化
+- [ ] 记录与官方教程/官方 API 的对应关系，防止后续功能名和参数名跑偏
+
+验收：
+
+- [ ] 有明确的一页式决策结果，能指导后续开发
+
+### C2. 功能范围
+
+- [ ] 离线识别（ASR）：Paraformer / SenseVoice / Fun-ASR-Nano / Qwen3-ASR
+- [ ] 流式识别（Streaming ASR）
+- [ ] 说话人分离（Diarization）
+- [ ] 情感识别（Emotion）
+- [ ] 语音活动检测（VAD）
+- [ ] 标点恢复（PUNC）
+
+### C3. 关键参数支持
+
+- [ ] 通用参数：model / device / hub / disable_update / ncpu / log_level / disable_pbar
+- [ ] ASR 参数：batch_size_s / hotword / language / use_itn / merge_vad / merge_length_s
+- [ ] VAD 参数：vad_kwargs.max_single_segment_time
+- [ ] Streaming 参数：chunk_size / encoder_chunk_look_back / decoder_chunk_look_back / cache / is_final
+- [ ] Diarization 参数：spk_model / spk_mode
+- [ ] Emotion 参数：granularity
+
+验收：
+
+- [ ] 至少完成 1 个非基础 ASR 能力的真实可用闭环
+
+## 官方能力映射备注
+
+- Paraformer：适合中文生产级识别，通常需配合 "fsmn-vad" 与 "ct-punc"
+- Paraformer-Streaming：适合实时字幕，必须处理 `cache` 与 `is_final`
+- Fun-ASR-Nano：多语言，内置标点，后续可重点考虑国际化场景
+- SenseVoice：除识别外还带情感/事件标签，适合作为增强能力优先候选
+- Qwen3-ASR：精度高但链路更重，建议放在增强阶段而非 MVP 阶段
+- Emotion2vec：可作为独立情感能力补充，不建议在 MVP 阶段并入
+
+## 依赖与前提
+
+- [ ] 现有 "/v1/models" 返回结构稳定，可供 UI 动态读取
+- [ ] 现有 "/v1/audio/transcriptions" 可稳定返回 txt / srt / vtt / tsv / json / all(zip)
+- [ ] 现有原始 WebUI 可作为 Pat WebUI 的复制基线
+- [ ] 测试目录与最小样例文件可用于冒烟验证
+
+## 风险与待确认
+
+- [ ] 确认 Pat WebUI 是否允许直接绕过 OpenAI-Compatible API
+- [ ] 确认完整能力优先级，避免一次性把范围拉得过大
+- [ ] 确认是否需要新增独立的后端适配层
+- [ ] 确认 Gradio 组件是否足够承载流式识别交互；若不足，需提前调整实现方式
+- [ ] 确认 Qwen3-ASR、说话人分离、情感识别是否要一起进入第一轮增强范围
+
+## 已完成归档
+
+以下事项已完成，仅保留摘要，避免继续污染当前执行清单：
+
+- [x] 输出渲染增强：支持 txt / srt / vtt / tsv / all(zip)
+- [x] 时间戳兜底与字幕分段优化
+- [x] API 扩展：response_format 与参数白名单
+- [x] 跑批脚本修复："run_test_all_models.ps1"
+- [x] 文档同步："Docs/api.md"、"Docs/model-capability-matrix.md"
+- [x] 冒烟校验与测试通过
