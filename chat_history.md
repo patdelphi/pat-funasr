@@ -1225,3 +1225,727 @@ Chat History
 - 已停止正式后端服务：`8000`
 - 已停止前端 UI 服务：`7861`
 - 已确认 `8000/7861/7862/7863` 端口均已释放，当前无残留运行服务
+
+## 2026-06-09 10:41:20
+
+### User
+
+- 先commit
+- 删除顶部的“按功能分区组织页面；已预留 Streaming / Diarization / Emotion / VAD / PUNC 等后续入口。”
+- 重做“服务与调试”页：不要只显示懒加载/模型状态，要补齐每种模型支持语言及其他需要说明的内容
+
+### Assistant
+
+- 已按要求先提交当前进度，提交号：`8060606`，提交信息：`feat: stabilize pat webui and funasr api workflows`
+- 已删除 `"app/pat_funasr_webui/gradio_app.py"` 顶部阶段性说明文案，保留页面标题即可
+- 已重构 `"服务与调试"` 页：
+  - 新增运行概览：显示 API 地址、当前启动/加载方式、已加载模型、按需加载模型
+  - 保留能力筛选，但把模型能力表升级为资料表，展示支持语言、能力、推荐入口、说明
+  - 使用中文状态文案：`已加载` / `按需加载`，替代原先 `ready` / `lazy-load`
+  - 保留原始 JSON 调试输出，便于继续排查后端状态
+- 已在 `"app/pat_funasr_webui/app_utils.py"` 中补齐模型语言覆盖与推荐入口资料：
+  - `sensevoice`: `auto / zh / en / yue / ja / ko / nospeech`
+  - `paraformer`: `zh`
+  - `paraformer-en`: `en`
+  - `paraformer-zh-streaming`: `zh`
+  - `fun-asr-nano`: `多语`
+  - `qwen3-asr` / `qwen3-asr-0.6b`: `多语`
+  - `emotion2vec-plus-large`: `与语种无关`
+- 已更新 `"todo.md"`：记录“顶部文案删除”和“服务与调试页重构”两项完成项
+- 已通过校验：
+  - `python -m py_compile "app\\pat_funasr_webui\\app_utils.py" "app\\pat_funasr_webui\\gradio_app.py"`
+  - `python -m unittest "tests.test_pat_webui_utils" "tests.test_pat_webui_diarization_exports" -v`
+
+## 2026-06-09 10:47:42
+
+### User
+
+- 多语是什么玩意，到底支持哪些语言？你不会去项目页面查吗
+
+### Assistant
+
+- 已按要求回查本地缓存的官方 README，而不是继续使用“多语”这种模糊表述
+- 已核对官方资料来源：
+  - `"workspace/models/models/iic/SenseVoiceSmall/README.md"`
+  - `"workspace/models/models/FunAudioLLM/Fun-ASR-Nano-2512/README_zh.md"`
+  - `"workspace/models/models/Qwen/Qwen3-ASR-1___7B/README.md"`
+- 已把 `"app/pat_funasr_webui/app_utils.py"` 中模型语言列改成更精确口径：
+  - `sensevoice`：README 明确示例/代码 `auto / zh / en / yue / ja / ko / nospeech`，正文文案称“支持超过 50 种语言”
+  - `fun-asr-nano`：README_zh 当前模型页表格写“中文 / 英文 / 日文”，并说明中文含 7 大方言与 26 地域口音
+  - `qwen3-asr` / `qwen3-asr-0.6b`：README 明确为 `30 种语言 + 22 种中文方言`
+  - `emotion2vec-plus-large`：README 未枚举具体语种，改为说明“通用语音情感识别模型”
+- 已同步增强说明列：
+  - `qwen3-asr` 系额外提示“当前项目只接了离线路径，未接其原生 streaming/vLLM 工具链”
+  - `fun-asr-nano` 额外提示“当前 README 文案存在‘31 语种’与表格‘中英日’两种口径，页面采用模型表格口径展示”
+- 已通过校验：
+  - `python -m unittest "tests.test_pat_webui_utils" -v`
+  - `python -m py_compile "app\\pat_funasr_webui\\app_utils.py"`
+
+## 2026-06-09 10:57:26
+
+### User
+
+- 相关文档都要更新，包括readme
+
+### Assistant
+
+- 已同步更新根目录文档：
+  - `"README.md"`：补充重点文档导航
+  - `"README-原版.md"`：新增“当前内置模型与语言口径”章节，明确各模型支持语言与当前项目接入差异
+- 已同步更新 `"Docs/"` 下相关文档：
+  - `"Docs/README.md"`：补充 README 索引与模型能力矩阵职责说明
+  - `"Docs/model-capability-matrix.md"`：移除笼统“多语”表述，改成对齐本地缓存官方 README 的明确语言口径
+  - `"Docs/api.md"`：修正 `trust_remote_code=False`、`dtype=fp16`、按需加载说明、模型语言口径与接入限制说明
+  - `"Docs/smoke_pat_webui.md"`：把旧的 `ready / not ready` 校验项改成当前页面实际文案 `已加载 / 按需加载`
+  - `"Docs/changelog.md"`：记录本轮文档口径同步
+- 已同步更新 `"todo.md"`，记录“相关文档已同步更新”完成项
+
+## 2026-06-09 11:58:03
+
+### User
+
+- 相关文档都要更新，包括readme
+
+### Assistant
+
+- 继续收口文档入口与执行清单，确保不仅正文更新，索引和变更记录也同步到位
+- 已补充 `"README.md"` 文档导航，新增：
+  - `"Docs/README.md"`
+  - `"Docs/smoke_pat_webui.md"`
+  - `"Docs/changelog.md"`
+- 已补充 `"Docs/README.md"` 文档索引，增加 `"smoke_pat_webui.md"` 的职责说明
+- 已更新 `"Docs/changelog.md"`，记录：
+  - 冒烟文档文案与页面状态文案同步
+  - 根 README / Docs 索引收口
+- 已更新 `"todo.md"`，把 `Fun-ASR-Nano` 的“多语言”旧口径改成更具体的官方表格口径：`中文 / 英文 / 日文`，并保留中文方言补充说明
+
+## 2026-06-09 12:09:02
+
+### User
+
+- 继续
+
+### Assistant
+
+- 继续做本轮收口验证，不直接执行删除；先完成测试、编译和残留目录清点
+- 已校验：
+  - `runtime\python\python.exe -m py_compile "app\pat_funasr_webui\gradio_app.py" "app\pat_funasr_webui\app_utils.py" "app\openai_api\server.py"`
+  - `runtime\python\python.exe -m unittest discover -s "tests" -p "test_pat_webui_utils.py" -v`
+  - `runtime\python\python.exe -m unittest discover -s "tests" -p "test_pat_webui_diarization_exports.py" -v`
+- 测试结果：
+  - `test_pat_webui_utils.py`：18 项通过
+  - `test_pat_webui_diarization_exports.py`：9 项通过
+- 已清点但未删除的测试输出目录：
+  - `"b5_outputs_bad_format"`
+  - `"b5_outputs_empty"`
+  - `"b5_outputs_fun_asr_nano"`
+  - `"b5_outputs_paraformer"`
+  - `"b5_outputs_unavailable"`
+- 继续统一 Pat WebUI 展示口径：
+  - 已把 `"app/pat_funasr_webui/app_utils.py"` 中的下拉标签 `"SenseVoice 多语言"` 改成 `"SenseVoice"`
+  - 已同步更新 `"tests/test_pat_webui_utils.py"` 对应断言
+- 已复查 `"app/pat_funasr_webui"` 下无残留 `"多语"` / `"多语言"` 展示词
+
+## 2026-06-09 12:14:06
+
+### User
+
+- 全部清理掉
+
+### Assistant
+
+- 已按要求清理残留测试输出目录：
+  - `"b5_outputs_bad_format"`
+  - `"b5_outputs_empty"`
+  - `"b5_outputs_fun_asr_nano"`
+  - `"b5_outputs_paraformer"`
+  - `"b5_outputs_unavailable"`
+- 已清理残留调试/运行日志：
+  - `"trae-debug-log-bat-startup-failure.txt"`
+  - `"funasr-api.log"`
+  - `"funasr-ui.log"`
+  - `"funasr-single-window.log"`
+- 删除 `"funasr-ui.log"` 时发现文件占用，已先定位并停止对应监听进程：
+  - API：`8000`
+  - Pat WebUI：`7861`
+- 已复核当前 `8000 / 7861 / 7862 / 7863` 均无监听残留
+
+## 2026-06-09 12:17:45
+
+### User
+
+- 无用的bat、测试音频文件都删掉
+
+### Assistant
+
+- 已先复查仓库：
+  - 当前未检索到残留测试音频 / 视频样例文件
+  - 根目录 `.bat` 已按“只留 Pat 入口”策略处理
+- 已删除旧入口与辅助脚本：
+  - `"FunASR.bat"`
+  - `"run_ui.bat"`
+  - `"下载模型.bat"`
+  - `"停止服务.bat"`
+  - `"检查环境.bat"`
+- 当前仅保留 3 个 Pat 相关入口：
+  - `"FunASR_pat.bat"`
+  - `"run_api.bat"`
+  - `"run_ui_pat.bat"`
+
+## 2026-06-09 12:56:25
+
+### User
+
+- 清理，根目录的原始readme也不要
+
+### Assistant
+
+- 已删除根目录原始说明文件：
+  - `"README-原版.md"`
+- 已同步收口活文档中的入口与导航：
+  - `"README.md"`：移除 `"README-原版.md"` 导航，补充当前保留启动入口
+  - `"Docs/README.md"`：改为指向 `"FunASR_pat.bat"` / `"run_api.bat"` / `"run_ui_pat.bat"` 与 Pat WebUI 主入口
+  - `"Docs/deployment.md"`：改为当前 Pat 启动方式、按需加载说明、7861 端口说明
+  - `"Docs/design.md"`：改为 Pat 启动链路
+  - `"Docs/requirements.md"`：改为 `"run_ui_pat.bat"` 与 `7861`
+  - `"CUDA_GUIDE.md"`：改为 `"FunASR_pat.bat"` 与 `"run_ui_pat.bat"`
+  - `"Docs/changelog.md"` / `"Docs/optimization-plan.md"` / `"todo.md"`：移除旧入口与 `"README-原版.md"` 相关口径
+- 已同步修正：
+  - `"p0_test.py"` 中旧 `"FunASR.bat"` 常量改为 `"FunASR_pat.bat"`
+
+## 2026-06-09 12:59:19
+
+### User
+
+- 文档里有FunASR-Portable-GPU字样的也改掉，项目不叫这个名字
+
+### Assistant
+
+- 已清理文档中的旧项目名 `"FunASR-Portable-GPU"`
+- 已修改文档标题：
+  - `"README.md"`：改为 `"Pat WebUI"`
+  - `"Docs/README.md"`：改为 `"Pat WebUI 项目分析文档"`
+  - `"Docs/upgrade-plan-output-template.md"`：改为 `"Pat WebUI 输出模板/字幕升级策划"`
+- 已把多处文档中的绝对 `file:///.../FunASR-Portable-GPU/...` 链接改成相对链接，覆盖：
+  - `"Docs/README.md"`
+  - `"Docs/requirements.md"`
+  - `"Docs/deployment.md"`
+  - `"Docs/api.md"`
+  - `"Docs/model-capability-matrix.md"`
+  - `"Docs/upgrade-plan-output-template.md"`
+- 已复查：当前 `.md` 文档里不再残留 `"FunASR-Portable-GPU"`，仅 `"chat_history.md"` 中保留历史路径记录
+
+## 2026-06-09 13:26:50
+
+### User
+
+- 离线识别，批量文件报错：[ERR] IBEC竞标会议录音.m4a -> Transcription failed: timed out
+- 文件很大，目前超时时间是多久？
+
+### Assistant
+
+- 已定位当前 Pat WebUI 批量离线识别超时来源：
+  - `"app/pat_funasr_webui/gradio_app.py"` 中 `urllib.request.urlopen(..., timeout=timeout)` 用于离线识别请求
+  - 批量函数 `"batch_transcribe(...)"` 逐个文件调用 `"safe_transcribe(..., timeout=timeout)"`
+  - 默认超时来自命令行参数 `--timeout`，默认值为 `TIMEOUT` 环境变量或 `"300"` 秒
+- 已确认 `"run_ui_pat.bat"` 当前没有覆盖 `TIMEOUT`，因此默认启动情况下实际超时就是 `300` 秒
+
+## 2026-06-09 13:34:47
+
+### User
+
+- 1. 不需要设超时
+- 2. 把控台输出，在前端UI中，新建一个组件来展示，这样不用查看cmd窗口了
+
+### Assistant
+
+- 已修改 `"app/pat_funasr_webui/gradio_app.py"`：
+  - 新增无超时逻辑：当 `timeout<=0` 时，不再向 `urllib.request.urlopen(...)` 传超时参数
+  - 默认 `--timeout` 从 `"300"` 改为 `"0"`，即默认不设 HTTP 超时
+  - 新增 `"read_runtime_logs(...)"`，读取根目录 `"funasr-api.log"` / `"funasr-ui.log"` / `"funasr-single-window.log"`
+  - 在 `"服务与调试"` 页新增：
+    - `"运行日志"` 文本组件
+    - `"刷新运行日志"` 按钮
+- 已补充测试 `"tests/test_pat_webui_diarization_exports.py"`：
+  - 校验 `timeout=0` 时不传超时参数
+  - 校验运行日志读取逻辑
+  - 校验服务页包含 `"运行日志"` 与 `"刷新运行日志"`
+- 已验证：
+  - `python -m unittest discover -s "tests" -p "test_pat_webui_diarization_exports.py" -v`
+  - `python -m unittest discover -s "tests" -p "test_pat_webui_utils.py" -v`
+  - `python -m py_compile "app\\pat_funasr_webui\\gradio_app.py" "tests\\test_pat_webui_diarization_exports.py"`
+
+## 2026-06-09 13:39:03
+
+### User
+
+- 为啥要手动刷新？为啥不是自动刷新？
+
+### Assistant
+
+- 已把 `"服务与调试"` 页的 `"运行日志"` 改成自动刷新
+- 基于当前 `"gradio==6.15.2"` 支持的 `"gr.Timer"`，新增每 `2.0` 秒自动轮询一次日志文件
+- `"刷新运行日志"` 按钮保留为兜底手动刷新入口
+- 已更新测试 `"tests/test_pat_webui_diarization_exports.py"`：
+  - 继续校验 `"运行日志"` / `"刷新运行日志"`
+  - 新增校验页面配置中存在 `"timer"` 组件
+- 已验证：
+  - `python -m unittest discover -s "tests" -p "test_pat_webui_diarization_exports.py" -v`
+  - `python -m py_compile "app\\pat_funasr_webui\\gradio_app.py" "tests\\test_pat_webui_diarization_exports.py"`
+
+## 2026-06-09 18:09:54
+
+### User
+
+- [UI] Exception in callback _ProactorBasePipeTransport._call_connection_lost(None)
+- [UI] handle: <Handle _ProactorBasePipeTransport._call_connection_lost(None)>
+- [UI] Traceback (most recent call last):
+- [UI]   File "asyncio\\events.py", line 84, in _run
+- [UI]   File "asyncio\\proactor_events.py", line 165, in _call_connection_lost
+- [UI] ConnectionResetError: [WinError 10054] 远程主机强迫关闭了一个现有的连接。
+
+### Assistant
+
+- 该报错通常是浏览器/前端主动断开连接（刷新、关闭 Tab、页面卡死被浏览器终止请求）引发的 UI 侧 asyncio 回调异常打印，本身一般不影响服务
+- 已在 `"app/pat_funasr_webui/gradio_app.py"` 的 `main()` 增加 Windows 降噪：切换到 `WindowsSelectorEventLoopPolicy`，并对 `ConnectionResetError(winerror=10054)` 静默处理，减少控台刷屏
+- 已通过校验：`python -m compileall -q "app"`、`python -m pytest -q "tests"`
+
+## 2026-06-09 18:09:54
+
+### User
+
+- 1. 离线识别，单文件结果，只能预览json，txt，剩下几个看不到
+- 2. 服务与调试改为自动刷新，看看卡不卡
+
+### Assistant
+
+- 已修复离线识别预览切换：不再依赖精简 JSON 现算预览，而是把各格式导出文件路径写入前端状态，切换 `"json/txt/srt/vtt/tsv"` 时直接读取对应文件，`srt/vtt/tsv` 现在可正常预览
+- 已把 `"服务与调试"` 页的自动刷新范围扩展为：`模型摘要 + 服务状态/调试输出 + 运行概览 + 模型能力看板 + 使用建议 + 运行日志`，默认开启，但仍保留手动按钮兜底
+- 已通过校验：`python -m pytest -q "tests/test_pat_webui_diarization_exports.py"`、`python -m compileall -q "app/pat_funasr_webui"`
+
+## 2026-06-09 18:26:21
+
+### User
+
+- 继续
+
+### Assistant
+
+- 已进一步收口自动刷新策略：新增 `service_tab_active` 状态，并为各个 Tab 绑定 `.select()` 事件；现在只有切到 `"服务与调试"` 页时，定时器才会真正刷新内容，离开该页即停止后台轮询
+- 已补回归测试：覆盖“服务页激活时自动刷新返回内容”和“服务页未激活时只返回空更新”两种路径
+- 已通过校验：`python -m pytest -q "tests/test_pat_webui_diarization_exports.py"`、`python -m compileall -q "app/pat_funasr_webui"`
+
+## 2026-06-09 18:29:19
+
+### User
+
+- tab乱掉了
+
+### Assistant
+
+- 已定位最新一轮改动里最可疑的结构问题：`service_tab_active = gr.State(False)` 被放进了 `gr.Tabs()` 容器内，这有概率干扰 Tabs 结构渲染
+- 已修复：把该状态组件移到 `gr.Tabs()` 外层，仅保留各个 Tab 的 `.select()` 事件，不再把非 Tab 组件塞进 Tabs 容器
+- 已通过校验：`python -m pytest -q "tests/test_pat_webui_diarization_exports.py"`、`python -m compileall -q "app/pat_funasr_webui"`
+
+## 2026-06-09 18:35:10
+
+### User
+
+- 去掉简化方式：已生成 output.zip（完整内容请下载查看）(省内存模式：文件较大，仅生成 zip，避免页面卡死。)，改回显示完整结果
+
+### Assistant
+
+- 已回退离线识别里的“大文件强制 zip-only”逻辑：删除 `safe_transcribe_with_exports()` 中按文件大小改成 `response_format="all"` 的分支，恢复为所有文件都按当前预览格式返回完整结果
+- 已新增回归测试：覆盖“大文件也必须走完整预览链路，不再出现 `省内存模式` 文案”
+- 已通过校验：`python -m unittest "tests.test_pat_webui_diarization_exports" -v`、`python -m compileall -q "app/pat_funasr_webui"`
+
+## 2026-06-09 18:40:17
+
+### User
+
+- 进入服务与调试，没有自动刷新服务状态
+
+### Assistant
+
+- 已定位：`service_tab.select()` 之前只把 `service_tab_active` 设为 `True`，没有立即执行刷新，所以必须等下一次 `Timer.tick` 才会看到服务状态变化
+- 已修复：新增 `activate_and_refresh_service_tab()`，进入 `"服务与调试"` 页时会立刻刷新 `模型摘要 / 服务状态 / 运行概览 / 模型能力看板 / 使用建议 / 运行日志`，后续再继续走定时自动刷新
+- 已新增回归测试：覆盖“进入服务页立即返回刷新内容”
+- 已通过校验：`python -m unittest "tests.test_pat_webui_diarization_exports" -v`、`python -m compileall -q "app/pat_funasr_webui"`
+
+## 2026-06-09 18:43:08
+
+### User
+
+- 进入tab，全显示错误，手动点几个刷新按钮能正常显示信息
+
+### Assistant
+
+- 已定位：`activate_and_refresh_service_tab()` 之前直接调用底层快照函数，错误处理比手动按钮更“硬”，一旦其中某一步异常，会把整页都刷成错误
+- 已修复：进入 `"服务与调试"` 页的立即刷新逻辑改为复用手动按钮同一条安全链路：
+  - 模型摘要：`fetch_model_choices(...)`
+  - 服务状态/看板：`safe_check_with_capabilities(...)`
+  - 运行日志：单独兜底异常处理
+- 已通过校验：`python -m unittest "tests.test_pat_webui_diarization_exports" -v`、`python -m compileall -q "app/pat_funasr_webui"`
+
+## 2026-06-09 18:45:36
+
+### User
+
+- 运行日志读取失败：name '_RUNTIME_LOG_TICK_COUNTER' is not defined
+
+### Assistant
+
+- 已定位根因：`read_runtime_logs_ui()` 里此前把 `global _RUNTIME_LOG_TICK_COUNTER` 放在 `try/except` 中，实际上不会触发初始化分支，首次调用时下一行就会读取未定义变量
+- 已修复：改为显式用 `globals().get("_RUNTIME_LOG_TICK_COUNTER", 0)` 初始化并自增，确保第一次调用也安全
+- 已新增回归测试：覆盖“首次调用 `read_runtime_logs_ui()` 时自动初始化计数器”
+- 已通过校验：`python -m unittest "tests.test_pat_webui_diarization_exports" -v`
+
+## 2026-06-10 02:28:00
+
+### User
+
+- [UI] ConnectionResetError: [WinError 10054] 远程主机强迫关闭了一个现有的连接。
+
+### Assistant
+
+- 该报错通常是浏览器/前端中断连接（刷新、关闭 Tab、页面卡死被浏览器终止请求）导致的 UI 侧 asyncio 回调异常打印，通常不影响服务本身
+- 可选：如需“控台不刷屏”，可在 UI 进程里对该异常做降噪处理（屏蔽/降级日志）
+
+## 2026-06-10 02:20:00
+
+### User
+
+- 不卡了，控台一堆python报错
+
+### Assistant
+
+- 已定位控台刷屏原因：Pat WebUI 的 `"read_runtime_logs_ui_guard"` 里调用了 `gr.update()` 但未导入 `gradio as gr`，触发 `NameError: name 'gr' is not defined` 并被 Gradio 队列反复重试
+- 已修复：在 `"app/pat_funasr_webui/gradio_app.py"` 的 `"read_runtime_logs_ui_guard"` 内补导入；并保持自动刷新默认关闭
+- 已通过校验：`python -m unittest discover -s "tests"`（84 tests OK）
+
+## 2026-06-10 02:05:00
+
+### User
+
+- 不需要运行任务，服务启动，刚进入ui，就无法切换tab，你在干嘛？
+
+### Assistant
+
+- 已定位：页面加载时的 `demo.load` 自动初始化会在首屏触发多组件大文本更新，导致前端线程 hang，表现为无法切换 Tab
+- 已回退为“按需加载”：移除 `demo.load(initialize_service_dashboard)`，并把服务页初始内容改为占位文案（点“检查服务”再加载看板/调试输出）
+- 已通过校验：`python -m unittest discover -s "tests"`（84 tests OK）
+
+## 2026-06-10 01:45:00
+
+### User
+
+- 切换tab又卡了，你直接看下最近几次代码你改了什么吧，之前单文件一点都不卡，但大文件我没试过，包括多个大文件的批量处理
+
+### Assistant
+
+- 已对工作区改动做核对（git diff），影响 UI 的核心改动集中在："app/pat_funasr_webui/gradio_app.py"（运行日志组件、Timer、自动初始化、预览限长/zip-only、调试插桩）
+- 基于“切换 Tab 卡死”的现象，先做最小规避：把 "服务与调试" 页与 "情感识别" 页的 JSON 展示从 Code 改为 Textbox，并对服务 raw_json 做截断，降低切换 Tab 时的前端渲染压力
+- 同时移除页面级 debug HTML 注入，避免潜在前端脚本干扰
+- 已通过校验：`python -m unittest discover -s "tests"`（84 tests OK）
+
+## 2026-06-10 01:31:00
+
+### User
+
+- 卡死了
+
+### Assistant
+
+- 通过 Debug 日志确认：离线识别请求已正常完成（API 推理耗时秒级），但 UI 侧出现卡死（浏览器 RESULT_CODE_HUNG）
+- 新增规避：默认关闭“运行日志自动刷新”，避免后台持续大文本更新导致页面卡死；需要时手动开启
+- 调整默认日志读取量与刷新频率（降低前端渲染压力），并保留“打包下载运行日志”
+- 已通过校验：`python -m unittest discover -s "tests"`（84 tests OK）
+
+## 2026-06-10 00:40:00
+
+### User
+
+- 只运行了一个很小的离线识别，页面就卡死，报错误代码：RESULT_CODE_HUNG，目前页面还开着
+
+### Assistant
+
+- 启动证据驱动调试会话：创建 "debug-gradio-page-hung.md"
+- 启动 Debug Server（".dbg/gradio-page-hung.env" -> http://127.0.0.1:7777/event）
+- 为 Pat WebUI 与 API 加入插桩上报点，用于采集“输出长度/耗时/Timer 频率/请求阶段”等证据
+
+## 2026-06-10 00:41:00
+
+### User
+
+- 跑完了一个小离线识别，卡死了
+
+### Assistant
+
+- 已收到复现确认：本次触发卡死的输入为视频（mp4/m4a）
+- 下一步对照实验：仅用一个小 mp3 再跑一次离线识别，用于判断是否为“视频预览/媒体解码”导致的浏览器 hang
+
+## 2026-06-10 00:36:00
+
+### User
+
+- 只运行了一个很小的离线识别，页面就卡死，报错误代码：RESULT_CODE_HUNG，目前页面还开着
+
+### Assistant
+
+- 已开启证据驱动调试会话："debug-gradio-page-hung.md"
+- 已启动 Debug Server（.dbg/gradio-page-hung.env -> http://127.0.0.1:7777/event），并在前后端加入插桩上报（不改业务逻辑）
+- 下一步需要你在重启 API/UI 后复现一次，我将基于 trae-debug-log-gradio-page-hung.ndjson 的证据定位卡死原因
+
+## 2026-06-09 22:16:00
+
+### User
+
+- Y:\\NewStore\\AI\\FunASR-Portable-GPU\\test 里面的文件，你自己探查
+
+### Assistant
+
+- 已探查 "test"：共 6 个媒体文件（2x mp4，2x mp3，1x m4a，1x aac）
+- 最大文件与时长："孙老师分享录音20250310.aac" ~59.71MB / 3903s（约 65min），"IBEC竞标会议录音.m4a" ~32.41MB / 4213s（约 70min）
+
+## 2026-06-09 22:18:00
+
+### User
+
+- 窗口已经关了，你自己判断一下
+
+### Assistant
+
+- 已确认关闭窗口后 `8000/7861/7862/7863` 均无监听，说明 API/UI 进程已随窗口退出而结束（生命周期绑定生效）
+- 现有 "funasr-api.log" 约 2.21MB，不算大；更像是长音频导致输出文本过大，引发前端内存压力
+
+## 2026-06-09 22:20:00
+
+### User
+
+- 你看看如何优化这些问题
+
+### Assistant
+
+- 已把“批量卡死/前端内存/刷屏”优化项加入 "todo.md" 的 B6（预览限长、批量不保存全文、状态刷新节流、Streaming 节流、大文件上传降峰）
+
+## 2026-06-09 22:30:00
+
+### User
+
+- 执行
+
+### Assistant
+
+- 已按 "todo.md" 的 B6 落地优化：预览/调试 JSON 尾部限长、批量消息限长、批量刷新节流、Streaming 节流 + 预览限长
+- 已新增单测："tests/test_pat_webui_memory_optimizations.py"
+- 已通过校验：`python -m unittest discover -s "tests"`（84 tests OK）
+
+## 2026-06-09 23:10:00
+
+### User
+
+- 控台显示信息又太少了，模型load和推理都看不见，前台页面又卡死了
+
+### Assistant
+
+- 已增强后端日志：在 "/v1/audio/transcriptions" 增加推理开始/结束 INFO（包含 elapsed/duration/rtf），便于在控制台与日志中看到推理过程
+- 已增强前端日志查看：服务页增加日志行数/读取上限可调 + “打包下载运行日志”
+- 已增强前端抗卡死：大文件（>=25MB）自动启用省内存模式，仅生成 zip；同时调试 JSON 只展示精简预览，避免页面渲染超大 JSON 卡死
+- 已通过校验：`python -m unittest discover -s "tests"`（84 tests OK）
+
+## 2026-06-09 22:30:00
+
+### User
+
+- 执行
+
+### Assistant
+
+- 已按 \"todo.md\" 的 B6 落地“批量卡死/前端内存/刷屏”优化：
+  - 结果预览与调试 JSON 增加尾部限长（避免超长音频结果把浏览器撑爆）
+  - 批量任务仅保留短摘要（成功/失败消息限长），避免内存随 transcript 全文累积
+  - 批量 running 状态更新节流（每 N 项才刷新一次 running 状态）
+  - Streaming 输出节流 + 预览尾部限长（避免每个 chunk 反复推送全量文本）
+- 已新增单测：\"tests/test_pat_webui_memory_optimizations.py\"
+- 已通过校验：`python -m unittest discover -s \"tests\"`（84 tests OK）
+
+## 2026-06-09
+
+### User
+
+- 批量转化卡死了，前端页面报超出内存了，是不是log太大了？同一个指令控台状态为什么不能在一行刷新，而是要不断产生新行
+
+### Assistant
+
+- 大概率是“前端一次性接收/渲染的文本太大”触发（常见来源：批量结果摘要无限增长、运行日志一次性读全量、开启进度条导致刷屏）
+- 已做收敛：批量摘要限条数/限错误长度；运行日志改为尾部读取并限制字节与行数；默认关闭进度条（减少刷屏与前端内存压力）
+- “同一行刷新”依赖 `\r` + 终端 TTY；当 stdout 被重定向到日志文件/前端文本框时，很多进度库会退化成不断换行；目前启动器侧已对 `\r` 做覆盖输出，但 UI 文本框本身不支持真正的“原地刷新”
+
+## 2026-06-09 22:16:00
+
+### User
+
+- Y:\\NewStore\\AI\\FunASR-Portable-GPU\\test 里面的文件，你自己探查
+
+### Assistant
+
+- 已探查 \"test\"：共 6 个媒体文件（2x mp4，2x mp3，1x m4a，1x aac）
+- 最大文件与时长：\"孙老师分享录音20250310.aac\" ~59.71MB / 3903s（约 65min），\"IBEC竞标会议录音.m4a\" ~32.41MB / 4213s（约 70min）
+
+## 2026-06-09 22:18:00
+
+### User
+
+- 窗口已经关了，你自己判断一下
+
+### Assistant
+
+- 已确认关闭窗口后 `8000/7861/7862/7863` 均无监听，说明 API/UI 进程已随窗口退出而结束（生命周期绑定生效）
+- 现有 `funasr-api.log` 约 2.21MB，不算大；更像是长音频导致输出文本（转写结果/verbose_json/批量状态）过大，引发前端内存压力
+
+## 2026-06-09 22:20:00
+
+### User
+
+- 你看看如何优化这些问题
+
+### Assistant
+
+- 已把“批量卡死/前端内存/刷屏”优化项加入 \"todo.md\" 的 B6（包含：预览限长、批量不保存全文、状态刷新节流、Streaming 节流、大文件上传降峰）
+- 建议优先落地前 4 项（无需改后端协议即可显著降内存）；第 5 项流式 multipart 属于增强项
+- 你回复“执行”后我就按 B6 逐条改代码并自测（只做幂等校验与本地验证，不做任何危险操作）
+
+## 2026-06-09 14:08:52
+
+### User
+
+- 为什么运行bat，还会显示历史信息？而不是全新cmd窗口？
+- 加cls吧先
+
+### Assistant
+
+- 已在 `"FunASR_pat.bat"` 启动开头增加 `cls`，每次启动先清屏，避免显示上一轮控制台历史输出
+
+## 2026-06-09 14:14:38
+
+### User
+
+- cls没用， 我不明白，新建cmd，与关闭窗口自动关闭服务，冲突吗？
+
+### Assistant
+
+- 已定位 `cls` “没用”的真实原因：启动器会把 `"funasr-api.log"` / `"funasr-ui.log"` 的历史内容从文件里重新输出到控制台（不是 CMD 自带历史）
+- 已修复 `"aipython/managed_single_window_launcher.py"`：
+  - `"LogTailReader"` 默认从日志文件末尾开始跟随，只输出本轮启动后的新增日志，不再重复打印历史日志
+- 已补充测试 `"tests/test_aipython_managed_single_window_launcher.py"`：
+  - 新增用例校验 `"LogTailReader"` 默认从文件末尾开始
+- 已验证：
+  - `python -m unittest discover -s "tests" -p "test_aipython_managed_single_window_launcher.py" -v`
+  - `python -m py_compile "aipython\\managed_single_window_launcher.py"`
+
+- 关于“新建 CMD”与“关闭窗口自动关闭服务”是否冲突：
+  - 不冲突
+  - 关键是：API/UI 必须绑定到“那个新建窗口里运行的托管进程”
+  - 只要托管进程在新窗口里运行，关闭新窗口时托管进程退出，Job Object 就会结束 API/UI 子进程
+
+## 2026-06-09 13:47:02
+
+### User
+
+- 继续
+- 另外，关闭bat的cmd窗口，为何前端服务还在运行？
+
+### Assistant
+
+- 已继续收口测试：
+  - `"tests/test_pat_webui_diarization_exports.py"` 新增事件循环跟踪与显式关闭逻辑
+  - 构建 Gradio demo 的测试现在会记录并关闭测试期间创建的 asyncio event loop
+  - 已清除之前的 `ResourceWarning: unclosed event loop` 告警
+- 已验证：
+  - `python -m unittest discover -s "tests" -p "test_pat_webui_diarization_exports.py" -v`
+  - `python -m py_compile "tests\\test_pat_webui_diarization_exports.py"`
+- 已定位 `"FunASR_pat.bat"` 关闭窗口后前端仍运行的原因：
+  - 脚本使用 `powershell/pwsh` 的 `Start-Process`
+  - 实际是把 `"run_api.bat"` 和 `"run_ui_pat.bat"` 作为隐藏的独立子进程启动
+  - 这些子进程脱离了当前 bat 的控制台生命周期，所以关闭启动窗口不会自动杀掉 API/UI 进程
+
+## 2026-06-09 14:02:00
+
+### User
+
+- 需要
+
+### Assistant
+
+- 已新增 `"aipython/managed_single_window_launcher.py"`：
+  - 使用 Windows Job Object 托管 `"run_api.bat"` / `"run_ui_pat.bat"` 子进程
+  - 关闭当前启动窗口时，Job Object 会自动结束 API/UI 子进程
+  - 统一负责日志写入、单窗口实时输出、UI 端口选择与端口占用预检
+- 已重构 `"FunASR_pat.bat"`：
+  - 改为薄包装，仅转发到 `"runtime\\python\\python.exe" -X utf8 "aipython\\managed_single_window_launcher.py"`
+  - 移除原先基于 `Start-Process` 的脱离控制台后台启动逻辑
+- 已新增测试 `"tests/test_aipython_managed_single_window_launcher.py"`：
+  - 校验端口选择逻辑
+  - 校验 bat 命令包装逻辑
+  - 校验子进程环境变量注入
+  - 校验 API 端口占用时的预检失败
+  - 校验日志头追加写入
+- 已继续收口 `"tests/test_pat_webui_diarization_exports.py"`：
+  - 新增 asyncio event loop 跟踪与显式关闭逻辑
+  - 已消除 `ResourceWarning: unclosed event loop`
+- 已同步文档：
+  - `"README.md"`：补充 `"FunASR_pat.bat"` 关闭启动窗口会自动停止子进程
+  - `"Docs/deployment.md"`：补充单窗口托管模式与日志说明
+  - `"Docs/changelog.md"` / `"todo.md"`：同步记录本轮启动器收口
+- 已验证：
+  - `python -m unittest discover -s "tests" -p "test_aipython_managed_single_window_launcher.py" -v`
+  - `python -m py_compile "aipython\\managed_single_window_launcher.py" "tests\\test_aipython_managed_single_window_launcher.py"`
+  - `python -m unittest discover -s "tests" -p "test_pat_webui_diarization_exports.py" -v`
+  - `python -m py_compile "tests\\test_pat_webui_diarization_exports.py"`
+- 实机链路补充说明：
+  - 当前本机 `8000` / `7861` 已有残留 `python.exe` 监听
+  - 在这种情况下，新的 `"FunASR_pat.bat"` 会直接给出明确提示：`required API port "8000" is already in use`
+  - 已避免再次出现旧的日志权限异常栈
+
+## 2026-06-09 14:02:34
+
+### User
+
+- 验证
+
+### Assistant
+
+- 已按你的确认执行实机验证（先结束占用端口的残留进程，再验证生命周期绑定）
+- 结束占用端口的进程（已确认允许后执行）：
+  - `Stop-Process -Id 53396,40576 -Force`
+  - 确认 `8000/7861/7862/7863` 无监听
+- 启动验证：
+  - 运行 `"FunASR_pat.bat cpu"`，确认端口监听：
+    - `8000` -> `31156`
+    - `7861` -> `56964`
+- 关闭验证（模拟关闭启动窗口）：
+  - 结束启动命令后，确认 `8000/7861/7862/7863` 均无监听
+  - 结论：当前启动窗口生命周期已与 API/UI 子进程绑定，关闭窗口会自动结束子进程
+
+## 2026-06-09 13:42:22
+
+### User
+
+- 执行
+
+### Assistant
+
+- 已继续收口 `"服务与调试"` 页，新增页面加载时的自动初始化逻辑
+- 在 `"app/pat_funasr_webui/gradio_app.py"` 中新增 `"initialize_service_dashboard(...)"`：
+  - 页面打开后自动刷新模型下拉框
+  - 自动刷新 `"模型摘要"`
+  - 自动刷新 `"服务状态 / 调试输出"`
+  - 自动刷新 `"运行概览"` / `"模型能力看板"` / `"使用建议"`
+  - 自动刷新 `"运行日志"`
+- 已通过 `demo.load(...)` 挂载自动初始化事件，减少对 `"刷新模型列表"` / `"检查服务"` / `"刷新运行日志"` 的手动依赖
+- 已更新测试 `"tests/test_pat_webui_diarization_exports.py"`：
+  - 新增 `"initialize_service_dashboard"` 返回值测试
+  - 新增页面依赖里包含 `"initialize_service_dashboard"` 的校验
+- 已验证：
+  - `python -m unittest discover -s "tests" -p "test_pat_webui_diarization_exports.py" -v`
+  - `python -m py_compile "app\\pat_funasr_webui\\gradio_app.py" "tests\\test_pat_webui_diarization_exports.py"`
