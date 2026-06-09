@@ -45,6 +45,11 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger(__name__)
 
 # #region debug-point C:debug-report
+def is_debug_report_enabled() -> bool:
+    """判断是否启用本地调试事件上报；默认关闭，避免常规运行时访问调试端口。"""
+    return str(os.environ.get("FUNASR_DEBUG_REPORT", "")).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _dbg_report(
     *,
     hypothesis_id: str,
@@ -54,6 +59,8 @@ def _dbg_report(
     trace_id: str | None = None,
     run_id: str = "pre-fix",
 ) -> None:
+    if not is_debug_report_enabled():
+        return
     try:
         root = Path(__file__).resolve().parents[2]
         env_path = root / ".dbg" / "gradio-page-hung.env"
@@ -102,7 +109,6 @@ MODEL_CONFIGS = {
         "hub": "ms",
         "vad_model": "fsmn-vad",
         "vad_kwargs": {"max_single_segment_time": 30000},
-        "punc_model": "ct-punc",
     },
     "paraformer": {
         "model": "paraformer-zh",
@@ -444,6 +450,7 @@ def build_generate_kwargs(
     merge_vad: Optional[bool],
     merge_length_s: Optional[int],
     batch_size_s: Optional[int],
+    batch_size_threshold_s: Optional[int],
     vad_max_single_segment_time: Optional[int],
 ):
     """构建传给 FunASR generate() 的白名单参数。"""
@@ -458,6 +465,10 @@ def build_generate_kwargs(
         if int(batch_size_s) <= 0:
             raise ValueError("batch_size_s must be > 0")
         generate_kwargs["batch_size_s"] = int(batch_size_s)
+    if batch_size_threshold_s is not None:
+        if int(batch_size_threshold_s) <= 0:
+            raise ValueError("batch_size_threshold_s must be > 0")
+        generate_kwargs["batch_size_threshold_s"] = int(batch_size_threshold_s)
     if model in {"paraformer", "fun-asr-nano"}:
         generate_kwargs["sentence_timestamp"] = True
     return vad_presets.apply_vad_controls(
@@ -574,6 +585,7 @@ async def transcribe(
     hotword: Optional[str] = Form(default=None),
     use_itn: Optional[bool] = Form(default=None),
     batch_size_s: Optional[int] = Form(default=None),
+    batch_size_threshold_s: Optional[int] = Form(default=None),
     punc_mode: Optional[str] = Form(default="auto"),
     device: Optional[str] = Form(default=None),
     hub: Optional[str] = Form(default=None),
@@ -597,6 +609,7 @@ async def transcribe(
     - hotword: 热词字符串（可选，逗号/空格分隔）
     - use_itn: 是否开启逆文本正规化（可选）
     - batch_size_s: 动态批总时长（秒，可选）
+    - batch_size_threshold_s: 长音频动态批阈值（秒，可选，用于降低 OOM 风险）
     - punc_mode: auto/disabled（可选；disabled 仅对外置 PUNC 模型生效）
     - device/hub/disable_update/ncpu/log_level/disable_pbar: AutoModel 运行时控制项（可选）
     """
@@ -679,6 +692,7 @@ async def transcribe(
                 merge_vad=merge_vad,
                 merge_length_s=merge_length_s,
                 batch_size_s=batch_size_s,
+                batch_size_threshold_s=batch_size_threshold_s,
                 vad_max_single_segment_time=vad_max_single_segment_time,
             )
         except ValueError as ve:
@@ -692,6 +706,7 @@ async def transcribe(
                 f"vad_preset={vad_preset or ''}, "
                 f"merge_vad={bool(merge_vad) if merge_vad is not None else ''}, "
                 f"batch_size_s={batch_size_s or ''}, "
+                f"batch_size_threshold_s={batch_size_threshold_s or ''}, "
                 f"file={getattr(file, 'filename', '')}"
             )
             # #region debug-point D:transcription-generate-start

@@ -1,4 +1,4 @@
-#
+﻿#
 OpenAI 兼容 API 说明（API）
 
 实现文件：["app/openai_api/server.py"](../app/openai_api/server.py)
@@ -21,7 +21,16 @@ OpenAI 兼容 API 说明（API）
   "status": "ok",
   "device": "cuda",
   "models_loaded": ["sensevoice"],
-  "models_available": ["sensevoice", "paraformer", "paraformer-en", "fun-asr-nano"]
+  "models_available": [
+    "sensevoice",
+    "paraformer",
+    "paraformer-en",
+    "paraformer-zh-streaming",
+    "fun-asr-nano",
+    "qwen3-asr",
+    "qwen3-asr-0.6b",
+    "emotion2vec-plus-large"
+  ]
 }
 ```
 
@@ -63,6 +72,7 @@ OpenAI 兼容 API 说明（API）
 - "hotword"（可选）：热词字符串（逗号/空格分隔）
 - "use_itn"（可选）：是否开启逆文本正规化
 - "batch_size_s"（可选）：动态批总时长，单位秒（s）
+- "batch_size_threshold_s"（可选）：动态批阈值，单位秒（s），用于降低长音频 OOM 风险
 - "punc_mode"（可选，默认 "auto"）
   - "auto"：按模型默认配置处理标点
   - "disabled"：关闭外置 PUNC 模型（当前主要作用于 paraformer）
@@ -221,6 +231,7 @@ OpenAI 兼容 API 说明（API）
   - 模型："iic/SenseVoiceSmall"
   - VAD："fsmn-vad"
   - VAD 参数：{"max_single_segment_time": 30000}
+  - 标点：官方链路原生带标点，当前项目不默认挂外置 `punc_model`
   - 语言口径：官方明确列出普通话、粤语、英语、日语、韩语；README 示例语言码为 `auto / zh / en / yue / ja / ko / nospeech`；正文另称总体支持 50+ 语种，但未公开完整名单
 - "paraformer"
   - 模型："paraformer-zh"

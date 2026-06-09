@@ -1,4 +1,4 @@
-#
+﻿#
 Pat WebUI 项目分析文档
 
 
@@ -18,6 +18,7 @@ Pat WebUI 项目分析文档
 - "api.md"：OpenAI 兼容 API 说明（端点、参数、响应、错误约定）
 - "deployment.md"：本地运行与发布建议（Windows 便携包形态、脚本说明、排错要点）
 - "optimization-plan.md"：性能与稳定性优化计划（GPU/并发/缓存/可观测性）
+- "upstream-sync.md"：FunASR 上游版本、同步策略与升级前验证清单
 - "upgrade-plan-output-template.md"：输出模板/字幕升级策划（对标 Whisper-CTranslate2 参数体系）
 - "model-capability-matrix.md"：模型能力矩阵、语言覆盖、项目接入差异与 API 参数说明
 - "smoke_pat_webui.md"：Pat WebUI 手工冒烟清单，覆盖服务页摘要、按需加载文案与主流程验证

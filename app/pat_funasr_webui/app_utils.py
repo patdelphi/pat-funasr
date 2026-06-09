@@ -65,6 +65,7 @@ ALLOWED_REQUEST_FIELDS = (
     "hotword",
     "use_itn",
     "batch_size_s",
+    "batch_size_threshold_s",
     "punc_mode",
     "device",
     "hub",
@@ -265,7 +266,7 @@ def build_request_fields(**kwargs: Any) -> dict[str, str]:
         value = kwargs.get(field_name)
         if value is None or value == "":
             continue
-        if field_name in {"batch_size_s", "vad_max_single_segment_time", "ncpu"}:
+        if field_name in {"batch_size_s", "batch_size_threshold_s", "vad_max_single_segment_time", "ncpu"}:
             try:
                 if int(value) <= 0:
                     continue

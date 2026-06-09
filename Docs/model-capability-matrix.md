@@ -1,4 +1,4 @@
-#
+﻿#
 ASR 模型能力矩阵与 API 参数说明
 
 目的：让你快速理解“不同模型能做到什么/不能做到什么”，以及在本项目里“可调用的 API、可用参数、可得到的输出格式”分别是什么。
@@ -72,7 +72,7 @@ API 实现：[server.py](../app/openai_api/server.py)
 
 补充：本项目在 MODEL_CONFIGS 中的链路配置
 
-- sensevoice：vad_model=fsmn-vad，vad_kwargs.max_single_segment_time=30000
+- sensevoice：vad_model=fsmn-vad，vad_kwargs.max_single_segment_time=30000；官方链路原生带标点，当前项目不默认挂外置 punc_model
 - paraformer：vad_model=fsmn-vad，punc_model=ct-punc
 - fun-asr-nano：hub=ms，trust_remote_code=False，vad_model=fsmn-vad
 - qwen3-asr：hub=ms，trust_remote_code=False，dtype=fp16，vad_model=fsmn-vad
@@ -98,7 +98,7 @@ API 实现：[server.py](../app/openai_api/server.py)
 ### 1) 标点
 
 - 主路径（paraformer）：punc_model=ct-punc → 输出 text 自带标点
-- SenseVoice：优先 use_itn；否则只能后处理（规则断句/标点模型等）
+- SenseVoice：官方链路原生带标点；本项目优先 use_itn 与输出清洗，不默认挂外置 PUNC
 
 ### 2) 句/段级时间戳（你已选择“句/段级”）
 

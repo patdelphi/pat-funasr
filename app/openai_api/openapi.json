@@ -21,6 +21,10 @@
       "description": "OpenAI-compatible speech transcription"
     },
     {
+      "name": "FunASR Extensions",
+      "description": "FunASR-specific streaming, emotion, and diarization endpoints"
+    },
+    {
       "name": "Models",
       "description": "Model discovery"
     },
@@ -139,6 +143,102 @@
         }
       }
     },
+    "/v1/funasr/streaming": {
+      "post": {
+        "tags": [
+          "FunASR Extensions"
+        ],
+        "summary": "Streaming transcription chunk",
+        "description": "Upload one PCM chunk and continue a server-side streaming session cache.",
+        "operationId": "createStreamingTranscription",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/StreamingRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Streaming chunk result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StreamingResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/funasr/emotion": {
+      "post": {
+        "tags": [
+          "FunASR Extensions"
+        ],
+        "summary": "Recognize speech emotion",
+        "description": "Return utterance-level or frame-mode emotion ranking for supported models.",
+        "operationId": "recognizeEmotion",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/EmotionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Emotion result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmotionResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/funasr/diarization": {
+      "post": {
+        "tags": [
+          "FunASR Extensions"
+        ],
+        "summary": "Recognize speaker diarization",
+        "description": "Return speaker-labeled transcript segments for supported ASR + speaker models.",
+        "operationId": "recognizeDiarization",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/DiarizationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Diarization result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiarizationResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/health": {
       "get": {
         "tags": [
@@ -181,7 +281,11 @@
               "sensevoice",
               "paraformer",
               "paraformer-en",
-              "fun-asr-nano"
+              "paraformer-zh-streaming",
+              "fun-asr-nano",
+              "qwen3-asr",
+              "qwen3-asr-0.6b",
+              "emotion2vec-plus-large"
             ],
             "default": "sensevoice",
             "description": "FunASR model alias."
@@ -195,10 +299,195 @@
             "type": "string",
             "enum": [
               "json",
-              "verbose_json"
+              "verbose_json",
+              "txt",
+              "srt",
+              "vtt",
+              "tsv",
+              "all"
             ],
             "default": "json",
-            "description": "Use verbose_json to include segments and timing metadata."
+            "description": "Use verbose_json to include segments and timing metadata; text/subtitle formats are returned as non-JSON content."
+          },
+          "batch_size_threshold_s": {
+            "type": "integer",
+            "nullable": true,
+            "minimum": 1,
+            "description": "Optional FunASR dynamic batch threshold in seconds; useful for reducing long-audio OOM risk."
+          }
+        }
+      },
+      "StreamingRequest": {
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "properties": {
+          "file": {
+            "type": "string",
+            "format": "binary",
+            "description": "PCM chunk, recommended s16le / 16k / mono / int16."
+          },
+          "model": {
+            "type": "string",
+            "enum": [
+              "paraformer-zh-streaming"
+            ],
+            "default": "paraformer-zh-streaming"
+          },
+          "session_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "reset": {
+            "type": "boolean",
+            "default": false
+          },
+          "is_final": {
+            "type": "boolean",
+            "default": false
+          },
+          "chunk_size": {
+            "type": "string",
+            "default": "0,10,5"
+          }
+        }
+      },
+      "StreamingResponse": {
+        "type": "object",
+        "properties": {
+          "session_id": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "full_text": {
+            "type": "string"
+          },
+          "is_final": {
+            "type": "boolean"
+          }
+        }
+      },
+      "EmotionRequest": {
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "properties": {
+          "file": {
+            "type": "string",
+            "format": "binary"
+          },
+          "model": {
+            "type": "string",
+            "enum": [
+              "emotion2vec-plus-large",
+              "sensevoice"
+            ],
+            "default": "emotion2vec-plus-large"
+          },
+          "granularity": {
+            "type": "string",
+            "enum": [
+              "utterance",
+              "frame"
+            ],
+            "default": "utterance"
+          }
+        }
+      },
+      "EmotionResponse": {
+        "type": "object",
+        "properties": {
+          "model": {
+            "type": "string"
+          },
+          "granularity": {
+            "type": "string"
+          },
+          "top_emotion": {
+            "type": "string"
+          },
+          "top_score": {
+            "type": "number"
+          },
+          "emotions": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        }
+      },
+      "DiarizationRequest": {
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "properties": {
+          "file": {
+            "type": "string",
+            "format": "binary"
+          },
+          "model": {
+            "type": "string",
+            "enum": [
+              "paraformer",
+              "fun-asr-nano",
+              "sensevoice"
+            ],
+            "default": "paraformer"
+          },
+          "spk_model": {
+            "type": "string",
+            "default": "cam++"
+          },
+          "spk_mode": {
+            "type": "string",
+            "enum": [
+              "default",
+              "vad_segment",
+              "punc_segment"
+            ],
+            "default": "punc_segment"
+          },
+          "preset_spk_num": {
+            "type": "integer",
+            "nullable": true
+          }
+        }
+      },
+      "DiarizationResponse": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          },
+          "segments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TranscriptionSegment"
+            }
+          },
+          "speakers": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            }
+          },
+          "model": {
+            "type": "string"
+          },
+          "spk_model": {
+            "type": "string"
+          },
+          "spk_mode": {
+            "type": "string"
+          },
+          "duration": {
+            "type": "number"
           }
         }
       },

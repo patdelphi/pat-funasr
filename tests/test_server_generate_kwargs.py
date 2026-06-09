@@ -8,6 +8,7 @@
 """
 
 import importlib.util
+import os
 import sys
 import unittest
 from pathlib import Path
@@ -46,6 +47,7 @@ class TestServerGenerateKwargs(unittest.TestCase):
             merge_vad=True,
             merge_length_s=12,
             batch_size_s=30,
+            batch_size_threshold_s=20,
             vad_max_single_segment_time=15000,
         )
 
@@ -58,6 +60,7 @@ class TestServerGenerateKwargs(unittest.TestCase):
         self.assertEqual(got["merge_vad"], True)
         self.assertEqual(got["merge_length_s"], 12)
         self.assertEqual(got["batch_size_s"], 30)
+        self.assertEqual(got["batch_size_threshold_s"], 20)
         self.assertEqual(got["vad_kwargs"]["max_single_segment_time"], 15000)
         self.assertIn("max_end_silence_time", got)
 
@@ -72,6 +75,7 @@ class TestServerGenerateKwargs(unittest.TestCase):
             merge_vad=None,
             merge_length_s=None,
             batch_size_s=None,
+            batch_size_threshold_s=None,
             vad_max_single_segment_time=None,
         )
 
@@ -82,6 +86,22 @@ class TestServerGenerateKwargs(unittest.TestCase):
                 "batch_size": 1,
             },
         )
+
+    def test_build_generate_kwargs_rejects_invalid_batch_threshold(self):
+        with self.assertRaises(ValueError):
+            self.server.build_generate_kwargs(
+                tmp_path="demo.wav",
+                model="sensevoice",
+                language=None,
+                hotword=None,
+                use_itn=None,
+                vad_preset=None,
+                merge_vad=None,
+                merge_length_s=None,
+                batch_size_s=None,
+                batch_size_threshold_s=0,
+                vad_max_single_segment_time=None,
+            )
 
     def test_build_model_runtime_config_applies_runtime_overrides(self):
         cfg = self.server.build_model_runtime_config(
@@ -114,6 +134,29 @@ class TestServerGenerateKwargs(unittest.TestCase):
                 disable_pbar=None,
                 punc_mode="auto",
             )
+
+    def test_debug_report_is_disabled_by_default(self):
+        old_value = os.environ.pop("FUNASR_DEBUG_REPORT", None)
+        try:
+            self.assertFalse(self.server.is_debug_report_enabled())
+        finally:
+            if old_value is not None:
+                os.environ["FUNASR_DEBUG_REPORT"] = old_value
+
+    def test_debug_report_can_be_enabled_by_env(self):
+        old_value = os.environ.get("FUNASR_DEBUG_REPORT")
+        try:
+            os.environ["FUNASR_DEBUG_REPORT"] = "1"
+            self.assertTrue(self.server.is_debug_report_enabled())
+            os.environ["FUNASR_DEBUG_REPORT"] = "true"
+            self.assertTrue(self.server.is_debug_report_enabled())
+            os.environ["FUNASR_DEBUG_REPORT"] = "0"
+            self.assertFalse(self.server.is_debug_report_enabled())
+        finally:
+            if old_value is None:
+                os.environ.pop("FUNASR_DEBUG_REPORT", None)
+            else:
+                os.environ["FUNASR_DEBUG_REPORT"] = old_value
         with self.assertRaises(ValueError):
             self.server.build_model_runtime_config(
                 model_name="paraformer",

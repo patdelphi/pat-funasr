@@ -47,6 +47,11 @@ class TestModelConfigs(unittest.TestCase):
         server = _load_server_module()
         cfgs = server.MODEL_CONFIGS
 
+        # SenseVoice / Fun-ASR-Nano / Qwen3-ASR 官方链路原生带标点，不默认挂外置 PUNC。
+        self.assertNotIn("punc_model", cfgs["sensevoice"])
+        self.assertEqual(cfgs["paraformer"].get("punc_model"), "ct-punc")
+        self.assertEqual(cfgs["paraformer-zh-streaming"].get("punc_model"), "ct-punc")
+
         self.assertEqual(cfgs["fun-asr-nano"]["model"], "FunAudioLLM/Fun-ASR-Nano-2512")
         self.assertEqual(cfgs["fun-asr-nano"].get("hub"), "ms")
         self.assertFalse(cfgs["fun-asr-nano"].get("trust_remote_code"))
@@ -77,6 +82,7 @@ class TestModelConfigs(unittest.TestCase):
             self.assertEqual(batch_cfgs[alias]["model"], server_cfgs[alias]["model"])
             self.assertEqual(batch_cfgs[alias].get("hub"), server_cfgs[alias].get("hub"))
             self.assertEqual(batch_cfgs[alias].get("trust_remote_code"), server_cfgs[alias].get("trust_remote_code"))
+            self.assertEqual(batch_cfgs[alias].get("punc_model"), server_cfgs[alias].get("punc_model"))
 
     def test_model_capabilities_align_routes(self):
         server = _load_server_module()
