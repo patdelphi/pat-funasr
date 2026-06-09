@@ -41,6 +41,7 @@ from app_utils import (
     DEFAULT_STREAMING_MODEL,
     MEDIA_FILE_SUFFIXES,
     build_request_fields,
+    build_known_model_choices,
     choose_default_diarization_model,
     choose_default_emotion_model,
     render_capability_target_markdown,
@@ -264,6 +265,12 @@ APP_CSS = """
   width: 100%;
   max-height: 280px;
   object-fit: contain;
+}
+.pat-compact-markdown h3 {
+  margin: 8px 0 6px;
+}
+.pat-compact-markdown p {
+  margin: 0;
 }
 .pat-placeholder-box {
   border: 1px dashed #c7cfdd;
@@ -570,7 +577,7 @@ def stream_transcribe_file(
 
     ffmpeg = get_ffmpeg_exe()
     if not ffmpeg:
-        yield "", "未找到 ffmpeg，无法进行 Streaming（需要用 ffmpeg 转 PCM）。"
+        yield "", "未找到 ffmpeg，无法进行流式识别（需要用 ffmpeg 转 PCM）。"
         return
 
     chunk_stride_samples = parsed[1] * 960
@@ -659,7 +666,7 @@ def stream_transcribe_file(
                 return
             except Exception as error:
                 preview_text = format_streaming_preview_text(full_text, final_flag=False)
-                yield preview_text or full_text, f"Streaming failed: {error}"
+                yield preview_text or full_text, f"流式识别失败：{error}"
                 return
             current = nxt
     finally:
@@ -1599,19 +1606,22 @@ def batch_transcribe(
     disable_pbar: str | bool | None,
 ):
     """顺序执行批量转写，并流式返回汇总与打包结果。"""
+    import gradio as gr
+
     paths = normalize_uploaded_paths(batch_files)
+    hidden_batch_download = gr.update(value=None, visible=False)
     if not paths:
-        yield "请先上传至少一个批量文件。", None, []
+        yield "请先上传至少一个批量文件。", hidden_batch_download, []
         return
 
     results = initialize_batch_results(paths)
-    yield summarize_batch_results(results), None, []
+    yield summarize_batch_results(results), hidden_batch_download, []
 
     for index, file_path in enumerate(paths):
         results[index]["status"] = "running"
         results[index]["message"] = ""
         if index % BATCH_RUNNING_STATUS_UPDATE_EVERY_ITEMS == 0:
-            yield summarize_batch_results(results), None, [
+            yield summarize_batch_results(results), hidden_batch_download, [
                 item["source_path"] for item in results if item.get("status") == "error"
             ]
 
@@ -1656,14 +1666,14 @@ def batch_transcribe(
             )
             results[index]["result_path"] = ""
 
-        yield summarize_batch_results(results), None, [
+        yield summarize_batch_results(results), hidden_batch_download, [
             item["source_path"] for item in results if item.get("status") == "error"
         ]
 
     summary = summarize_batch_results(results)
     archive_path = build_batch_archive(results)
     failed_paths = [item["source_path"] for item in results if item.get("status") == "error"]
-    yield summary, archive_path, failed_paths
+    yield summary, gr.update(value=archive_path, visible=bool(archive_path)), failed_paths
 
 
 def retry_failed_batch(
@@ -1717,22 +1727,26 @@ def retry_failed_batch(
 
 def fetch_model_choices(base_url: str, timeout: float) -> tuple[list[tuple[str, str]], str, dict]:
     """从后端读取模型列表，失败时返回静态兜底选项。"""
+    fallback_choices = build_known_model_choices()
+    fallback_payload = {"data": [{"id": value, "ready": False} for _, value in fallback_choices]}
     try:
         payload = request_json(f"{base_url.rstrip('/')}/v1/models", timeout)
         choices = parse_model_choices(payload)
         if choices:
-            return choices, summarize_model_status(payload), payload
-        fallback_payload = {"data": [{"id": DEFAULT_MODEL, "ready": False}]}
+            return (
+                choices,
+                f"当前为后端实时模型列表\n{summarize_model_status(payload)}",
+                payload,
+            )
         return (
-            [(DEFAULT_MODEL, DEFAULT_MODEL)],
-            "后端返回了空模型列表，已回退默认模型",
+            fallback_choices,
+            "当前为静态兜底模型列表\n后端返回了空模型列表，已回退静态模型清单",
             fallback_payload,
         )
     except Exception as error:
-        fallback_payload = {"data": [{"id": DEFAULT_MODEL, "ready": False}]}
         return (
-            [(DEFAULT_MODEL, DEFAULT_MODEL)],
-            f"模型列表加载失败，已回退默认模型：{error}",
+            fallback_choices,
+            f"当前为静态兜底模型列表\n模型列表加载失败，已回退静态模型清单：{error}",
             fallback_payload,
         )
 
@@ -1900,8 +1914,8 @@ def build_reserved_feature_tab(
             for item in planned_outputs:
                 gr.Textbox(label=item, placeholder="预留中", interactive=False)
     with gr.Row():
-        gr.Button("预留执行入口", interactive=False)
-        gr.Button("预留下载入口", interactive=False)
+        gr.Button("预留执行入口", interactive=False, variant="primary")
+        gr.Button("预留下载入口", interactive=False, variant="secondary")
 
 
 def refresh_model_dropdown(base_url: str, timeout: float):
@@ -2062,115 +2076,128 @@ def build_app(default_base_url: str, default_timeout: float):
         with gr.Tabs():
             with gr.Tab("离线识别") as offline_tab:
                 batch_response_format = gr.State(DEFAULT_BATCH_RESPONSE_FORMAT)
-                with gr.Row():
-                    media_file = gr.File(
-                        label="音频/视频文件",
-                        type="filepath",
-                        file_types=list(MEDIA_FILE_SUFFIXES),
-                    )
-                    batch_files = gr.Files(
-                        label="批量文件",
-                        file_count="multiple",
-                        type="filepath",
-                        file_types=list(MEDIA_FILE_SUFFIXES),
-                    )
-                with gr.Row():
-                    media_preview = gr.Video(
-                        label="视频预览",
-                        visible=False,
-                        height=260,
-                        elem_classes=["pat-media-preview"],
-                    )
-                    media_audio_preview = gr.Audio(label="音频预览", visible=False)
-                    media_status = gr.Markdown("支持音频与视频文件。视频和音频都会显示可播放预览。")
-                with gr.Row():
-                    model = gr.Dropdown(
-                        label="模型",
-                        choices=model_choices,
-                        value=default_model_value,
-                    )
-                with gr.Accordion("高级参数", open=False):
-                    with gr.Row():
-                        language = gr.Textbox(label="语言提示", placeholder="如：zh / en / auto")
-                        hotword = gr.Textbox(label="热词", placeholder="多个热词可用逗号分隔")
-                        vad_preset = gr.Dropdown(
-                            label="VAD 预设",
-                            choices=[("自动", ""), ("default", "default"), ("anti_hallucination", "anti_hallucination")],
-                            value="",
+                with gr.Row(equal_height=False):
+                    with gr.Column(scale=1, min_width=320):
+                        model = gr.Dropdown(
+                            label="模型",
+                            choices=model_choices,
+                            value=default_model_value,
                         )
-                    with gr.Row():
-                        merge_vad = gr.Dropdown(
-                            label="合并 VAD 片段",
-                            choices=[("自动", ""), ("启用", "true"), ("禁用", "false")],
-                            value="",
-                        )
-                        use_itn = gr.Dropdown(
-                            label="逆文本正规化",
-                            choices=[("自动", ""), ("启用", "true"), ("禁用", "false")],
-                            value="",
-                        )
-                        merge_length_s = gr.Number(label="合并段长度(秒)", value=15, precision=0)
-                        max_line_width = gr.Number(label="字幕单行最大长度", value=40, precision=0)
-                    with gr.Row():
-                        batch_size_s = gr.Number(label="batch_size_s", value=0, precision=0)
-                        vad_max_single_segment_time = gr.Number(
-                            label="VAD 单段最大时长(ms)",
-                            value=0,
-                            precision=0,
-                        )
-                        punc_mode = gr.Dropdown(
-                            label="PUNC 策略",
-                            choices=[("自动", "auto"), ("关闭外置 PUNC", "disabled")],
-                            value="auto",
-                        )
-                with gr.Accordion("运行时控制", open=False):
-                    gr.Markdown("这些参数只影响当前请求，不额外拆页面。")
-                    with gr.Row():
-                        device = gr.Textbox(label="device", placeholder="如：cuda / cpu")
-                        hub = gr.Dropdown(
-                            label="hub",
-                            choices=[("默认", ""), ("ModelScope", "ms"), ("HuggingFace", "hf")],
-                            value="",
-                        )
-                        disable_update = gr.Dropdown(
-                            label="disable_update",
-                            choices=[("默认", ""), ("启用", "true"), ("禁用", "false")],
-                            value="",
-                        )
-                    with gr.Row():
-                        ncpu = gr.Number(label="ncpu", value=0, precision=0)
-                        log_level = gr.Dropdown(
-                            label="log_level",
-                            choices=[("默认", ""), ("DEBUG", "DEBUG"), ("INFO", "INFO"), ("WARNING", "WARNING"), ("ERROR", "ERROR")],
-                            value="",
-                        )
-                        disable_pbar = gr.Dropdown(
-                            label="disable_pbar",
-                            choices=[("默认", ""), ("启用", "true"), ("禁用", "false")],
-                            value="true",
-                        )
-                with gr.Row():
-                    transcribe_button = gr.Button("开始识别", variant="primary")
-                    batch_button = gr.Button("批量执行")
-                    retry_failed_button = gr.Button("重试失败项")
-
+                    with gr.Column(scale=1, min_width=520):
+                        with gr.Accordion("高级参数", open=False):
+                            with gr.Row():
+                                language = gr.Textbox(label="语言提示", placeholder="如：zh / en / auto")
+                                hotword = gr.Textbox(label="热词", placeholder="多个热词可用逗号分隔")
+                                vad_preset = gr.Dropdown(
+                                    label="VAD 预设",
+                                    choices=[("自动", ""), ("default", "default"), ("anti_hallucination", "anti_hallucination")],
+                                    value="",
+                                )
+                            with gr.Row():
+                                merge_vad = gr.Dropdown(
+                                    label="合并 VAD 片段",
+                                    choices=[("自动", ""), ("启用", "true"), ("禁用", "false")],
+                                    value="",
+                                )
+                                use_itn = gr.Dropdown(
+                                    label="逆文本正规化",
+                                    choices=[("自动", ""), ("启用", "true"), ("禁用", "false")],
+                                    value="",
+                                )
+                                merge_length_s = gr.Number(label="合并段长度(秒)", value=15, precision=0)
+                                max_line_width = gr.Number(label="字幕单行最大长度", value=40, precision=0)
+                            with gr.Row():
+                                batch_size_s = gr.Number(label="批处理时长(batch_size_s)", value=0, precision=0)
+                                vad_max_single_segment_time = gr.Number(
+                                    label="VAD 单段最大时长(vad_max_single_segment_time, ms)",
+                                    value=0,
+                                    precision=0,
+                                )
+                                punc_mode = gr.Dropdown(
+                                    label="PUNC 策略",
+                                    choices=[("自动", "auto"), ("关闭外置 PUNC", "disabled")],
+                                    value="auto",
+                                )
+                        with gr.Accordion("运行时控制", open=False):
+                            gr.Markdown("这些参数只影响当前请求，不额外拆页面。", elem_classes=["pat-compact-markdown"])
+                            with gr.Row():
+                                device = gr.Textbox(label="运行设备(device)", placeholder="如：cuda / cpu")
+                                hub = gr.Dropdown(
+                                    label="模型来源(hub)",
+                                    choices=[("默认", ""), ("ModelScope", "ms"), ("HuggingFace", "hf")],
+                                    value="",
+                                )
+                                disable_update = gr.Dropdown(
+                                    label="禁用更新检查(disable_update)",
+                                    choices=[("默认", ""), ("启用", "true"), ("禁用", "false")],
+                                    value="",
+                                )
+                            with gr.Row():
+                                ncpu = gr.Number(label="CPU 线程数(ncpu)", value=0, precision=0)
+                                log_level = gr.Dropdown(
+                                    label="日志级别(log_level)",
+                                    choices=[("默认", ""), ("DEBUG", "DEBUG"), ("INFO", "INFO"), ("WARNING", "WARNING"), ("ERROR", "ERROR")],
+                                    value="",
+                                )
+                                disable_pbar = gr.Dropdown(
+                                    label="禁用进度条(disable_pbar)",
+                                    choices=[("默认", ""), ("启用", "true"), ("禁用", "false")],
+                                    value="true",
+                                )
                 transcript_payload_state = gr.State("{}")
-                transcript_preview_format = gr.Radio(
-                    label="预览格式",
-                    choices=PREVIEW_FORMAT_CHOICES,
-                    value=DEFAULT_PREVIEW_FORMAT,
-                )
-                transcript = gr.Textbox(label="结果预览", lines=12, max_lines=24, buttons=["copy"])
-                with gr.Row():
-                    download_json = gr.File(label="下载 JSON", visible=True)
-                    download_txt = gr.File(label="下载 TXT", visible=True)
-                    download_srt = gr.File(label="下载 SRT", visible=True)
-                with gr.Row():
-                    download_vtt = gr.File(label="下载 VTT", visible=True)
-                    download_tsv = gr.File(label="下载 TSV", visible=True)
-                    download_zip = gr.File(label="下载 ZIP", visible=True)
-                batch_status = gr.Textbox(label="批量结果", lines=10, max_lines=20)
-                batch_download = gr.File(label="批量下载结果", visible=True)
+                gr.Markdown("### 单文件处理", elem_classes=["pat-compact-markdown"])
+                with gr.Row(equal_height=False):
+                    with gr.Column(scale=1, min_width=420):
+                        media_file = gr.File(
+                            label="音频/视频文件",
+                            type="filepath",
+                            file_types=list(MEDIA_FILE_SUFFIXES),
+                            height=208,
+                        )
+                        transcribe_button = gr.Button("开始识别", variant="primary")
+                        media_status = gr.Markdown(
+                            "支持音频与视频文件。视频和音频都会显示可播放预览。",
+                            elem_classes=["pat-compact-markdown"],
+                        )
+                        media_preview = gr.Video(
+                            label="视频预览",
+                            visible=False,
+                            height=260,
+                            elem_classes=["pat-media-preview"],
+                        )
+                        media_audio_preview = gr.Audio(label="音频预览", visible=False)
+                    with gr.Column(scale=1, min_width=420):
+                        transcript_preview_format = gr.Radio(
+                            label="预览格式",
+                            choices=PREVIEW_FORMAT_CHOICES,
+                            value=DEFAULT_PREVIEW_FORMAT,
+                        )
+                        transcript = gr.Textbox(label="结果预览", lines=12, max_lines=20, buttons=["copy"])
+                        with gr.Accordion("下载文件", open=False):
+                            with gr.Row():
+                                download_json = gr.File(label="下载 JSON", visible=True)
+                                download_txt = gr.File(label="下载 TXT", visible=True)
+                                download_srt = gr.File(label="下载 SRT", visible=True)
+                            with gr.Row():
+                                download_vtt = gr.File(label="下载 VTT", visible=True)
+                                download_tsv = gr.File(label="下载 TSV", visible=True)
+                                download_zip = gr.File(label="下载 ZIP", visible=True)
+                gr.Markdown("### 批量文件处理", elem_classes=["pat-compact-markdown"])
+                with gr.Row(equal_height=False):
+                    with gr.Column(scale=1, min_width=420):
+                        with gr.Row():
+                            batch_button = gr.Button("批量执行", variant="primary")
+                            retry_failed_button = gr.Button("重试失败项", variant="primary")
+                        batch_files = gr.Files(
+                            label="批量文件",
+                            file_count="multiple",
+                            type="filepath",
+                            file_types=list(MEDIA_FILE_SUFFIXES),
+                            height=176,
+                        )
+                    with gr.Column(scale=1, min_width=420):
+                        batch_status = gr.Textbox(label="批量结果", lines=5, max_lines=10)
+                        batch_download = gr.File(label="批量下载结果", visible=False)
                 failed_batch_state = gr.State([])
 
             with gr.Tab("流式识别") as streaming_tab:
@@ -2181,7 +2208,7 @@ def build_app(default_base_url: str, default_timeout: float):
                         file_types=list(MEDIA_FILE_SUFFIXES),
                     )
                     stream_model = gr.Dropdown(
-                        label="Streaming 模型",
+                        label="流式模型",
                         choices=streaming_model_choices,
                         value=default_streaming_model_value,
                     )
@@ -2193,14 +2220,14 @@ def build_app(default_base_url: str, default_timeout: float):
                         elem_classes=["pat-media-preview"],
                     )
                     stream_audio_preview = gr.Audio(label="音频预览", visible=False)
-                    stream_media_status = gr.Markdown("Streaming 仅显示支持流式的模型，当前默认使用 Paraformer Streaming。")
+                    stream_media_status = gr.Markdown("流式识别页仅显示支持流式识别的模型，当前默认使用 Paraformer Streaming 中文。")
                 with gr.Row():
-                    stream_chunk_size = gr.Textbox(label="chunk_size", value="0,10,5")
-                    stream_encoder_lb = gr.Number(label="encoder_chunk_look_back", value=0, precision=0)
-                    stream_decoder_lb = gr.Number(label="decoder_chunk_look_back", value=0, precision=0)
-                    stream_button = gr.Button("开始 Streaming", variant="secondary")
-                stream_status = gr.Textbox(label="Streaming 状态", interactive=False)
-                stream_transcript = gr.Textbox(label="Streaming 输出", lines=6, max_lines=20, buttons=["copy"])
+                    stream_chunk_size = gr.Textbox(label="分块大小(chunk_size)", value="0,10,5")
+                    stream_encoder_lb = gr.Number(label="编码器回看帧数(encoder_chunk_look_back)", value=0, precision=0)
+                    stream_decoder_lb = gr.Number(label="解码器回看帧数(decoder_chunk_look_back)", value=0, precision=0)
+                    stream_button = gr.Button("开始流式识别", variant="primary")
+                stream_status = gr.Textbox(label="流式状态", interactive=False)
+                stream_transcript = gr.Textbox(label="流式输出", lines=6, max_lines=20, buttons=["copy"])
 
             with gr.Tab("说话人分离") as diarization_tab:
                 with gr.Row():
@@ -2210,7 +2237,7 @@ def build_app(default_base_url: str, default_timeout: float):
                         file_types=list(MEDIA_FILE_SUFFIXES),
                     )
                     diarization_model = gr.Dropdown(
-                        label="识别模型",
+                        label="说话人分离模型",
                         choices=diarization_model_choices,
                         value=default_diarization_model_value,
                     )
@@ -2225,12 +2252,12 @@ def build_app(default_base_url: str, default_timeout: float):
                     diarization_media_status = gr.Markdown("当前支持 paraformer / fun-asr-nano / sensevoice + cam++ 组合。")
                 with gr.Row():
                     diarization_spk_model = gr.Dropdown(
-                        label="spk_model",
+                        label="说话人模型(spk_model)",
                         choices=[("cam++", "cam++")],
                         value="cam++",
                     )
                     diarization_spk_mode = gr.Dropdown(
-                        label="spk_mode",
+                        label="说话人模式(spk_mode)",
                         choices=[
                             ("punc_segment", "punc_segment"),
                             ("vad_segment", "vad_segment"),
@@ -2238,8 +2265,8 @@ def build_app(default_base_url: str, default_timeout: float):
                         ],
                         value="punc_segment",
                     )
-                    diarization_preset_spk_num = gr.Number(label="preset_spk_num", value=0, precision=0)
-                    diarization_button = gr.Button("开始说话人分离", variant="secondary")
+                    diarization_preset_spk_num = gr.Number(label="预设说话人数(preset_spk_num)", value=0, precision=0)
+                    diarization_button = gr.Button("开始说话人分离", variant="primary")
                 diarization_summary = gr.Textbox(label="说话人结果", lines=6, max_lines=12)
                 diarization_payload_state = gr.State("{}")
                 diarization_preview_format = gr.Radio(
@@ -2265,7 +2292,7 @@ def build_app(default_base_url: str, default_timeout: float):
                         file_types=list(MEDIA_FILE_SUFFIXES),
                     )
                     emotion_model = gr.Dropdown(
-                        label="情感模型",
+                        label="情感识别模型",
                         choices=emotion_model_choices,
                         value=default_emotion_model_value,
                     )
@@ -2280,11 +2307,11 @@ def build_app(default_base_url: str, default_timeout: float):
                     emotion_media_status = gr.Markdown("当前先支持整体情感识别，后续再补时间片能力。")
                 with gr.Row():
                     emotion_granularity = gr.Dropdown(
-                        label="granularity",
+                        label="情感粒度(granularity)",
                         choices=[("utterance", "utterance"), ("frame", "frame")],
                         value="utterance",
                     )
-                    emotion_button = gr.Button("开始情感识别", variant="secondary")
+                    emotion_button = gr.Button("开始情感识别", variant="primary")
                 emotion_summary = gr.Textbox(label="情感结果", lines=4, max_lines=8)
                 emotion_raw_json = gr.Textbox(label="情感原始 JSON", lines=10, max_lines=20)
 
@@ -2316,9 +2343,9 @@ def build_app(default_base_url: str, default_timeout: float):
                     )
                     auto_refresh_logs = gr.Checkbox(label="自动刷新服务与调试(可能影响性能)", value=True)
                 with gr.Row():
-                    refresh_models_button = gr.Button("刷新模型列表")
-                    check_button = gr.Button("检查服务")
-                    refresh_logs_button = gr.Button("刷新运行日志")
+                    refresh_models_button = gr.Button("刷新模型列表", variant="secondary")
+                    check_button = gr.Button("检查服务", variant="secondary")
+                    refresh_logs_button = gr.Button("刷新运行日志", variant="secondary")
                     download_logs_button = gr.Button("打包下载运行日志", variant="secondary")
                 model_status = gr.Textbox(label="模型摘要", value=model_status_text, interactive=False)
                 capability_filter = gr.Dropdown(

@@ -48,6 +48,14 @@ class TestPatWebUiUtils(unittest.TestCase):
         ]
         self.assertEqual(app_utils.choose_default_model(choices), "sensevoice")
 
+    def test_build_known_model_choices_contains_static_catalog(self):
+        choices = app_utils.build_known_model_choices()
+        values = [value for _, value in choices]
+        self.assertIn("sensevoice", values)
+        self.assertIn("paraformer", values)
+        self.assertIn("emotion2vec-plus-large", values)
+        self.assertGreater(len(values), 3)
+
     def test_filter_streaming_model_choices(self):
         choices = [
             ("SenseVoice (sensevoice) [已加载]", "sensevoice"),
@@ -239,7 +247,7 @@ class TestPatWebUiUtils(unittest.TestCase):
         }
         markdown = app_utils.render_capability_target_markdown(payload, "streaming_asr")
         self.assertIn("建议页面：`流式识别`", markdown)
-        self.assertIn("重点区域：`Streaming 模型 + chunk_size`", markdown)
+        self.assertIn("重点区域：`流式模型 + 分块大小(chunk_size)`", markdown)
         self.assertIn("`paraformer-zh-streaming`", markdown)
 
     def test_build_request_fields_filters_non_whitelist(self):

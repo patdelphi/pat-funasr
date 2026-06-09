@@ -123,6 +123,51 @@ class TestPatWebUiDiarizationExports(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         self.assertEqual(calls[0]["kwargs"], {})
 
+    def test_fetch_model_choices_includes_realtime_source_hint(self):
+        original_request_json = gradio_app.request_json
+        try:
+            gradio_app.request_json = lambda *_args, **_kwargs: {
+                "data": [{"id": "sensevoice", "ready": True}]
+            }
+            choices, status_text, payload = gradio_app.fetch_model_choices("http://127.0.0.1:8000", 1)
+        finally:
+            gradio_app.request_json = original_request_json
+
+        self.assertEqual(choices, [("SenseVoice (sensevoice) [已加载]", "sensevoice")])
+        self.assertIn("当前为后端实时模型列表", status_text)
+        self.assertEqual(payload["data"][0]["id"], "sensevoice")
+
+    def test_fetch_model_choices_includes_fallback_source_hint(self):
+        original_request_json = gradio_app.request_json
+        try:
+            def raise_error(*_args, **_kwargs):
+                raise RuntimeError("boom")
+
+            gradio_app.request_json = raise_error
+            choices, status_text, payload = gradio_app.fetch_model_choices("http://127.0.0.1:8000", 1)
+        finally:
+            gradio_app.request_json = original_request_json
+
+        self.assertGreater(len(choices), 1)
+        self.assertIn("当前为静态兜底模型列表", status_text)
+        self.assertIn("已回退静态模型清单", status_text)
+        self.assertIn("data", payload)
+
+    def test_fetch_model_choices_falls_back_to_static_catalog_when_api_fails(self):
+        original_request_json = gradio_app.request_json
+        try:
+            gradio_app.request_json = lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("502"))
+            choices, status_text, payload = gradio_app.fetch_model_choices("http://127.0.0.1:8000", 1)
+        finally:
+            gradio_app.request_json = original_request_json
+
+        values = [value for _, value in choices]
+        self.assertIn("sensevoice", values)
+        self.assertIn("paraformer", values)
+        self.assertIn("emotion2vec-plus-large", values)
+        self.assertIn("静态模型清单", status_text)
+        self.assertGreater(len(payload["data"]), 3)
+
     def test_read_runtime_logs_reads_api_and_ui_logs(self):
         temp_root = Path(tempfile.mkdtemp(prefix="pat-funasr-log-test-"))
         api_log = temp_root / "funasr-api.log"
@@ -304,6 +349,47 @@ class TestPatWebUiDiarizationExports(unittest.TestCase):
         self.assertEqual(result, expected)
         self.assertNotIn("省内存模式", result[0])
 
+    def test_batch_transcribe_hides_download_until_archive_ready(self):
+        temp_file = Path(tempfile.gettempdir()) / "pat-funasr-batch-demo.wav"
+        temp_file.write_bytes(b"RIFF....WAVE")
+        original_safe_transcribe = gradio_app.safe_transcribe
+        try:
+            gradio_app.safe_transcribe = lambda **_kwargs: ("ok", '{"text":"ok"}', "mock-result.txt")
+            updates = list(
+                gradio_app.batch_transcribe(
+                    batch_files=[str(temp_file)],
+                    base_url="http://127.0.0.1:8000",
+                    model="sensevoice",
+                    response_format="txt",
+                    timeout=1,
+                    language="zh",
+                    hotword="",
+                    vad_preset="",
+                    merge_vad="",
+                    use_itn="",
+                    merge_length_s=15,
+                    max_line_width=40,
+                    batch_size_s=0,
+                    vad_max_single_segment_time=0,
+                    punc_mode="auto",
+                    device="",
+                    hub="",
+                    disable_update="",
+                    ncpu=0,
+                    log_level="",
+                    disable_pbar="true",
+                )
+            )
+        finally:
+            gradio_app.safe_transcribe = original_safe_transcribe
+
+        first_download_update = updates[0][1]
+        final_download_update = updates[-1][1]
+        self.assertEqual(first_download_update["visible"], False)
+        self.assertIsNone(first_download_update["value"])
+        self.assertEqual(final_download_update["visible"], True)
+        self.assertTrue(str(final_download_update["value"]).endswith(".zip"))
+
     def test_update_transcription_preview(self):
         payload_json = json.dumps(
             {
@@ -471,6 +557,27 @@ class TestPatWebUiDiarizationExports(unittest.TestCase):
                 demo.close()
             close_created_loops(created_loops)
 
+    def test_build_app_separates_offline_single_and_batch_sections(self):
+        demo, created_loops = build_demo_with_tracked_loops("http://127.0.0.1:8000", 1)
+        try:
+            markdown_values = {
+                component.get("props", {}).get("value")
+                for component in demo.config.get("components", [])
+                if component.get("type") == "markdown"
+            }
+            accordion_labels = {
+                component.get("props", {}).get("label")
+                for component in demo.config.get("components", [])
+                if component.get("type") == "accordion"
+            }
+            self.assertIn("### 单文件处理", markdown_values)
+            self.assertIn("### 批量文件处理", markdown_values)
+            self.assertIn("下载文件", accordion_labels)
+        finally:
+            if hasattr(demo, "close"):
+                demo.close()
+            close_created_loops(created_loops)
+
     def test_build_app_falls_back_for_function_model_dropdowns(self):
         original_fetch_model_choices = gradio_app.fetch_model_choices
         try:
@@ -488,9 +595,35 @@ class TestPatWebUiDiarizationExports(unittest.TestCase):
                 for component in demo.config.get("components", [])
                 if component.get("type") == "dropdown"
             }
-            self.assertEqual(dropdowns["Streaming 模型"]["value"], "paraformer-zh-streaming")
-            self.assertEqual(dropdowns["情感模型"]["value"], "emotion2vec-plus-large")
-            self.assertEqual(dropdowns["识别模型"]["value"], "paraformer")
+            self.assertEqual(dropdowns["流式模型"]["value"], "paraformer-zh-streaming")
+            self.assertEqual(dropdowns["情感识别模型"]["value"], "emotion2vec-plus-large")
+            self.assertEqual(dropdowns["说话人分离模型"]["value"], "paraformer")
+        finally:
+            if hasattr(demo, "close"):
+                demo.close()
+            close_created_loops(created_loops)
+
+    def test_build_app_uses_productized_parameter_labels(self):
+        demo, created_loops = build_demo_with_tracked_loops("http://127.0.0.1:8000", 1)
+        try:
+            labels = {
+                component.get("props", {}).get("label")
+                for component in demo.config.get("components", [])
+                if component.get("props", {}).get("label")
+            }
+            self.assertIn("运行设备(device)", labels)
+            self.assertIn("模型来源(hub)", labels)
+            self.assertIn("禁用更新检查(disable_update)", labels)
+            self.assertIn("CPU 线程数(ncpu)", labels)
+            self.assertIn("日志级别(log_level)", labels)
+            self.assertIn("禁用进度条(disable_pbar)", labels)
+            self.assertIn("分块大小(chunk_size)", labels)
+            self.assertIn("编码器回看帧数(encoder_chunk_look_back)", labels)
+            self.assertIn("解码器回看帧数(decoder_chunk_look_back)", labels)
+            self.assertIn("说话人模型(spk_model)", labels)
+            self.assertIn("说话人模式(spk_mode)", labels)
+            self.assertIn("预设说话人数(preset_spk_num)", labels)
+            self.assertIn("情感粒度(granularity)", labels)
         finally:
             if hasattr(demo, "close"):
                 demo.close()

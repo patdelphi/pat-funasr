@@ -207,7 +207,7 @@ CAPABILITY_TARGETS = {
     },
     "streaming_asr": {
         "tab": "流式识别",
-        "area": "Streaming 模型 + chunk_size",
+        "area": "流式模型 + 分块大小(chunk_size)",
         "notes": "适合低延迟实时识别，只能选支持流式的模型。",
     },
     "diarization": {
@@ -297,6 +297,11 @@ def parse_model_choices(payload: dict[str, Any]) -> list[tuple[str, str]]:
         ready = bool(item.get("ready", False))
         choices.append((format_model_label(model_id, ready), model_id))
     return choices
+
+
+def build_known_model_choices() -> list[tuple[str, str]]:
+    """构建静态已知模型下拉选项，供接口异常时兜底。"""
+    return [(format_model_label(model_id, ready=False), model_id) for model_id in MODEL_LABELS]
 
 
 def choose_default_model(choices: list[tuple[str, str]], fallback: str = DEFAULT_MODEL) -> str | None:

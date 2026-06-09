@@ -1,4 +1,4 @@
-#
+﻿#
 Chat History
 
 ## 2026-06-08 08:21:21
@@ -184,6 +184,210 @@ Chat History
 ### Assistant
 
 - 已检查输出文件：\"test\\sensevoice\\\"、\"test\\paraformer\\\"、\"test\\paraformer-en\\\" 均已生成 \"1/2\" 的 txt/tsv/srt/vtt/json/zip/wav 与 \"run.log\"
+
+## 2026-06-09 20:41:40
+
+### User
+
+- 重构离线识别tab页：
+- 1. 模型、高级参数、运行时控制放在最上面，模型选择只需要半宽度，这三个的排版需要优化
+- 2. 单文件与批量文件处理的模块分开2个区域，避免功能混淆
+- 3. 目前单文件上传后，音视频预览窗口与文件上传组件中间有一大块空白区域，请消除
+- 4. 压缩6个下载区域，太占地方
+- 5. 结果预览改为竖版，占据半宽度即可，不需要占用这么宽
+
+### Assistant
+
+- 已重构 "app/pat_funasr_webui/gradio_app.py" 的离线识别布局：顶部改为“模型 / 高级参数 / 运行时控制”三段式，模型列收窄为半宽
+- 已将离线页拆分为“单文件处理”和“批量文件处理”两个独立区域，消除上传区与预览区之间的大块留白
+- 已把 6 个下载入口收纳到“下载文件”折叠区，并把结果预览改成单独半宽竖向区域
+- 已补充 UI 结构测试并通过：`python -m pytest "tests/test_pat_webui_diarization_exports.py" -q`
+
+## 2026-06-09 20:50:00
+
+### User
+
+- 丑死了，套什么外框？？你自己看看有多丑
+
+### Assistant
+
+- 已移除 "app/pat_funasr_webui/gradio_app.py" 中我新增的装饰性外框与包裹容器，恢复为更干净的原生布局
+- 保留“模型 / 高级参数 / 运行时控制”“单文件处理”“批量文件处理”的结构，不再额外叠加视觉边框
+- 已重新校验：`python -m pytest "tests/test_pat_webui_diarization_exports.py" -q` 通过
+
+## 2026-06-09 20:58:52
+
+### User
+
+- 我只让你做左右两列，你最上面搞出3列是干嘛？你自己优化吧，去看看排版的规范，不要自己瞎搞
+
+### Assistant
+
+- 已按两列主布局重构离线识别顶部区域：左侧仅保留“模型”，右侧纵向堆叠“高级参数”“运行时控制”
+- 参考 Gradio 的 `Row + Column + scale/min_width` 布局方式收敛排版，不再做三列并排
+- 已回归校验：`python -m pytest "tests/test_pat_webui_diarization_exports.py" -q` 通过
+
+## 2026-06-09 21:10:22
+
+### User
+
+- 继续
+
+### Assistant
+
+- 已继续压缩离线识别布局：把单文件“开始识别”按钮前移到上传组件下方，结果预览高度收紧
+- 已修复批量区默认空白占位：`batch_download` 改为默认隐藏，只有批量归档生成后才显示
+- 已新增测试覆盖批量下载显隐逻辑，并校验通过：`python -m pytest "tests/test_pat_webui_diarization_exports.py" -q`
+
+## 2026-06-09 21:13:52
+
+### User
+
+- 模型下拉为什么只有一个模型了
+
+### Assistant
+
+- 已定位原因：当前 `http://127.0.0.1:8000/v1/models` 不可用，前端原先只回退到默认模型，导致下拉框看起来只剩一个
+- 已修改兜底策略：接口失败或返回空列表时，改为回退到完整静态模型清单，而不是只显示 `"sensevoice"`
+- 已补充测试并通过：`python -m pytest "tests/test_pat_webui_utils.py" "tests/test_pat_webui_diarization_exports.py" -q`
+
+## 2026-06-09 21:29:01
+
+### User
+
+- 你继续
+
+### Assistant
+
+- 已继续压缩离线识别布局：给单文件上传与批量上传组件设置更小的高度，进一步减少竖向空白
+- 已把“批量执行 / 重试失败项”按钮上移到批量上传区上方，确保首屏即可直接操作
+- 已进一步压缩“结果预览”“批量结果”文本框高度，并通过浏览器快照确认批量按钮坐标已从屏外回到首屏
+- 已校验：`python -m pytest "tests/test_pat_webui_diarization_exports.py" -q` 通过
+
+## 2026-06-09 22:37:16
+
+### User
+
+- 查 SenseVoice 官方支持语言与中文方言，返回可直接写入文档的具体列表与来源链接。
+
+### Assistant
+
+- 已核对 SenseVoice 官方 GitHub README、Hugging Face 模型卡与模型配置文件，确认官方口径分为“SenseVoice 总体支持 50+ 语种”与“SenseVoice-Small 明确列出的普通话、粤语、英语、日语、韩语”
+- 已整理可直接写入文档的语言/中文方言列表，并附官方来源链接
+
+## 2026-06-09 21:39:22
+
+### User
+
+- 你杀下进程让我测试
+
+### Assistant
+
+- 已停止当前本地 UI 进程，释放 `7861` 端口，便于你自行启动和测试
+
+## 2026-06-09 21:41:38
+
+### User
+
+- 其他几个tab的提交按钮都改掉
+
+### Assistant
+
+- 已将其他功能 tab 的主提交按钮统一为主按钮样式：`"开始 Streaming"`、`"开始说话人分离"`、`"开始情感识别"` 均改为 `variant="primary"`
+- 已校验 `"app/pat_funasr_webui/gradio_app.py"` 诊断无报错
+
+## 2026-06-09 21:46:01
+
+### User
+
+- 继续
+
+### Assistant
+
+- 已继续统一 `"服务与调试"` 页主操作按钮样式：`"刷新模型列表"`、`"检查服务"`、`"刷新运行日志"` 均改为 `variant="primary"`
+- 保留 `"打包下载运行日志"` 为次级按钮样式
+- 已校验 `"app/pat_funasr_webui/gradio_app.py"` 诊断无报错
+
+## 2026-06-09 21:49:58
+
+### User
+
+- 可以
+
+### Assistant
+
+- 已按统一规则收敛按钮层级：执行类按钮保留主色，刷新/下载类辅助按钮统一为次级色
+- `"服务与调试"` 页中的 `"刷新模型列表"`、`"检查服务"`、`"刷新运行日志"` 已改为次级按钮；`"打包下载运行日志"` 保持次级按钮
+- 预留页中的 `"预留执行入口"` 改为主色禁用按钮，`"预留下载入口"` 改为次级禁用按钮
+
+## 2026-06-09 21:53:08
+
+### User
+
+- 你先做好计划，有哪些要修改的，一次性计划好再执行
+
+### Assistant
+
+- 已将后续 `"Pat WebUI"` 布局与样式统一专项计划写入本地 `"todo.md"`，当前不执行代码修改，等待你确认
+- 计划范围包括：离线识别页收口、全站按钮分层统一、各 Tab 文案一致性、模型下拉兜底与状态提示、最终回归验证
+
+## 2026-06-09 21:58:29
+
+### User
+
+- 执行
+
+### Assistant
+
+- 已按计划执行本轮 WebUI 收口：统一流式识别/说话人分离/情感识别页的中文文案与状态提示，并同步更新测试
+- 已收口按钮层级：执行类按钮保留主色，刷新/下载类辅助按钮保持次级色
+- 已完成回归验证：`python -m pytest "tests/test_pat_webui_utils.py" "tests/test_pat_webui_diarization_exports.py" -q` 通过（`40 passed, 1 warning`）
+
+## 2026-06-09 22:03:55
+
+### User
+
+- 继续
+
+### Assistant
+
+- 已继续统一参数标签口径：将 `"chunk_size"`、`"encoder_chunk_look_back"`、`"decoder_chunk_look_back"`、`"spk_model"`、`"spk_mode"`、`"preset_spk_num"`、`"granularity"` 等显眼参数改为“中文说明 + 技术参数名”方向的中文化收口
+- 已同步更新能力建议文案与对应测试，保持 UI 文案与测试断言一致
+
+## 2026-06-09 22:08:47
+
+### User
+
+- 你要做什么计划好，一次性确认
+
+### Assistant
+
+- 已将剩余改动整理为一次性确认计划并更新 `"todo.md"`
+- 已确认执行范围：全部执行
+- 已确认参数标签采用“中文说明 + 技术参数名”格式
+- 已确认增加模型列表来源状态提示，用于区分“后端实时模型列表”和“静态兜底模型列表”
+
+## 2026-06-09 22:24:36
+
+### User
+
+- 继续
+
+### Assistant
+
+- 已按确认版计划执行完成：统一运行时控制区与功能参数标签为“中文说明 + 技术参数名”，并增加模型列表来源状态提示
+- 已同步更新 `"tests/test_pat_webui_utils.py"` 与 `"tests/test_pat_webui_diarization_exports.py"`，回归结果为 `43 passed, 1 warning`
+
+## 2026-06-09 21:31:55
+
+### User
+
+- 批量执行，重试失败项，颜色改为和开始识别一样
+
+### Assistant
+
+- 已将 `"批量执行"`、`"重试失败项"` 按钮改为与 `"开始识别"` 相同的主按钮样式（`variant="primary"`）
+- 已校验 `"app/pat_funasr_webui/gradio_app.py"` 诊断无报错
 - \"test\\fun-asr-nano\\\" 当前仅有 \"run.log\"，缺少 \"1/2\" 的输出文件，需要进一步排查/重跑（建议强制离线并把 stderr 也写入日志）
 
 ## 2026-06-08 11:12:44
@@ -1961,3 +2165,16 @@ Chat History
 - 已按你的选择（2）清理并准备移除调试产物与误文件名：
   - 删除并从版本库移除 `".dbg/"`、`"debug-gradio-page-hung.md"`、`"trae-debug-log-bat-startup-failure.txt"`、`"tatus --short"`
   - 当前变更已暂存，等待你确认是否提交清理 commit
+
+## 2026-06-09 22:37:19
+
+### User
+
+- 查 Fun-ASR-Nano、Qwen3-ASR-1.7B、Qwen3-ASR-0.6B 官方支持语言与中文方言，返回具体列表与来源链接。
+
+### Assistant
+
+- 已查询官方 README、模型卡、官方博客与技术报告，整理支持语言与中文方言列表及来源链接。
+## 2026-06-09 22:38:15
+- 用户：查 paraformer、paraformer-en、paraformer-zh-streaming 官方支持语言与方言，返回具体列表与来源链接。
+- 助手：已查询官方 FunASR Model Zoo 与本项目模型映射；结论为 paraformer=中文和英文，paraformer-en=英文，paraformer-zh-streaming 映射到官方 Paraformer-large-online，语言为中文和英文；未查到这三者官方单独列出的方言清单。

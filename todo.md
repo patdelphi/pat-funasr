@@ -35,6 +35,75 @@ Pat WebUI 开发 Todo
 - [ ] 阶段 A：Pat WebUI 分支隔离
 - [ ] 阶段 B：Pat WebUI 第一版
 
+## 当前专项计划：Pat WebUI 布局与样式统一
+
+说明：本专项只做 `"app/pat_funasr_webui/"` 下的前端收口，不碰原 `"app/openai_api/gradio_app.py"`；以下清单已按“已完成 / 待确认 / 待执行”整理。
+
+### 本次修改范围
+
+- [ ] 仅修改 `"app/pat_funasr_webui/gradio_app.py"` 的布局、按钮样式、文案一致性与少量前端状态展示
+- [ ] 如有必要，补充 `"app/pat_funasr_webui/app_utils.py"` 中与模型下拉兜底相关的辅助函数
+- [ ] 仅补充最小必要测试：`"tests/test_pat_webui_diarization_exports.py"`、`"tests/test_pat_webui_utils.py"`
+- [ ] 不改后端接口协议，不新增部署脚本，不动数据库，不执行危险命令
+
+### 已完成
+
+- [x] P1. 离线识别页主结构已收口
+- [x] 顶部控制区已固定为标准左右两列：左侧模型，右侧参数
+- [x] 单文件与批量区已拆开，批量按钮已回到首屏可操作区域
+- [x] 结果预览与下载区已压缩，不再占用过宽空间
+
+- [x] P2. 全站按钮分层已统一第一轮
+- [x] 执行类按钮统一主色：开始识别、批量执行、重试失败项、开始流式识别、开始说话人分离、开始情感识别
+- [x] 刷新/检查/下载类按钮统一次级色：刷新模型列表、检查服务、刷新运行日志、打包下载运行日志
+- [x] 预留页按钮已按“执行主色 / 下载次级色”统一
+
+- [x] P3. 各 Tab 文案已统一第一轮
+- [x] `"开始 Streaming"` 已收口为 `"开始流式识别"`
+- [x] `"Streaming 模型"`、`"Streaming 状态"`、`"Streaming 输出"` 已统一为中文
+- [x] 说话人分离 / 情感识别页模型标签已统一
+
+- [x] P4. 模型下拉兜底已修正
+- [x] 保留“接口失败时回退静态模型清单”的策略
+- [x] 已避免失败时只显示单模型的错误体验
+
+- [x] P5. 已完成一轮回归验证
+- [x] 已运行 `"tests/test_pat_webui_diarization_exports.py"`
+- [x] 已运行 `"tests/test_pat_webui_utils.py"`
+
+### 待你一次性确认
+
+- [ ] C1. 是否继续把运行时控制区参数标签中文化
+- [ ] 拟改为：`"device"` → `"运行设备"`、`"hub"` → `"模型来源"`、`"disable_update"` → `"禁用更新检查"`、`"ncpu"` → `"CPU 线程数"`、`"log_level"` → `"日志级别"`、`"disable_pbar"` → `"禁用进度条"`
+
+- [ ] C2. 是否继续把功能参数改成“中文说明 + 技术参数名”
+- [ ] 拟改为：`"chunk_size"` → `"分块大小(chunk_size)"`、`"encoder_chunk_look_back"` → `"编码器回看帧数(encoder_chunk_look_back)"`、`"decoder_chunk_look_back"` → `"解码器回看帧数(decoder_chunk_look_back)"`
+- [ ] 拟改为：`"spk_model"` → `"说话人模型(spk_model)"`、`"spk_mode"` → `"说话人模式(spk_mode)"`、`"preset_spk_num"` → `"预设说话人数(preset_spk_num)"`、`"granularity"` → `"情感粒度(granularity)"`
+
+- [ ] C3. 是否增加“模型来源状态提示”
+- [ ] 当 `/v1/models` 可用时显示“当前为后端实时模型列表”
+- [ ] 当 `/v1/models` 不可用时显示“当前为静态兜底模型列表”
+
+### 你确认后立即执行
+
+- [ ] E1. 统一运行时控制区标签
+- [ ] E2. 统一流式识别 / 说话人分离 / 情感识别 参数标签格式
+- [ ] E3. 增加模型列表来源状态提示
+- [ ] E4. 同步更新 `"tests/test_pat_webui_diarization_exports.py"`、`"tests/test_pat_webui_utils.py"`
+- [ ] E5. 运行回归：`python -m pytest "tests/test_pat_webui_utils.py" "tests/test_pat_webui_diarization_exports.py" -q`
+
+### 执行顺序
+
+- [ ] 先改布局与按钮层级
+- [ ] 再统一文案与状态提示
+- [ ] 最后补/改测试并做本地回归
+
+### 默认执行原则
+
+- [ ] 只改标签、提示、布局与样式，不改接口字段名，不改后端协议
+- [ ] 优先使用“中文说明 + 技术参数名”的写法，兼顾可读性与排障能力
+- [ ] 若某标签过长影响布局，则退回“中文短标签 + placeholder 说明”
+
 ## 范围边界
 
 - 本轮先做本地可运行的 WebUI，不涉及部署、数据库迁移、外部服务调用等危险操作
