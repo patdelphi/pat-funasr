@@ -2209,3 +2209,31 @@ Chat History
 ## 2026-06-09 22:38:15
 - 用户：查 paraformer、paraformer-en、paraformer-zh-streaming 官方支持语言与方言，返回具体列表与来源链接。
 - 助手：已查询官方 FunASR Model Zoo 与本项目模型映射；结论为 paraformer=中文和英文，paraformer-en=英文，paraformer-zh-streaming 映射到官方 Paraformer-large-online，语言为中文和英文；未查到这三者官方单独列出的方言清单。
+
+## 2026-06-09 23:33:00 +08:00
+
+### 用户
+你先分析一下项目，然后对照官方文档，看看有哪些需要改进优化的地方
+
+- 官方教程：https://modelscope.github.io/FunASR/zh/tutorial.html
+- 官方 API：https://modelscope.github.io/FunASR/api.html
+- 官方仓库：https://github.com/modelscope/FunASR
+
+### 助手
+开始分析项目、读取本地结构，并对照官方文档/仓库梳理优化建议；暂不修改代码。
+
+## 2026-06-09 23:36:38 +08:00
+
+### 用户
+检查一下git状态，如果需要先commit一版，然后开始做详细的执行规划
+
+### 助手
+准备检查 git 状态；如有未提交改动，仅提出 commit 建议，不自动执行 commit；随后制定详细执行规划。
+
+## 2026-06-09 23:39:19 +08:00
+
+### 用户
+执行
+
+### 助手
+用户确认执行基线 commit；准备提交当前 Docs/README.md 与 chat_history.md，然后继续编写详细执行规划到 todo.md。

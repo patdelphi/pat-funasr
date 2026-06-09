@@ -8,6 +8,7 @@ Pat WebUI 项目分析文档
 
 - 官方教程：[FunASR 使用教程](https://modelscope.github.io/FunASR/zh/tutorial.html)
 - 官方 API：[FunASR API 文档](https://modelscope.github.io/FunASR/api.html)
+- 官方仓库：https://github.com/modelscope/FunASR
 
 ## 文档索引
 
