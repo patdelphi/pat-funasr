@@ -3,7 +3,7 @@
 import subprocess, time, urllib.request, json, os
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
-BAT = os.path.join(ROOT, "FunASR.bat")
+BAT = os.path.join(ROOT, "FunASR_pat.bat")
 TEST_WAV = os.path.join(ROOT, "workspace", "models", "iic", "SenseVoiceSmall", "example", "zh.mp3")
 
 

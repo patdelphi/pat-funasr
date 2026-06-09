@@ -22,7 +22,7 @@ Pat WebUI 开发 Todo
 
 ## 当前口径
 
-- 原 WebUI 保持不动：保留 "app/openai_api/gradio_app.py" 与 "run_ui.bat"
+- 原 WebUI 保持不动：保留 "app/openai_api/gradio_app.py" 源码，不再保留旧 UI 启动脚本
 - 新 WebUI 单独开发：在 "app/pat_funasr_webui/" 下演进
 - 当前主目标：先做可运行、可下载、可扩展的 Pat WebUI，再逐步对齐官方完整能力
 - 阶段 A / B 默认继续走现有 "/v1/models" 与 "/v1/audio/transcriptions"
@@ -111,6 +111,10 @@ Pat WebUI 开发 Todo
 - [x] 明确页面结构：基础转写区 / 高级参数区 / 结果预览区 / 下载区 / 批量区
 - [x] 明确单文件与多文件两条处理流程
 - [x] 明确错误展示区、运行状态区、结果缓存区
+- [x] 删除顶部阶段性说明文案，避免无效占位信息干扰操作
+- [x] 重构 "服务与调试" 页：展示运行概览、加载方式、模型语言覆盖、推荐入口与原始调试输出
+- [x] 同步更新相关文档："README.md" / "Docs/README.md" / "Docs/model-capability-matrix.md" / "Docs/api.md" / "Docs/smoke_pat_webui.md"
+- [x] 收口 "FunASR_pat.bat"：改为 Python 托管单窗口启动，关闭启动窗口时自动结束 API/UI 子进程
 
 验收：
 
@@ -172,6 +176,22 @@ Pat WebUI 开发 Todo
 - [ ] 多文件任务可顺序执行完成
 - [ ] 单个文件失败不会中断整个批次
 
+### B6. 批量卡死/前端内存优化
+
+目标：解决超长音频（> 1h）或大批量场景下，WebUI 出现“页面超出内存/卡死/刷屏”的问题。
+
+- [x] 限制预览输出长度：结果预览与调试 JSON 只展示尾部 N 字符，完整内容只走下载文件
+- [x] 批量 results 只保存短摘要：不在内存中保存每个文件的全文 transcript/raw_content（避免单个超长结果把 UI 进程撑爆）
+- [x] 批量状态刷新节流：减少 yield 次数（每 N 个文件或每 T 秒刷新一次），降低 Gradio 前端状态同步压力
+- [x] Streaming 输出节流：避免每个 chunk 反复发送全量 full_text；只展示尾部预览 + 独立进度信息
+- [ ] 大文件上传降峰（可选）：移除 `audio_path.read_bytes()` + `b"".join(parts)` 的双份拷贝，改为流式 multipart 发送
+
+验收：
+
+- [ ] 批量转写包含 \"test\\孙老师分享录音20250310.aac\" 与 \"test\\IBEC竞标会议录音.m4a\" 时，WebUI 不再出现浏览器 OOM
+- [ ] Streaming 输出不再刷屏到不可用（进度展示稳定）
+- [ ] UI 进程内存峰值明显下降（至少不随 transcript 全文线性累积）
+
 ### B5. 第一版回归验证
 
 - [x] 单文件转写回归：txt / srt / vtt / tsv / json / zip（已覆盖 sensevoice / paraformer）
@@ -229,7 +249,7 @@ Pat WebUI 开发 Todo
 
 - Paraformer：适合中文生产级识别，通常需配合 "fsmn-vad" 与 "ct-punc"
 - Paraformer-Streaming：适合实时字幕，必须处理 `cache` 与 `is_final`
-- Fun-ASR-Nano：多语言，内置标点，后续可重点考虑国际化场景
+- Fun-ASR-Nano：当前 README_zh 模型表格写“中文 / 英文 / 日文”，并强调中文 7 大方言与 26 种地域口音；内置标点，后续可重点考虑国际化场景
 - SenseVoice：除识别外还带情感/事件标签，适合作为增强能力优先候选
 - Qwen3-ASR：精度高但链路更重，建议放在增强阶段而非 MVP 阶段
 - Emotion2vec：已作为独立情感能力接入 MVP，当前先支持整体情感排序；时间片能力后续继续增强

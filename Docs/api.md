@@ -1,7 +1,7 @@
 #
 OpenAI 兼容 API 说明（API）
 
-实现文件：["app/openai_api/server.py"](file:///y:/NewStore/AI/FunASR-Portable-GPU/app/openai_api/server.py)
+实现文件：["app/openai_api/server.py"](../app/openai_api/server.py)
 
 ## 基础信息
 
@@ -215,11 +215,13 @@ OpenAI 兼容 API 说明（API）
 "MODEL_CONFIGS" 内置可用模型：
 
 - 统一策略：所有模型 `hub="ms"`（ModelScope），并设置 `disable_update=True`（关闭在线更新检查）
+- 加载策略：服务启动时不预加载模型；首次请求对应能力时才按需加载，`GET "/v1/models"` 中的 `ready` 仅表示当前进程是否已缓存该模型
 
 - "sensevoice"
   - 模型："iic/SenseVoiceSmall"
   - VAD："fsmn-vad"
   - VAD 参数：{"max_single_segment_time": 30000}
+  - 语言口径：README 示例明确 `auto / zh / en / yue / ja / ko / nospeech`；正文写“支持超过 50 种语言”
 - "paraformer"
   - 模型："paraformer-zh"
   - VAD："fsmn-vad"
@@ -231,20 +233,27 @@ OpenAI 兼容 API 说明（API）
   - 模型："paraformer-zh-streaming"
   - 说明：流式模型，不走 VAD/离线分段
 - "fun-asr-nano"
-  - 模型："FunAudioLLM/Fun-ASR-Nano-2512"（hub=ms，trust_remote_code=True）
+  - 模型："FunAudioLLM/Fun-ASR-Nano-2512"（hub=ms，trust_remote_code=False）
   - VAD："fsmn-vad"
+  - 语言口径：当前 README_zh 模型表格为“中文 / 英文 / 日文”；另写明中文支持 7 大方言与 26 种地域口音
 
 补充：
 
 - "qwen3-asr"
-  - 模型："Qwen/Qwen3-ASR-1.7B"（hub=ms，trust_remote_code=True）
+  - 模型："Qwen/Qwen3-ASR-1.7B"（hub=ms，trust_remote_code=False）
   - VAD："fsmn-vad"
+  - DType："fp16"
+  - 语言口径：官方 README 明确为 30 种语言 + 22 种中文方言
+  - 说明：当前项目只接入离线路径，未接入其原生 streaming / vLLM / qwen-asr 工具链
 - "qwen3-asr-0.6b"
-  - 模型："Qwen/Qwen3-ASR-0.6B"（hub=ms，trust_remote_code=True）
+  - 模型："Qwen/Qwen3-ASR-0.6B"（hub=ms，trust_remote_code=False）
   - VAD："fsmn-vad"
+  - DType："fp16"
+  - 语言口径：官方 README 明确为 30 种语言 + 22 种中文方言
+  - 说明：当前项目只接入离线路径，未接入其原生 streaming / vLLM / qwen-asr 工具链
 - "emotion2vec-plus-large"
   - 模型："iic/emotion2vec_plus_large"
-  - 说明：独立情感识别模型
+  - 说明：独立情感识别模型；官方 README 未枚举具体语种
 
 ## 清洗规则（SenseVoice 输出）
 

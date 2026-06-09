@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""GPU detection helper for FunASR.bat - avoids cmd.exe quote nesting hell.
+"""GPU detection helper for startup scripts - avoids cmd.exe quote nesting hell.
 
 Prints: <GPU_MODEL_NAME>  (one line, to stdout)
 Exit 0 if CUDA GPU detected, 1 otherwise.

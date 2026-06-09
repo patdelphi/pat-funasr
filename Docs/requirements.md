@@ -1,4 +1,4 @@
-﻿#
+#
 运行环境与依赖约束（Requirements）
 
 ## 目标形态
@@ -22,10 +22,10 @@
 
 - 预期设备：NVIDIA GPU（"torch.cuda.is_available()" 为真时启用）
 - CUDA DLL 加载：
-  - "run_api.bat"/"run_ui.bat" 会把 "runtime/python/Lib/site-packages/torch/lib" 加入 "PATH"，用于加载 torch 自带的 CUDA 依赖
+  - "run_api.bat"/"run_ui_pat.bat" 会把 "runtime/python/Lib/site-packages/torch/lib" 加入 "PATH"，用于加载 torch 自带的 CUDA 依赖
 - GPU 检测：
-  - Python 辅助脚本：["scripts/detect_gpu.py"](file:///y:/NewStore/AI/FunASR-Portable-GPU/scripts/detect_gpu.py)
-  - 启动器：["start_services.py"](file:///y:/NewStore/AI/FunASR-Portable-GPU/start_services.py)
+  - Python 辅助脚本：["scripts/detect_gpu.py"](../scripts/detect_gpu.py)
+  - 启动器：["start_services.py"](../start_services.py)
 
 ## 模型与缓存目录
 
@@ -42,7 +42,7 @@
 ## 端口与服务地址
 
 - API（FastAPI + Uvicorn）：默认 "http://localhost:8000"
-- UI（Gradio）：默认 "http://localhost:7860"
+- Pat WebUI（Gradio）：默认 "http://localhost:7861"
 
 ## 关键环境变量（启动脚本会设置）
 
@@ -52,4 +52,3 @@
   - "app"
 - "PATH"（仅脚本层面追加 torch 的 DLL 目录）：
   - "runtime/python/Lib/site-packages/torch/lib"
-

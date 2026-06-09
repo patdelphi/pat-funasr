@@ -75,7 +75,7 @@ ALLOWED_REQUEST_FIELDS = (
 )
 
 MODEL_LABELS = {
-    "sensevoice": "SenseVoice 多语言",
+    "sensevoice": "SenseVoice",
     "paraformer": "Paraformer 中文",
     "paraformer-en": "Paraformer 英文",
     "paraformer-zh-streaming": "Paraformer Streaming 中文",
@@ -83,6 +83,28 @@ MODEL_LABELS = {
     "qwen3-asr": "Qwen3-ASR-1.7B",
     "qwen3-asr-0.6b": "Qwen3-ASR-0.6B",
     "emotion2vec-plus-large": "Emotion2Vec Plus Large",
+}
+
+MODEL_LANGUAGE_MATRIX = {
+    "sensevoice": "README 明确示例/代码：auto / zh / en / yue / ja / ko / nospeech；文案称“支持超过 50 种语言”",
+    "paraformer": "zh",
+    "paraformer-en": "en",
+    "paraformer-zh-streaming": "zh",
+    "fun-asr-nano": "README_zh 表格：中文 / 英文 / 日文；中文含 7 大方言与 26 地域口音",
+    "qwen3-asr": "30 种语言 + 22 种中文方言",
+    "qwen3-asr-0.6b": "30 种语言 + 22 种中文方言",
+    "emotion2vec-plus-large": "README 未枚举具体语种；定位为通用语音情感识别模型",
+}
+
+MODEL_ENTRY_MATRIX = {
+    "sensevoice": "离线识别 / 说话人分离 / 情感识别",
+    "paraformer": "离线识别 / 说话人分离",
+    "paraformer-en": "离线识别",
+    "paraformer-zh-streaming": "流式识别",
+    "fun-asr-nano": "离线识别 / 说话人分离",
+    "qwen3-asr": "离线识别",
+    "qwen3-asr-0.6b": "离线识别",
+    "emotion2vec-plus-large": "情感识别",
 }
 
 MODEL_CAPABILITY_MATRIX = {
@@ -93,7 +115,7 @@ MODEL_CAPABILITY_MATRIX = {
         "emotion": True,
         "vad": True,
         "punc": True,
-        "notes": "多语言；支持说话人分离，也可直接输出情感标签",
+        "notes": "官方 README 明确覆盖中文/粤语/英语/日语/韩语，并给出 auto/zh/en/yue/ja/ko/nospeech 语言码；支持说话人分离与情感标签",
     },
     "paraformer": {
         "offline_asr": True,
@@ -129,7 +151,7 @@ MODEL_CAPABILITY_MATRIX = {
         "emotion": False,
         "vad": True,
         "punc": True,
-        "notes": "轻量多语言模型；支持 cam++ 说话人分离",
+        "notes": "官方 README_zh 当前模型页表格写中文/英文/日文，另强调中文 7 大方言与 26 地域口音；支持 cam++ 说话人分离",
     },
     "qwen3-asr": {
         "offline_asr": True,
@@ -138,7 +160,7 @@ MODEL_CAPABILITY_MATRIX = {
         "emotion": False,
         "vad": True,
         "punc": True,
-        "notes": "高精度离线识别",
+        "notes": "官方 README 明确为 30 种语言 + 22 种中文方言；当前项目只接了离线路径，未接其原生 streaming/vLLM 工具链",
     },
     "qwen3-asr-0.6b": {
         "offline_asr": True,
@@ -147,7 +169,7 @@ MODEL_CAPABILITY_MATRIX = {
         "emotion": False,
         "vad": True,
         "punc": True,
-        "notes": "轻量版 Qwen3-ASR",
+        "notes": "官方 README 明确为 30 种语言 + 22 种中文方言；当前项目只接了离线路径，未接其原生 streaming/vLLM 工具链",
     },
     "emotion2vec-plus-large": {
         "offline_asr": False,
@@ -156,7 +178,7 @@ MODEL_CAPABILITY_MATRIX = {
         "emotion": True,
         "vad": False,
         "punc": False,
-        "notes": "独立情感识别模型",
+        "notes": "独立情感识别模型；README 强调跨语种与跨场景鲁棒性，但未给出精确语种枚举",
     },
 }
 
@@ -261,7 +283,7 @@ def build_request_fields(**kwargs: Any) -> dict[str, str]:
 def format_model_label(model_id: str, ready: bool) -> str:
     """为模型下拉框生成更易读的展示文本。"""
     base_label = MODEL_LABELS.get(model_id, model_id)
-    ready_label = "ready" if ready else "lazy-load"
+    ready_label = "已加载" if ready else "按需加载"
     return f"{base_label} ({model_id}) [{ready_label}]"
 
 
@@ -339,6 +361,43 @@ def _capability_badge(enabled: bool) -> str:
     return "Y" if enabled else "-"
 
 
+def _status_label(ready: bool) -> str:
+    return "已加载" if ready else "按需加载"
+
+
+def _capability_text(capability: dict[str, Any]) -> str:
+    labels = []
+    if capability.get("offline_asr"):
+        labels.append("离线识别")
+    if capability.get("streaming_asr"):
+        labels.append("流式识别")
+    if capability.get("diarization"):
+        labels.append("说话人分离")
+    if capability.get("emotion"):
+        labels.append("情感识别")
+    if capability.get("vad"):
+        labels.append("VAD")
+    if capability.get("punc"):
+        labels.append("PUNC")
+    return " / ".join(labels) if labels else "-"
+
+
+def summarize_model_status(payload: dict[str, Any]) -> str:
+    """生成简短的模型状态摘要。"""
+    rows = build_model_capability_rows(payload)
+    if not rows:
+        return "未获取到模型列表"
+    loaded = [f"`{row['model']}`" for row in rows if row.get("ready") == "已加载"]
+    pending = [f"`{row['model']}`" for row in rows if row.get("ready") != "已加载"]
+    loaded_text = "、".join(loaded) if loaded else "无"
+    pending_text = "、".join(pending) if pending else "无"
+    return (
+        f"共 {len(rows)} 个模型；"
+        f"已加载 {len(loaded)} 个：{loaded_text}；"
+        f"按需加载 {len(pending)} 个：{pending_text}"
+    )
+
+
 def build_model_capability_rows(payload: dict[str, Any]) -> list[dict[str, str]]:
     """把模型列表和静态能力矩阵合并为展示行。"""
     rows: list[dict[str, str]] = []
@@ -348,17 +407,22 @@ def build_model_capability_rows(payload: dict[str, Any]) -> list[dict[str, str]]
             continue
         ready = bool(item.get("ready", False))
         capability = item.get("capabilities") or MODEL_CAPABILITY_MATRIX.get(model_id, {})
+        languages = MODEL_LANGUAGE_MATRIX.get(model_id, "以模型文档为准")
+        recommended_entry = MODEL_ENTRY_MATRIX.get(model_id, "服务与调试")
         rows.append(
             {
                 "model": model_id,
                 "label": MODEL_LABELS.get(model_id, model_id),
-                "ready": "ready" if ready else "lazy-load",
+                "ready": _status_label(ready),
                 "offline_asr": _capability_badge(bool(capability.get("offline_asr", False))),
                 "streaming_asr": _capability_badge(bool(capability.get("streaming_asr", False))),
                 "diarization": _capability_badge(bool(capability.get("diarization", False))),
                 "emotion": _capability_badge(bool(capability.get("emotion", False))),
                 "vad": _capability_badge(bool(capability.get("vad", False))),
                 "punc": _capability_badge(bool(capability.get("punc", False))),
+                "languages": languages,
+                "capabilities_text": _capability_text(capability),
+                "entry": recommended_entry,
                 "notes": str(capability.get("notes", "")),
             }
         )
@@ -389,15 +453,44 @@ def render_model_capability_markdown(payload: dict[str, Any], capability_filter:
         "### 模型能力看板",
         "",
         f"- 当前筛选：`{filter_label}`",
+        "- 状态说明：`已加载` 表示当前进程已缓存该模型；`按需加载` 表示服务启动时不预加载，首次请求时自动加载。",
         "",
-        "| 模型 | 状态 | 离线 | 流式 | 说话人 | 情感 | VAD | PUNC | 备注 |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| 模型 | 当前状态 | 支持语言 | 能力 | 推荐入口 | 说明 |",
+        "| --- | --- | --- | --- | --- | --- |",
     ]
     for row in rows:
         lines.append(
-            f"| {row['label']} (`{row['model']}`) | {row['ready']} | {row['offline_asr']} | {row['streaming_asr']} | {row['diarization']} | {row['emotion']} | {row['vad']} | {row['punc']} | {row['notes']} |"
+            f"| {row['label']} (`{row['model']}`) | {row['ready']} | {row['languages']} | {row['capabilities_text']} | {row['entry']} | {row['notes']} |"
         )
     return "\n".join(lines)
+
+
+def render_service_overview_markdown(
+    payload: dict[str, Any],
+    *,
+    base_url: str,
+    capability_filter: str = "all",
+) -> str:
+    """渲染服务与调试页顶部概览。"""
+    rows = filter_model_capability_rows(build_model_capability_rows(payload), capability_filter)
+    filter_label = CAPABILITY_FILTER_LABELS.get(capability_filter, "全部模型")
+    loaded = [f"`{row['model']}`" for row in rows if row.get("ready") == "已加载"]
+    pending = [f"`{row['model']}`" for row in rows if row.get("ready") != "已加载"]
+    loaded_text = "、".join(loaded) if loaded else "无"
+    pending_text = "、".join(pending) if pending else "无"
+    return "\n".join(
+        [
+            "### 运行概览",
+            "",
+            f"- API 地址：`{base_url.rstrip('/')}`",
+            "- 启动方式：后端启动时不预加载模型；首次调用对应能力时再按需加载。",
+            "- 状态说明：`已加载` = 当前进程已缓存；`按需加载` = 当前未载入，但请求时会自动加载。",
+            "- 模型语言：优先展示当前项目已整理的官方口径；细节以上游模型文档为准。",
+            f"- 当前筛选：`{filter_label}`",
+            f"- 已加载模型：{loaded_text}",
+            f"- 按需加载模型：{pending_text}",
+        ]
+    )
 
 
 def render_capability_target_markdown(payload: dict[str, Any], capability_filter: str = "all") -> str:
@@ -452,7 +545,12 @@ def normalize_uploaded_paths(files: Any) -> list[str]:
     return normalized
 
 
-def summarize_batch_results(results: list[dict[str, Any]]) -> str:
+def summarize_batch_results(
+    results: list[dict[str, Any]],
+    *,
+    max_items: int = 80,
+    max_error_message_chars: int = 180,
+) -> str:
     """生成批量任务汇总文本。"""
     total = len(results)
     success_count = sum(
@@ -474,7 +572,14 @@ def summarize_batch_results(results: list[dict[str, Any]]) -> str:
         f"待处理：{pending_count}",
         "",
     ]
-    for item in results:
+    max_items = max(0, int(max_items))
+    displayed = results if max_items <= 0 or len(results) <= max_items else results[-max_items:]
+    truncated_count = len(results) - len(displayed)
+    if truncated_count > 0:
+        lines.append(f"提示：列表过长，已仅显示最后 {len(displayed)} 项，省略 {truncated_count} 项。")
+        lines.append("")
+
+    for item in displayed:
         file_name = item.get("file_name", "unknown")
         status = item.get("status")
         if status == "running":
@@ -484,7 +589,10 @@ def summarize_batch_results(results: list[dict[str, Any]]) -> str:
         elif status == "success" or item.get("ok"):
             lines.append(f"[OK] {file_name}")
         else:
-            lines.append(f"[ERR] {file_name} -> {item.get('message', '未知错误')}")
+            message = str(item.get("message", "未知错误") or "未知错误")
+            if max_error_message_chars > 0 and len(message) > int(max_error_message_chars):
+                message = message[: int(max_error_message_chars)] + "..."
+            lines.append(f"[ERR] {file_name} -> {message}")
     return "\n".join(lines).strip()
 
 

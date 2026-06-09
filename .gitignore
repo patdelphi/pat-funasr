@@ -40,7 +40,7 @@ __pycache__/
 *.mov
 
 # 本地跑批输出（ASR 结果与中间产物）
-test/
+# test/
 
 # 本地 B5 回归输出
 b5_outputs*/

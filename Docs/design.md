@@ -1,11 +1,11 @@
-﻿#
+#
 架构与关键数据流（Design）
 
 ## 总体组件
 
 - 启动层
-  - "FunASR.bat"：一键启动（会启动 2 个新窗口分别跑 API/UI）
-  - "start_services.py"：单进程拉起 API + UI，并内置健康检查等待逻辑
+  - "FunASR_pat.bat"：单窗口启动 API + Pat WebUI
+  - "run_api.bat" / "run_ui_pat.bat"：分别启动 API 与 Pat WebUI
 - 服务层
   - "app/openai_api/server.py"：OpenAI 兼容音频转写 API（FastAPI）
   - "app/openai_api/gradio_app.py"：浏览器 Demo（Gradio，调用 API）
@@ -17,23 +17,17 @@
 
 ## 启动链路
 
-### 路径 A：一键脚本（"FunASR.bat"）
+### 路径 A：一键脚本（"FunASR_pat.bat"）
 
-1. 校验 "runtime/python/python.exe"、"app/openai_api/server.py"、"app/openai_api/gradio_app.py" 是否存在
-2. 可选检测模型文件：检查 SenseVoiceSmall 的 "model.pt" 是否存在
-3. GPU 探测：执行 "scripts/detect_gpu.py"（通过 torch.cuda.is_available()）
-4. 启动两个窗口：
-   - API：执行 "run_api.bat"
-   - UI：执行 "run_ui.bat"
+1. 校验 "runtime/python/python.exe"、"app/openai_api/server.py"、"app/pat_funasr_webui/gradio_app.py" 是否存在
+2. 启动 API：执行 "run_api.bat"
+3. 启动 Pat WebUI：执行 "run_ui_pat.bat"
 
-### 路径 B：推荐启动器（"start_services.py"）
+### 路径 B：分开启动（"run_api.bat" + "run_ui_pat.bat"）
 
-1. 设置缓存目录与 "PYTHONPATH"
-2. 在同一进程内探测 torch / CUDA，决定 "device=cuda|cpu"
-3. 拉起 API 子进程（"server.py --device <device> --port 8000"）
-4. 轮询 "http://localhost:8000/health" 等待 API 就绪（最多约 20s）
-5. 拉起 UI 子进程（"gradio_app.py --base-url http://localhost:8000 --port 7860"）
-6. 自动打开浏览器
+1. 运行 "run_api.bat" 启动 FastAPI 服务
+2. 运行 "run_ui_pat.bat" 启动 Pat WebUI
+3. Pat WebUI 通过 "http://localhost:8000" 调用后端 API
 
 ## 请求处理链路（API）
 
@@ -68,7 +62,4 @@
 
 ## 风险与已知不一致（从代码静态分析得到）
 
-- "FunASR.bat" 会输出 “No CUDA → Falling back to CPU”，但随后仍直接启动 "run_api.bat"（其固定为 "--device cuda"）
-  - 结果：无 GPU 机器上，API 可能直接启动失败或报错
-  - 建议：无 GPU 时改走 "start_services.py" 或让 "run_api.bat" 支持参数化 device
-
+- 当前根目录已清理旧 "FunASR.bat" / "run_ui.bat" 入口，统一保留 Pat WebUI 启动链路

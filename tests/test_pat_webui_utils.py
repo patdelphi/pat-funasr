@@ -36,28 +36,28 @@ class TestPatWebUiUtils(unittest.TestCase):
         self.assertEqual(
             choices,
             [
-                ("SenseVoice 多语言 (sensevoice) [ready]", "sensevoice"),
-                ("Fun-ASR-Nano (fun-asr-nano) [lazy-load]", "fun-asr-nano"),
+                ("SenseVoice (sensevoice) [已加载]", "sensevoice"),
+                ("Fun-ASR-Nano (fun-asr-nano) [按需加载]", "fun-asr-nano"),
             ],
         )
 
     def test_choose_default_model_prefers_sensevoice(self):
         choices = [
-            ("Fun-ASR-Nano (fun-asr-nano) [lazy-load]", "fun-asr-nano"),
-            ("SenseVoice 多语言 (sensevoice) [ready]", "sensevoice"),
+            ("Fun-ASR-Nano (fun-asr-nano) [按需加载]", "fun-asr-nano"),
+            ("SenseVoice (sensevoice) [已加载]", "sensevoice"),
         ]
         self.assertEqual(app_utils.choose_default_model(choices), "sensevoice")
 
     def test_filter_streaming_model_choices(self):
         choices = [
-            ("SenseVoice 多语言 (sensevoice) [ready]", "sensevoice"),
-            ("Paraformer Streaming 中文 (paraformer-zh-streaming) [lazy-load]", "paraformer-zh-streaming"),
-            ("Qwen3-ASR-0.6B (qwen3-asr-0.6b) [lazy-load]", "qwen3-asr-0.6b"),
+            ("SenseVoice (sensevoice) [已加载]", "sensevoice"),
+            ("Paraformer Streaming 中文 (paraformer-zh-streaming) [按需加载]", "paraformer-zh-streaming"),
+            ("Qwen3-ASR-0.6B (qwen3-asr-0.6b) [按需加载]", "qwen3-asr-0.6b"),
         ]
         filtered = app_utils.filter_streaming_model_choices(choices)
         self.assertEqual(
             filtered,
-            [("Paraformer Streaming 中文 (paraformer-zh-streaming) [lazy-load]", "paraformer-zh-streaming")],
+            [("Paraformer Streaming 中文 (paraformer-zh-streaming) [按需加载]", "paraformer-zh-streaming")],
         )
         self.assertEqual(
             app_utils.choose_default_streaming_model(filtered),
@@ -68,21 +68,21 @@ class TestPatWebUiUtils(unittest.TestCase):
         ensured = app_utils.ensure_dropdown_choices([], fallback="paraformer-zh-streaming")
         self.assertEqual(
             ensured,
-            [("Paraformer Streaming 中文 (paraformer-zh-streaming) [lazy-load]", "paraformer-zh-streaming")],
+            [("Paraformer Streaming 中文 (paraformer-zh-streaming) [按需加载]", "paraformer-zh-streaming")],
         )
 
     def test_filter_emotion_model_choices(self):
         choices = [
-            ("SenseVoice 多语言 (sensevoice) [ready]", "sensevoice"),
-            ("Emotion2Vec Plus Large (emotion2vec-plus-large) [lazy-load]", "emotion2vec-plus-large"),
-            ("Qwen3-ASR-0.6B (qwen3-asr-0.6b) [lazy-load]", "qwen3-asr-0.6b"),
+            ("SenseVoice (sensevoice) [已加载]", "sensevoice"),
+            ("Emotion2Vec Plus Large (emotion2vec-plus-large) [按需加载]", "emotion2vec-plus-large"),
+            ("Qwen3-ASR-0.6B (qwen3-asr-0.6b) [按需加载]", "qwen3-asr-0.6b"),
         ]
         filtered = app_utils.filter_emotion_model_choices(choices)
         self.assertEqual(
             filtered,
             [
-                ("SenseVoice 多语言 (sensevoice) [ready]", "sensevoice"),
-                ("Emotion2Vec Plus Large (emotion2vec-plus-large) [lazy-load]", "emotion2vec-plus-large"),
+                ("SenseVoice (sensevoice) [已加载]", "sensevoice"),
+                ("Emotion2Vec Plus Large (emotion2vec-plus-large) [按需加载]", "emotion2vec-plus-large"),
             ],
         )
         self.assertEqual(
@@ -92,18 +92,18 @@ class TestPatWebUiUtils(unittest.TestCase):
 
     def test_filter_diarization_model_choices(self):
         choices = [
-            ("Paraformer 中文 (paraformer) [ready]", "paraformer"),
-            ("SenseVoice 多语言 (sensevoice) [ready]", "sensevoice"),
-            ("Fun-ASR-Nano (fun-asr-nano) [lazy-load]", "fun-asr-nano"),
-            ("Emotion2Vec Plus Large (emotion2vec-plus-large) [lazy-load]", "emotion2vec-plus-large"),
+            ("Paraformer 中文 (paraformer) [已加载]", "paraformer"),
+            ("SenseVoice (sensevoice) [已加载]", "sensevoice"),
+            ("Fun-ASR-Nano (fun-asr-nano) [按需加载]", "fun-asr-nano"),
+            ("Emotion2Vec Plus Large (emotion2vec-plus-large) [按需加载]", "emotion2vec-plus-large"),
         ]
         filtered = app_utils.filter_diarization_model_choices(choices)
         self.assertEqual(
             filtered,
             [
-                ("Paraformer 中文 (paraformer) [ready]", "paraformer"),
-                ("SenseVoice 多语言 (sensevoice) [ready]", "sensevoice"),
-                ("Fun-ASR-Nano (fun-asr-nano) [lazy-load]", "fun-asr-nano"),
+                ("Paraformer 中文 (paraformer) [已加载]", "paraformer"),
+                ("SenseVoice (sensevoice) [已加载]", "sensevoice"),
+                ("Fun-ASR-Nano (fun-asr-nano) [按需加载]", "fun-asr-nano"),
             ],
         )
         self.assertEqual(
@@ -154,38 +154,64 @@ class TestPatWebUiUtils(unittest.TestCase):
         }
         markdown = app_utils.render_model_capability_markdown(payload)
         self.assertIn("### 模型能力看板", markdown)
-        self.assertIn("SenseVoice 多语言 (`sensevoice`)", markdown)
+        self.assertIn("SenseVoice (`sensevoice`)", markdown)
         self.assertIn("Paraformer Streaming 中文 (`paraformer-zh-streaming`)", markdown)
-        self.assertIn("| ready |", markdown)
-        self.assertIn("| lazy-load |", markdown)
+        self.assertIn("| 已加载 |", markdown)
+        self.assertIn("| 按需加载 |", markdown)
+        self.assertIn("README 明确示例/代码：auto / zh / en / yue / ja / ko / nospeech", markdown)
+        self.assertIn("状态说明：`已加载` 表示当前进程已缓存该模型；`按需加载` 表示服务启动时不预加载，首次请求时自动加载。", markdown)
         self.assertIn("后端返回能力", markdown)
         self.assertIn("流式专用", markdown)
         self.assertIn("当前筛选：`全部模型`", markdown)
+
+    def test_render_service_overview_markdown(self):
+        payload = {
+            "data": [
+                {"id": "sensevoice", "ready": True},
+                {"id": "paraformer-zh-streaming", "ready": False},
+            ]
+        }
+        markdown = app_utils.render_service_overview_markdown(
+            payload,
+            base_url="http://localhost:8000",
+            capability_filter="all",
+        )
+        self.assertIn("### 运行概览", markdown)
+        self.assertIn("API 地址：`http://localhost:8000`", markdown)
+        self.assertIn("启动方式：后端启动时不预加载模型；首次调用对应能力时再按需加载。", markdown)
+        self.assertIn("已加载模型：`sensevoice`", markdown)
+        self.assertIn("按需加载模型：`paraformer-zh-streaming`", markdown)
 
     def test_filter_model_capability_rows(self):
         rows = [
             {
                 "model": "sensevoice",
-                "label": "SenseVoice 多语言",
-                "ready": "ready",
+                "label": "SenseVoice",
+                "ready": "已加载",
                 "offline_asr": "Y",
                 "streaming_asr": "-",
                 "diarization": "-",
                 "emotion": "Y",
                 "vad": "Y",
                 "punc": "Y",
+                "languages": "README 明确示例/代码：auto / zh / en / yue / ja / ko / nospeech；文案称“支持超过 50 种语言”",
+                "capabilities_text": "离线识别 / 情感识别 / VAD / PUNC",
+                "entry": "离线识别 / 说话人分离 / 情感识别",
                 "notes": "",
             },
             {
                 "model": "paraformer-zh-streaming",
                 "label": "Paraformer Streaming 中文",
-                "ready": "lazy-load",
+                "ready": "按需加载",
                 "offline_asr": "-",
                 "streaming_asr": "Y",
                 "diarization": "-",
                 "emotion": "-",
                 "vad": "-",
                 "punc": "-",
+                "languages": "zh",
+                "capabilities_text": "流式识别",
+                "entry": "流式识别",
                 "notes": "",
             },
         ]

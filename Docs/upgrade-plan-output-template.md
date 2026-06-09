@@ -1,15 +1,15 @@
 #
-FunASR-Portable-GPU 输出模板/字幕升级策划（参考 Whisper-CTranslate2 参数体系）
+Pat WebUI 输出模板/字幕升级策划（参考 Whisper-CTranslate2 参数体系）
 
 目标：参考 "Whisper-CTranslate2" 的参数组织方式（输出格式、VAD、提示词/热词、分行规则等），在当前项目中形成一套“可控输出模板”的统一方案（先出计划，确认后再实施）。
 
 ## 参考资料
 
 - FunASR 官方中文文档（上游）：https://github.com/modelscope/FunASR/blob/main/README_zh.md
-- 本仓库 API：["app/openai_api/server.py"](file:///y:/NewStore/AI/FunASR-Portable-GPU/app/openai_api/server.py)
+- 本仓库 API：["app/openai_api/server.py"](../app/openai_api/server.py)
 - Whisper-CTranslate2 本地参考：
-  - CLI 参数总览：["Whisper-CTranslate2/readme.txt"](file:///y:/NewStore/AI/FunASR-Portable-GPU/Whisper-CTranslate2/readme.txt)
-  - 批处理示例：["Whisper-CTranslate2/batchwhisper.bat"](file:///y:/NewStore/AI/FunASR-Portable-GPU/Whisper-CTranslate2/batchwhisper.bat)
+  - CLI 参数总览：["Whisper-CTranslate2/readme.txt"](../Whisper-CTranslate2/readme.txt)
+  - 批处理示例：["Whisper-CTranslate2/batchwhisper.bat"](../Whisper-CTranslate2/batchwhisper.bat)
 
 ## 现状与差距（面向“字幕/文案输出”）
 
@@ -232,7 +232,7 @@ FunASR-Portable-GPU 输出模板/字幕升级策划（参考 Whisper-CTranslate2
 
 ### 1) 当前项目是否是上游最新？
 
-- 当前仓库内置的 FunASR 版本号为 "1.3.9"（见 ["app/funasr/version.txt"](file:///y:/NewStore/AI/FunASR-Portable-GPU/app/funasr/version.txt)）。
+- 当前仓库内置的 FunASR 版本号为 "1.3.9"（见 ["app/funasr/version.txt"](../app/funasr/version.txt)）。
 - 以 "modelscope/FunASR" 的 Tag 为准：上游存在 "v1.3.9"（commit "11b04b8"）。
 - 结论：版本号层面，本项目与上游 "v1.3.9" 同代；但当前仓库未固化“上游 commit id”，无法仅凭版本号证明源码与某个 commit 字节级一致。
 

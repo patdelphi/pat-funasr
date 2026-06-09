@@ -24,7 +24,7 @@ ASR 模型能力矩阵与 API 参数说明
 
 ## 二、当前项目：API 能力与参数（现状）
 
-API 实现：[server.py](file:///y:/NewStore/AI/FunASR-Portable-GPU/app/openai_api/server.py)
+API 实现：[server.py](../app/openai_api/server.py)
 
 ### 1) 端点
 
@@ -61,12 +61,12 @@ API 实现：[server.py](file:///y:/NewStore/AI/FunASR-Portable-GPU/app/openai_a
 
 | 模型别名 | 本项目 model id | 官方文档常见对应 | hub | 语言覆盖 | 标点 | 句/段级时间戳 | sentence_info 分段 | 热词 | 典型用途 |
 |---|---|---|---|---|---|---|---|---|---|
-| sensevoice | iic/SenseVoiceSmall | iic/SenseVoiceSmall | ms | 多语（上游示例支持 auto/zh/en/yue/ja/ko…） | ⚠️（建议 use_itn + 后处理） | ⚠️（常见做法：用 VAD 段当“段级时间戳”） | ⚠️ | ⚠️ | 多语通用转写、文案；可做“粗字幕” |
+| sensevoice | iic/SenseVoiceSmall | iic/SenseVoiceSmall | ms | README 示例明确：auto / zh / en / yue / ja / ko / nospeech；正文写“支持超过 50 种语言” | ⚠️（建议 use_itn + 后处理） | ⚠️（常见做法：用 VAD 段当“段级时间戳”） | ⚠️ | ⚠️ | 通用转写、文案；可做“粗字幕” |
 | paraformer | paraformer-zh | paraformer-zh | ms | 中文 | ✅（已配置 ct-punc） | ✅/⚠️（上游文档描述“带时间戳输出”，仍需实测字段形态） | ⚠️（若开启 sentence_timestamp 且具备 timestamp+punc_array） | ✅（hotword） | 中文字幕/文案（可读性优先） |
 | paraformer-en | paraformer-en | paraformer-en | ms | 英文 | ⚠️（可接 punc_model，但当前配置未启用） | ⚠️ | ⚠️ | ⚠️ | 英文转写 |
-| fun-asr-nano | FunAudioLLM/Fun-ASR-Nano-2512 | FunAudioLLM/Fun-ASR-Nano-2512 | ms | 多语 | ⚠️ | ⚠️ | ⚠️ | ⚠️ | 多语/方言/歌词等通用 ASR（官方 Fun-ASR-Nano） |
-| qwen3-asr | Qwen/Qwen3-ASR-1.7B | Qwen/Qwen3-ASR-1.7B | ms | 多语 | ⚠️ | ⚠️ | ⚠️ | ⚠️ | 最高质量（大模型，延迟更高） |
-| qwen3-asr-0.6b | Qwen/Qwen3-ASR-0.6B | Qwen/Qwen3-ASR-0.6B | ms | 多语 | ⚠️ | ⚠️ | ⚠️ | ⚠️ | 更轻量的 Qwen3-ASR（可选） |
+| fun-asr-nano | FunAudioLLM/Fun-ASR-Nano-2512 | FunAudioLLM/Fun-ASR-Nano-2512 | ms | 当前 README_zh 模型表格：中文 / 英文 / 日文；另强调中文 7 大方言与 26 种地域口音 | ⚠️ | ⚠️ | ⚠️ | ⚠️ | 通用 ASR、方言、歌词、说话人分离 |
+| qwen3-asr | Qwen/Qwen3-ASR-1.7B | Qwen/Qwen3-ASR-1.7B | ms | 官方 README：30 种语言 + 22 种中文方言 | ⚠️ | ⚠️ | ⚠️ | ⚠️ | 最高质量离线识别（当前项目未接其原生 streaming/vLLM 链路） |
+| qwen3-asr-0.6b | Qwen/Qwen3-ASR-0.6B | Qwen/Qwen3-ASR-0.6B | ms | 官方 README：30 种语言 + 22 种中文方言 | ⚠️ | ⚠️ | ⚠️ | ⚠️ | 更轻量的 Qwen3-ASR（当前项目未接其原生 streaming/vLLM 链路） |
 
 补充：本项目在 MODEL_CONFIGS 中的链路配置
 
@@ -75,6 +75,12 @@ API 实现：[server.py](file:///y:/NewStore/AI/FunASR-Portable-GPU/app/openai_a
 - fun-asr-nano：hub=ms，trust_remote_code=False，vad_model=fsmn-vad
 - qwen3-asr：hub=ms，trust_remote_code=False，dtype=fp16，vad_model=fsmn-vad
 - qwen3-asr-0.6b：hub=ms，trust_remote_code=False，dtype=fp16，vad_model=fsmn-vad
+
+语言口径补充说明：
+
+- `sensevoice`：文档正文写“支持超过 50 种语言”，但当前项目 UI 和 API 中实际透传/展示的语言码以 README 示例列出的 `auto / zh / en / yue / ja / ko / nospeech` 为准。
+- `fun-asr-nano`：上游 README_zh 同时出现“31 种语言”与模型表格“中文 / 英文 / 日文”两种口径；为了避免误导，当前项目文档优先采用模型表格口径，并把中文方言覆盖单独写明。
+- `qwen3-asr` 系：上游能力更强，但当前项目只接入离线路径，不能因为上游支持 streaming 就在本项目文档中默认宣称可直接流式使用。
 
 ## 四、功能实现路径（按能力来源拆解）
 
@@ -98,7 +104,7 @@ API 实现：[server.py](file:///y:/NewStore/AI/FunASR-Portable-GPU/app/openai_a
 
 对应升级策划文档：
 
-- [upgrade-plan-output-template.md](file:///y:/NewStore/AI/FunASR-Portable-GPU/Docs/upgrade-plan-output-template.md)
+- [upgrade-plan-output-template.md](./upgrade-plan-output-template.md)
 
 ## 五、参数与功能的“白名单”建议（规划）
 
@@ -114,7 +120,8 @@ API 实现：[server.py](file:///y:/NewStore/AI/FunASR-Portable-GPU/app/openai_a
 ## 六、你关心的“输出能力差异”怎么落地成产品体验
 
 - UI/客户端层面：展示“模型能力提示卡”
-  - sensevoice：多语、文案强；字幕时间戳以段级为主
+  - sensevoice：通用转写与情感/说话人入口集中；语言码以 `auto / zh / en / yue / ja / ko / nospeech` 为主
   - paraformer：中文字幕强；标点强；时间戳更有希望
+  - qwen3-asr：明确标注“当前项目只接离线，不代表已接原生 streaming”
 - API 层面：对不同模型做参数兼容性校验
   - 例如：对 sensevoice 提示 use_itn；对 paraformer 提示 punc/hotword；对无时间戳模型默认走 VAD 段时间戳

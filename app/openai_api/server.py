@@ -28,8 +28,10 @@ import time
 import os
 import re
 import logging
+import json
 from typing import Optional
 import uuid
+import urllib.request
 
 import uvicorn
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
@@ -41,6 +43,53 @@ import segmentation
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
+
+# #region debug-point C:debug-report
+def _dbg_report(
+    *,
+    hypothesis_id: str,
+    msg: str,
+    location: str,
+    data: dict | None = None,
+    trace_id: str | None = None,
+    run_id: str = "pre-fix",
+) -> None:
+    try:
+        root = Path(__file__).resolve().parents[2]
+        env_path = root / ".dbg" / "gradio-page-hung.env"
+        url = "http://127.0.0.1:7777/event"
+        session_id = "gradio-page-hung"
+        try:
+            content = env_path.read_text(encoding="utf-8", errors="replace")
+            for line in content.splitlines():
+                if line.startswith("DEBUG_SERVER_URL="):
+                    url = line.split("=", 1)[1].strip() or url
+                elif line.startswith("DEBUG_SESSION_ID="):
+                    session_id = line.split("=", 1)[1].strip() or session_id
+        except Exception:
+            pass
+        payload = {
+            "sessionId": session_id,
+            "runId": run_id,
+            "hypothesisId": hypothesis_id,
+            "location": location,
+            "msg": f"[DEBUG] {msg}",
+            "data": data or {},
+            "traceId": trace_id,
+            "ts": int(time.time() * 1000),
+        }
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        urllib.request.urlopen(req, timeout=2).read()
+    except Exception:
+        return
+
+
+# #endregion
 
 app = FastAPI(title="FunASR OpenAI-Compatible API", version="1.0.0")
 
@@ -577,11 +626,30 @@ async def transcribe(
         )
 
     # Save uploaded file
+    trace_id = uuid.uuid4().hex
     suffix = os.path.splitext(file.filename)[1] if file.filename else ".wav"
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
         content = await file.read()
         tmp.write(content)
         tmp_path = tmp.name
+    # #region debug-point D:transcription-upload
+    try:
+        _dbg_report(
+            hypothesis_id="D",
+            msg="api_upload_saved",
+            location="openai_api/server.py:/v1/audio/transcriptions",
+            trace_id=trace_id,
+            data={
+                "model": model,
+                "response_format": response_format,
+                "filename": getattr(file, "filename", ""),
+                "upload_bytes": len(content) if content is not None else 0,
+                "tmp_bytes": os.path.getsize(tmp_path) if os.path.exists(tmp_path) else 0,
+            },
+        )
+    except Exception:
+        pass
+    # #endregion
 
     try:
         try:
@@ -617,6 +685,30 @@ async def transcribe(
             raise HTTPException(status_code=400, detail=str(ve))
 
         try:
+            logger.info(
+                "Transcription start: "
+                f"model={model}, "
+                f"language={language or 'auto'}, "
+                f"vad_preset={vad_preset or ''}, "
+                f"merge_vad={bool(merge_vad) if merge_vad is not None else ''}, "
+                f"batch_size_s={batch_size_s or ''}, "
+                f"file={getattr(file, 'filename', '')}"
+            )
+            # #region debug-point D:transcription-generate-start
+            try:
+                _dbg_report(
+                    hypothesis_id="D",
+                    msg="api_generate_start",
+                    location="openai_api/server.py:/v1/audio/transcriptions",
+                    trace_id=trace_id,
+                    data={
+                        "duration_s": duration_s,
+                        "generate_kwargs_keys": sorted(list(generate_kwargs.keys())),
+                    },
+                )
+            except Exception:
+                pass
+            # #endregion
             result = asr_model.generate(**generate_kwargs)
         except KeyError as ke:
             if str(ke) == "'timestamp'" and "sentence_timestamp" in generate_kwargs:
@@ -627,10 +719,39 @@ async def transcribe(
         elapsed = time.time() - t0
 
         duration_s = duration_s if duration_s > 0 else elapsed
+        try:
+            rtf = elapsed / duration_s if duration_s > 0 else 0.0
+        except Exception:
+            rtf = 0.0
+        logger.info(
+            "Transcription done: "
+            f"model={model}, "
+            f"elapsed_s={elapsed:.2f}, "
+            f"duration_s={duration_s:.2f}, "
+            f"rtf={rtf:.3f}"
+        )
         text = clean_text(result[0].get("text", ""))
         segments = segmentation.build_segments(result0=result[0], duration_s=duration_s, clean_text=clean_text)
         if not segments:
             segments = [{"start": 0.0, "end": round(duration_s, 3), "text": text, "speaker": None}]
+        # #region debug-point D:transcription-generate-done
+        try:
+            _dbg_report(
+                hypothesis_id="D",
+                msg="api_generate_done",
+                location="openai_api/server.py:/v1/audio/transcriptions",
+                trace_id=trace_id,
+                data={
+                    "elapsed_s": round(elapsed, 3),
+                    "duration_s": round(duration_s, 3),
+                    "rtf": round(float(rtf), 4),
+                    "text_len": len(text or ""),
+                    "segments": len(segments) if isinstance(segments, list) else 0,
+                },
+            )
+        except Exception:
+            pass
+        # #endregion
 
         verbose_payload = renderers.build_verbose_json_payload(
             full_text=text,

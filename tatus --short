@@ -1,0 +1,11 @@
+warning: in the working copy of '.gitignore', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'Docs/README.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'Docs/api.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'Docs/changelog.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'Docs/deployment.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'Docs/design.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'Docs/model-capability-matrix.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'Docs/optimization-plan.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'Docs/requirements.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'Docs/smoke_pat_webui.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'Docs/upgrade-plan-output-template.md', LF will be replaced by CRLF the next time Git touches it
