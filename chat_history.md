@@ -378,6 +378,31 @@ Chat History
 - 已按确认版计划执行完成：统一运行时控制区与功能参数标签为“中文说明 + 技术参数名”，并增加模型列表来源状态提示
 - 已同步更新 `"tests/test_pat_webui_utils.py"` 与 `"tests/test_pat_webui_diarization_exports.py"`，回归结果为 `43 passed, 1 warning`
 
+## 2026-06-09 22:44:11
+
+### User
+
+- 先commit，然后你继续查找并补全每种模型支持的语言种类，包括中文方言，要具体
+
+### Assistant
+
+- 已按要求先提交当前 WebUI 改动，commit 为 `"7423232"`（`feat: polish pat webui layout and labels`）
+- 已继续核对官方 README / Model Zoo，并补全 `"app/pat_funasr_webui/app_utils.py"`、`"Docs/model-capability-matrix.md"`、`"Docs/api.md"` 中各模型支持语言、中文方言与地域口音的具体口径
+- 已同步更新 `"Docs/changelog.md"` 与相关测试，回归结果为 `43 passed, 1 warning`
+
+## 2026-06-09 22:59:28
+
+### User
+
+- 清理目录（又多了几个奇怪的文件），更新相关文档，commit and push
+
+### Assistant
+
+- 已清理根目录误生成文件：`"tamp = Get-Date -Format yyyy-MM-dd HHmmss"`、`"tatus --short"`、`"trae-debug-log-bat-startup-failure.txt"`
+- 已更新 `".gitignore"`，加入 `trae-debug-log-*.txt`
+- 已更新 `"Docs/changelog.md"`，记录目录清理与忽略规则补充
+- 准备统一执行 `commit + push`
+
 ## 2026-06-09 21:31:55
 
 ### User

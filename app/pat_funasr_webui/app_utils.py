@@ -86,13 +86,13 @@ MODEL_LABELS = {
 }
 
 MODEL_LANGUAGE_MATRIX = {
-    "sensevoice": "README 明确示例/代码：auto / zh / en / yue / ja / ko / nospeech；文案称“支持超过 50 种语言”",
-    "paraformer": "zh",
-    "paraformer-en": "en",
-    "paraformer-zh-streaming": "zh",
-    "fun-asr-nano": "README_zh 表格：中文 / 英文 / 日文；中文含 7 大方言与 26 地域口音",
-    "qwen3-asr": "30 种语言 + 22 种中文方言",
-    "qwen3-asr-0.6b": "30 种语言 + 22 种中文方言",
+    "sensevoice": "明确列出：普通话、粤语、英语、日语、韩语；另称总体支持 50+ 语种，但未公开完整名单",
+    "paraformer": "官方 Model Zoo：中文和英文；未见官方单独列出方言清单",
+    "paraformer-en": "官方 Model Zoo：英文；未见官方单独列出方言清单",
+    "paraformer-zh-streaming": "官方 Model Zoo：中文和英文；未见官方单独列出方言清单",
+    "fun-asr-nano": "中文、英文、日文；中文含 7 种方言（吴语、粤语、闽语、客家话、赣语、湘语、晋语），官方另称 26 种地域口音",
+    "qwen3-asr": "30 种语言：中文、英语、粤语、阿拉伯语、德语、法语、西班牙语、葡萄牙语、印尼语、意大利语、韩语、俄语、泰语、越南语、日语、土耳其语、印地语、马来语、荷兰语、瑞典语、丹麦语、芬兰语、波兰语、捷克语、菲律宾语、波斯语、希腊语、匈牙利语、马其顿语、罗马尼亚语；22 种中文方言/口音：安徽、东北、福建、甘肃、贵州、河北、河南、湖北、湖南、江西、宁夏、山东、陕西、山西、四川、天津、云南、浙江、粤语（香港口音）、粤语（广东口音）、吴语、闽南语",
+    "qwen3-asr-0.6b": "30 种语言：中文、英语、粤语、阿拉伯语、德语、法语、西班牙语、葡萄牙语、印尼语、意大利语、韩语、俄语、泰语、越南语、日语、土耳其语、印地语、马来语、荷兰语、瑞典语、丹麦语、芬兰语、波兰语、捷克语、菲律宾语、波斯语、希腊语、匈牙利语、马其顿语、罗马尼亚语；22 种中文方言/口音：安徽、东北、福建、甘肃、贵州、河北、河南、湖北、湖南、江西、宁夏、山东、陕西、山西、四川、天津、云南、浙江、粤语（香港口音）、粤语（广东口音）、吴语、闽南语",
     "emotion2vec-plus-large": "README 未枚举具体语种；定位为通用语音情感识别模型",
 }
 
@@ -115,7 +115,7 @@ MODEL_CAPABILITY_MATRIX = {
         "emotion": True,
         "vad": True,
         "punc": True,
-        "notes": "官方 README 明确覆盖中文/粤语/英语/日语/韩语，并给出 auto/zh/en/yue/ja/ko/nospeech 语言码；支持说话人分离与情感标签",
+        "notes": "官方 README 明确列出普通话/粤语/英语/日语/韩语，并给出 auto/zh/en/yue/ja/ko/nospeech 语言码；同时宣称总体支持 50+ 语种，但未公开完整名单；支持说话人分离与情感标签",
     },
     "paraformer": {
         "offline_asr": True,
@@ -124,7 +124,7 @@ MODEL_CAPABILITY_MATRIX = {
         "emotion": False,
         "vad": True,
         "punc": True,
-        "notes": "中文离线识别；支持 cam++ 说话人分离",
+        "notes": "本地 alias 对应 paraformer-zh，官方 Model Zoo 标注语言为中文和英文；未见官方单独列出中文方言清单；支持 cam++ 说话人分离",
     },
     "paraformer-en": {
         "offline_asr": True,
@@ -133,7 +133,7 @@ MODEL_CAPABILITY_MATRIX = {
         "emotion": False,
         "vad": True,
         "punc": False,
-        "notes": "英文离线识别",
+        "notes": "官方 Model Zoo 标注语言为英文；未见官方单独列出英文方言/口音清单",
     },
     "paraformer-zh-streaming": {
         "offline_asr": False,
@@ -142,7 +142,7 @@ MODEL_CAPABILITY_MATRIX = {
         "emotion": False,
         "vad": False,
         "punc": True,
-        "notes": "流式识别专用；默认挂载 ct-punc 提升断句与可读性",
+        "notes": "本地 alias 对应 Paraformer 在线版，官方 Model Zoo 标注语言为中文和英文；未见官方单独列出方言清单；默认挂载 ct-punc 提升断句与可读性",
     },
     "fun-asr-nano": {
         "offline_asr": True,
@@ -151,7 +151,7 @@ MODEL_CAPABILITY_MATRIX = {
         "emotion": False,
         "vad": True,
         "punc": True,
-        "notes": "官方 README_zh 当前模型页表格写中文/英文/日文，另强调中文 7 大方言与 26 地域口音；支持 cam++ 说话人分离",
+        "notes": "官方 README_zh 当前模型页表格写中文/英文/日文；中文明确包含 7 种方言（吴语、粤语、闽语、客家话、赣语、湘语、晋语），并宣称支持 26 种地域口音；README 当前公开列举的地域口音样例包括河南、陕西、湖北、四川、重庆、云南、贵州、广东、广西、河北、天津、山东、安徽、南京、江苏、杭州、甘肃、宁夏；支持 cam++ 说话人分离",
     },
     "qwen3-asr": {
         "offline_asr": True,
@@ -160,7 +160,7 @@ MODEL_CAPABILITY_MATRIX = {
         "emotion": False,
         "vad": True,
         "punc": True,
-        "notes": "官方 README 明确为 30 种语言 + 22 种中文方言；当前项目只接了离线路径，未接其原生 streaming/vLLM 工具链",
+        "notes": "官方 README 明确列出 30 种语言与 22 种中文方言/口音；当前项目只接了离线路径，未接其原生 streaming/vLLM 工具链",
     },
     "qwen3-asr-0.6b": {
         "offline_asr": True,
@@ -169,7 +169,7 @@ MODEL_CAPABILITY_MATRIX = {
         "emotion": False,
         "vad": True,
         "punc": True,
-        "notes": "官方 README 明确为 30 种语言 + 22 种中文方言；当前项目只接了离线路径，未接其原生 streaming/vLLM 工具链",
+        "notes": "官方 README 明确列出 30 种语言与 22 种中文方言/口音；当前项目只接了离线路径，未接其原生 streaming/vLLM 工具链",
     },
     "emotion2vec-plus-large": {
         "offline_asr": False,

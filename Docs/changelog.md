@@ -18,6 +18,8 @@
 - 更新 "Docs/README.md"：补充 README 文档索引，并明确 "model-capability-matrix.md" 负责语言覆盖与项目接入差异说明
 - 更新 "Docs/model-capability-matrix.md"：移除笼统“多语”表述，改为对齐本地缓存官方 README 的明确语言口径；补充 Qwen3-ASR 当前仅接离线路径说明
 - 更新 "Docs/api.md"：修正 `trust_remote_code=False`、`dtype=fp16`、按需加载说明，以及各模型语言口径与接入限制说明
+- 继续补全 "Docs/model-capability-matrix.md" 与 "Docs/api.md"：把 SenseVoice、Paraformer、Fun-ASR-Nano、Qwen3-ASR 的语言/中文方言/地域口音支持改为具体名单，并补上 `paraformer-zh-streaming` 与 `emotion2vec-plus-large` 的口径说明
+- 清理根目录误生成的临时文件，并在 ".gitignore" 中加入 `trae-debug-log-*.txt`，避免调试日志再次污染工作区
 - 更新 "Docs/smoke_pat_webui.md"：把旧的 `ready / not ready` 校验改成当前页面实际文案 `已加载 / 按需加载`
 - 收口文档入口：在根目录 "README.md" 与 "Docs/README.md" 中补充 "smoke_pat_webui.md"、"changelog.md" 等导航项
 - 重构 "FunASR_pat.bat" 启动链路：改由 "aipython/managed_single_window_launcher.py" 托管 API/UI 子进程，关闭启动窗口时自动结束子进程

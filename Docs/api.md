@@ -221,21 +221,24 @@ OpenAI 兼容 API 说明（API）
   - 模型："iic/SenseVoiceSmall"
   - VAD："fsmn-vad"
   - VAD 参数：{"max_single_segment_time": 30000}
-  - 语言口径：README 示例明确 `auto / zh / en / yue / ja / ko / nospeech`；正文写“支持超过 50 种语言”
+  - 语言口径：官方明确列出普通话、粤语、英语、日语、韩语；README 示例语言码为 `auto / zh / en / yue / ja / ko / nospeech`；正文另称总体支持 50+ 语种，但未公开完整名单
 - "paraformer"
   - 模型："paraformer-zh"
   - VAD："fsmn-vad"
   - 标点："ct-punc"
+  - 语言口径：官方 Model Zoo 标注为中文和英文；未见官方单独列出方言清单
 - "paraformer-en"
   - 模型："paraformer-en"
   - VAD："fsmn-vad"
+  - 语言口径：官方 Model Zoo 标注为英文；未见官方单独列出方言/口音清单
 - "paraformer-zh-streaming"
   - 模型："paraformer-zh-streaming"
   - 说明：流式模型，不走 VAD/离线分段
+  - 语言口径：官方 Model Zoo 标注为中文和英文；未见官方单独列出方言清单
 - "fun-asr-nano"
   - 模型："FunAudioLLM/Fun-ASR-Nano-2512"（hub=ms，trust_remote_code=False）
   - VAD："fsmn-vad"
-  - 语言口径：当前 README_zh 模型表格为“中文 / 英文 / 日文”；另写明中文支持 7 大方言与 26 种地域口音
+  - 语言口径：中文、英文、日文；中文明确包含 7 种方言：吴语、粤语、闽语、客家话、赣语、湘语、晋语；官方另称支持 26 种地域口音，README 当前公开列举样例包括河南、陕西、湖北、四川、重庆、云南、贵州、广东、广西、河北、天津、山东、安徽、南京、江苏、杭州、甘肃、宁夏
 
 补充：
 
@@ -243,17 +246,17 @@ OpenAI 兼容 API 说明（API）
   - 模型："Qwen/Qwen3-ASR-1.7B"（hub=ms，trust_remote_code=False）
   - VAD："fsmn-vad"
   - DType："fp16"
-  - 语言口径：官方 README 明确为 30 种语言 + 22 种中文方言
+  - 语言口径：30 种语言：中文、英语、粤语、阿拉伯语、德语、法语、西班牙语、葡萄牙语、印尼语、意大利语、韩语、俄语、泰语、越南语、日语、土耳其语、印地语、马来语、荷兰语、瑞典语、丹麦语、芬兰语、波兰语、捷克语、菲律宾语、波斯语、希腊语、匈牙利语、马其顿语、罗马尼亚语；22 种中文方言/口音：安徽、东北、福建、甘肃、贵州、河北、河南、湖北、湖南、江西、宁夏、山东、陕西、山西、四川、天津、云南、浙江、粤语（香港口音）、粤语（广东口音）、吴语、闽南语
   - 说明：当前项目只接入离线路径，未接入其原生 streaming / vLLM / qwen-asr 工具链
 - "qwen3-asr-0.6b"
   - 模型："Qwen/Qwen3-ASR-0.6B"（hub=ms，trust_remote_code=False）
   - VAD："fsmn-vad"
   - DType："fp16"
-  - 语言口径：官方 README 明确为 30 种语言 + 22 种中文方言
+  - 语言口径：与 "qwen3-asr" 相同：30 种语言 + 上述 22 种中文方言/口音
   - 说明：当前项目只接入离线路径，未接入其原生 streaming / vLLM / qwen-asr 工具链
 - "emotion2vec-plus-large"
   - 模型："iic/emotion2vec_plus_large"
-  - 说明：独立情感识别模型；官方 README 未枚举具体语种
+  - 说明：独立情感识别模型；官方 README 强调跨语种/跨场景鲁棒性，但未枚举具体语种与中文方言
 
 ## 清洗规则（SenseVoice 输出）
 

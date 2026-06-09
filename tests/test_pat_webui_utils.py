@@ -166,7 +166,7 @@ class TestPatWebUiUtils(unittest.TestCase):
         self.assertIn("Paraformer Streaming 中文 (`paraformer-zh-streaming`)", markdown)
         self.assertIn("| 已加载 |", markdown)
         self.assertIn("| 按需加载 |", markdown)
-        self.assertIn("README 明确示例/代码：auto / zh / en / yue / ja / ko / nospeech", markdown)
+        self.assertIn("明确列出：普通话、粤语、英语、日语、韩语", markdown)
         self.assertIn("状态说明：`已加载` 表示当前进程已缓存该模型；`按需加载` 表示服务启动时不预加载，首次请求时自动加载。", markdown)
         self.assertIn("后端返回能力", markdown)
         self.assertIn("流式专用", markdown)
@@ -202,7 +202,7 @@ class TestPatWebUiUtils(unittest.TestCase):
                 "emotion": "Y",
                 "vad": "Y",
                 "punc": "Y",
-                "languages": "README 明确示例/代码：auto / zh / en / yue / ja / ko / nospeech；文案称“支持超过 50 种语言”",
+                "languages": "明确列出：普通话、粤语、英语、日语、韩语；另称总体支持 50+ 语种，但未公开完整名单",
                 "capabilities_text": "离线识别 / 情感识别 / VAD / PUNC",
                 "entry": "离线识别 / 说话人分离 / 情感识别",
                 "notes": "",

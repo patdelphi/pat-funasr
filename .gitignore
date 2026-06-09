@@ -57,6 +57,7 @@ b5_outputs*/
 *.log
 *.tmp
 *.temp
+trae-debug-log-*.txt
 
 # IDE/系统文件
 .vscode/
