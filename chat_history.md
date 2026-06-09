@@ -1949,3 +1949,15 @@ Chat History
 - 已验证：
   - `python -m unittest discover -s "tests" -p "test_pat_webui_diarization_exports.py" -v`
   - `python -m py_compile "app\\pat_funasr_webui\\gradio_app.py" "tests\\test_pat_webui_diarization_exports.py"`
+
+## 2026-06-09 20:24:46
+
+### User
+
+- 2
+
+### Assistant
+
+- 已按你的选择（2）清理并准备移除调试产物与误文件名：
+  - 删除并从版本库移除 `".dbg/"`、`"debug-gradio-page-hung.md"`、`"trae-debug-log-bat-startup-failure.txt"`、`"tatus --short"`
+  - 当前变更已暂存，等待你确认是否提交清理 commit
