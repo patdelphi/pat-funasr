@@ -45,6 +45,8 @@ class TestServerGenerateKwargs(unittest.TestCase):
             vad_preset="anti_hallucination",
             merge_vad=True,
             merge_length_s=12,
+            batch_size_s=30,
+            vad_max_single_segment_time=15000,
         )
 
         self.assertEqual(got["input"], "demo.wav")
@@ -55,6 +57,8 @@ class TestServerGenerateKwargs(unittest.TestCase):
         self.assertEqual(got["sentence_timestamp"], True)
         self.assertEqual(got["merge_vad"], True)
         self.assertEqual(got["merge_length_s"], 12)
+        self.assertEqual(got["batch_size_s"], 30)
+        self.assertEqual(got["vad_kwargs"]["max_single_segment_time"], 15000)
         self.assertIn("max_end_silence_time", got)
 
     def test_build_generate_kwargs_skips_optional_empty_values(self):
@@ -67,6 +71,8 @@ class TestServerGenerateKwargs(unittest.TestCase):
             vad_preset=None,
             merge_vad=None,
             merge_length_s=None,
+            batch_size_s=None,
+            vad_max_single_segment_time=None,
         )
 
         self.assertEqual(
@@ -76,6 +82,49 @@ class TestServerGenerateKwargs(unittest.TestCase):
                 "batch_size": 1,
             },
         )
+
+    def test_build_model_runtime_config_applies_runtime_overrides(self):
+        cfg = self.server.build_model_runtime_config(
+            model_name="paraformer",
+            device="cpu",
+            hub="ms",
+            disable_update=False,
+            ncpu=2,
+            log_level="debug",
+            disable_pbar=True,
+            punc_mode="disabled",
+        )
+        self.assertEqual(cfg["device"], "cpu")
+        self.assertEqual(cfg["hub"], "ms")
+        self.assertEqual(cfg["disable_update"], False)
+        self.assertEqual(cfg["ncpu"], 2)
+        self.assertEqual(cfg["log_level"], "DEBUG")
+        self.assertEqual(cfg["disable_pbar"], True)
+        self.assertNotIn("punc_model", cfg)
+
+    def test_build_model_runtime_config_rejects_invalid_values(self):
+        with self.assertRaises(ValueError):
+            self.server.build_model_runtime_config(
+                model_name="paraformer",
+                device=None,
+                hub=None,
+                disable_update=None,
+                ncpu=0,
+                log_level=None,
+                disable_pbar=None,
+                punc_mode="auto",
+            )
+        with self.assertRaises(ValueError):
+            self.server.build_model_runtime_config(
+                model_name="paraformer",
+                device=None,
+                hub=None,
+                disable_update=None,
+                ncpu=None,
+                log_level="trace",
+                disable_pbar=None,
+                punc_mode="auto",
+            )
 
 
 if __name__ == "__main__":

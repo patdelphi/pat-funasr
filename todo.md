@@ -1,4 +1,4 @@
-﻿#
+#
 Pat WebUI 开发 Todo
 
 说明：本文件是当前唯一执行清单，只跟踪下一阶段的 "Pat WebUI" 开发工作；已完成的旧事项仅保留归档摘要，不再作为当前待办继续维护。
@@ -51,7 +51,7 @@ Pat WebUI 开发 Todo
 - [x] B3. 高级参数面板
 - [x] B4. 批量与队列
 - [x] B5. 第一版回归验证
-- [ ] C1. 技术路线决策
+- [x] C1. 技术路线决策
 - [ ] C2. 官方增强能力逐项落地
 
 ## 当前目标
@@ -93,7 +93,7 @@ Pat WebUI 开发 Todo
 - [x] 复制现有 UI 入口到："app/pat_funasr_webui/gradio_app.py"
 - [x] 如有必要，提取 Pat WebUI 自己的工具模块（如请求构建、响应保存、模型列表适配）
 - [x] 新增启动脚本："run_ui_pat.bat"
-- [ ] 评估是否新增："FunASR_pat.bat"（同时启动 API + Pat WebUI）
+- [x] 新增："FunASR_pat.bat"（同时启动 API + Pat WebUI）
 - [x] 设定默认端口为 "7861"，避免与原 UI 冲突
 - [x] 设定默认 API base_url 为 "http://localhost:8000"
 
@@ -108,14 +108,14 @@ Pat WebUI 开发 Todo
 
 ### B0. 页面骨架与状态管理
 
-- [ ] 明确页面结构：基础转写区 / 高级参数区 / 结果预览区 / 下载区 / 批量区
-- [ ] 明确单文件与多文件两条处理流程
-- [ ] 明确错误展示区、运行状态区、结果缓存区
+- [x] 明确页面结构：基础转写区 / 高级参数区 / 结果预览区 / 下载区 / 批量区
+- [x] 明确单文件与多文件两条处理流程
+- [x] 明确错误展示区、运行状态区、结果缓存区
 
 验收：
 
-- [ ] 页面结构已固定，后续功能项可直接挂载
-- [ ] 单文件与批量流程的状态流转清晰
+- [x] 页面结构已固定，后续功能项可直接挂载
+- [x] 单文件与批量流程的状态流转清晰
 
 ### B1. 动态模型列表
 
@@ -205,24 +205,25 @@ Pat WebUI 开发 Todo
 ### C2. 功能范围
 
 - [ ] 离线识别（ASR）：Paraformer / SenseVoice / Fun-ASR-Nano / Qwen3-ASR
-- [ ] 流式识别（Streaming ASR）
-- [ ] 说话人分离（Diarization）
-- [ ] 情感识别（Emotion）
-- [ ] 语音活动检测（VAD）
-- [ ] 标点恢复（PUNC）
+- [x] 流式识别（Streaming ASR）：新增后端 "/v1/funasr/streaming" + Pat WebUI Streaming 区
+- [x] 说话人分离（Diarization）：新增后端 "/v1/funasr/diarization" + Pat WebUI 说话人分离区（MVP）
+- [x] 说话人分离导出增强：Pat WebUI 页面支持直接下载 json / txt / srt / vtt / tsv / zip
+- [x] 情感识别（Emotion）：新增后端 "/v1/funasr/emotion" + Pat WebUI 情感识别区（MVP）
+- [x] 语音活动检测（VAD）：已并入离线识别页，支持预设 + 单段最大时长控制
+- [x] 标点恢复（PUNC）：已并入离线识别页，支持按请求关闭外置 PUNC
 
 ### C3. 关键参数支持
 
-- [ ] 通用参数：model / device / hub / disable_update / ncpu / log_level / disable_pbar
-- [ ] ASR 参数：batch_size_s / hotword / language / use_itn / merge_vad / merge_length_s
-- [ ] VAD 参数：vad_kwargs.max_single_segment_time
+- [x] 通用参数：model / device / hub / disable_update / ncpu / log_level / disable_pbar
+- [x] ASR 参数：batch_size_s / hotword / language / use_itn / merge_vad / merge_length_s
+- [x] VAD 参数：vad_kwargs.max_single_segment_time
 - [ ] Streaming 参数：chunk_size / encoder_chunk_look_back / decoder_chunk_look_back / cache / is_final
-- [ ] Diarization 参数：spk_model / spk_mode
-- [ ] Emotion 参数：granularity
+- [x] Diarization 参数：spk_model / spk_mode
+- [x] Emotion 参数：granularity
 
 验收：
 
-- [ ] 至少完成 1 个非基础 ASR 能力的真实可用闭环
+- [x] 至少完成 1 个非基础 ASR 能力的真实可用闭环
 
 ## 官方能力映射备注
 
@@ -231,7 +232,7 @@ Pat WebUI 开发 Todo
 - Fun-ASR-Nano：多语言，内置标点，后续可重点考虑国际化场景
 - SenseVoice：除识别外还带情感/事件标签，适合作为增强能力优先候选
 - Qwen3-ASR：精度高但链路更重，建议放在增强阶段而非 MVP 阶段
-- Emotion2vec：可作为独立情感能力补充，不建议在 MVP 阶段并入
+- Emotion2vec：已作为独立情感能力接入 MVP，当前先支持整体情感排序；时间片能力后续继续增强
 
 ## 依赖与前提
 
@@ -247,6 +248,7 @@ Pat WebUI 开发 Todo
 - [ ] 确认是否需要新增独立的后端适配层
 - [ ] 确认 Gradio 组件是否足够承载流式识别交互；若不足，需提前调整实现方式
 - [ ] 确认 Qwen3-ASR、说话人分离、情感识别是否要一起进入第一轮增强范围
+- [x] UI 规划口径：只有独立工作流拆 Tab；VAD / PUNC / batch_size_s 等强相关参数并入原页面
 
 ## 已完成归档
 

@@ -61,6 +61,9 @@ class TestModelConfigs(unittest.TestCase):
         self.assertFalse(cfgs["qwen3-asr-0.6b"].get("trust_remote_code"))
         self.assertEqual(cfgs["qwen3-asr-0.6b"].get("dtype"), "fp16")
 
+        self.assertEqual(cfgs["emotion2vec-plus-large"]["model"], "iic/emotion2vec_plus_large")
+        self.assertEqual(cfgs["emotion2vec-plus-large"].get("hub"), "ms")
+
     def test_batch_transcribe_configs_align_server(self):
         server = _load_server_module()
         batch = _load_batch_transcribe_module()
@@ -74,6 +77,34 @@ class TestModelConfigs(unittest.TestCase):
             self.assertEqual(batch_cfgs[alias]["model"], server_cfgs[alias]["model"])
             self.assertEqual(batch_cfgs[alias].get("hub"), server_cfgs[alias].get("hub"))
             self.assertEqual(batch_cfgs[alias].get("trust_remote_code"), server_cfgs[alias].get("trust_remote_code"))
+
+    def test_model_capabilities_align_routes(self):
+        server = _load_server_module()
+
+        caps = server.MODEL_CAPABILITIES
+        self.assertTrue(caps["sensevoice"]["offline_asr"])
+        self.assertTrue(caps["sensevoice"]["emotion"])
+        self.assertTrue(caps["sensevoice"]["diarization"])
+        self.assertTrue(caps["sensevoice"]["vad"])
+        self.assertTrue(caps["paraformer"]["punc"])
+        self.assertTrue(caps["paraformer-zh-streaming"]["streaming_asr"])
+        self.assertFalse(caps["paraformer-zh-streaming"]["offline_asr"])
+        self.assertIn("paraformer-zh-streaming", server.STREAMING_MODELS)
+        self.assertTrue(caps["emotion2vec-plus-large"]["emotion"])
+        self.assertFalse(caps["emotion2vec-plus-large"]["offline_asr"])
+        self.assertIn("emotion2vec-plus-large", server.EMOTION_MODELS)
+        self.assertIn("sensevoice", server.EMOTION_MODELS)
+        self.assertTrue(caps["paraformer"]["diarization"])
+        self.assertIn("paraformer", server.DIARIZATION_MODELS)
+        self.assertIn("sensevoice", server.DIARIZATION_MODELS)
+        self.assertIn("fun-asr-nano", server.DIARIZATION_MODELS)
+
+    def test_model_ready_detects_loaded_variants(self):
+        server = _load_server_module()
+        server.MODEL_REGISTRY.clear()
+        server.MODEL_REGISTRY["paraformer::device=cpu|hub=ms|disable_update=True|ncpu=|log_level=|disable_pbar=|punc_model=ct-punc"] = object()
+        self.assertTrue(server._is_model_ready("paraformer"))
+        self.assertFalse(server._is_model_ready("sensevoice"))
 
 
 if __name__ == "__main__":

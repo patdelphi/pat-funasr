@@ -55,6 +55,39 @@ def _split_text(text: str) -> List[str]:
     return [c for c in chunks if c]
 
 
+def _to_seconds(value: Any) -> Optional[float]:
+    """把毫秒或秒级时间戳安全转换为秒。"""
+    if value is None:
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if numeric < 0:
+        return None
+    if numeric >= 1000:
+        return numeric / 1000.0
+    return numeric
+
+
+def _extract_seconds_from_timestamp_items(items: Any) -> tuple[Optional[float], Optional[float]]:
+    """兼容 [[start_ms, end_ms]] 与 [{start_time,end_time}] 两种时间戳格式。"""
+    if not isinstance(items, list) or not items:
+        return None, None
+    first = items[0]
+    last = items[-1]
+    if isinstance(first, dict) and isinstance(last, dict):
+        return _to_seconds(first.get("start_time")), _to_seconds(last.get("end_time"))
+    if (
+        isinstance(first, (list, tuple))
+        and len(first) >= 2
+        and isinstance(last, (list, tuple))
+        and len(last) >= 2
+    ):
+        return _to_seconds(first[0]), _to_seconds(last[1])
+    return None, None
+
+
 def build_segments_from_sentence_info(
     sentence_info: Any,
     *,
@@ -67,15 +100,26 @@ def build_segments_from_sentence_info(
     for seg in sentence_info:
         if not isinstance(seg, dict):
             continue
+        text = clean_text(str(seg.get("text") or seg.get("sentence") or ""))
+        start = _to_seconds(seg.get("start"))
+        end = _to_seconds(seg.get("end"))
+        if start is None or end is None:
+            ts_start, ts_end = _extract_seconds_from_timestamp_items(
+                seg.get("timestamp") or seg.get("timestamps")
+            )
+            start = start if start is not None else ts_start
+            end = end if end is not None else ts_end
+        if text == "" or start is None or end is None or end < start:
+            continue
         segments.append(
             {
-                "start": (seg.get("start", 0) or 0) / 1000.0,
-                "end": (seg.get("end", 0) or 0) / 1000.0,
-                "text": clean_text(str(seg.get("text", "") or "")),
+                "start": round(start, 3),
+                "end": round(end, 3),
+                "text": text,
                 "speaker": seg.get("spk", None),
             }
         )
-    return [s for s in segments if s.get("text")]
+    return segments
 
 
 def build_segments_from_text(
@@ -116,4 +160,3 @@ def build_segments(
     if segments:
         return segments
     return build_segments_from_text(result0.get("text", ""), duration_s=duration_s, clean_text=clean_text)
-

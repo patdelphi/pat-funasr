@@ -43,6 +43,7 @@ def apply_vad_controls(
     vad_preset: Optional[str],
     merge_vad: Optional[bool],
     merge_length_s: Optional[int],
+    vad_max_single_segment_time: Optional[int],
 ) -> Dict[str, Any]:
     out = dict(generate_kwargs)
 
@@ -56,5 +57,12 @@ def apply_vad_controls(
         if merge_length_s <= 0:
             raise ValueError("merge_length_s must be > 0")
         out["merge_length_s"] = int(merge_length_s)
+
+    if vad_max_single_segment_time is not None:
+        if vad_max_single_segment_time <= 0:
+            raise ValueError("vad_max_single_segment_time must be > 0")
+        vad_kwargs = dict(out.get("vad_kwargs") or {})
+        vad_kwargs["max_single_segment_time"] = int(vad_max_single_segment_time)
+        out["vad_kwargs"] = vad_kwargs
 
     return out

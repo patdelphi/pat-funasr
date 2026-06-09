@@ -1,4 +1,4 @@
-﻿"""
+"""
 程序说明：
 输出渲染器单元测试（unittest）。
 
@@ -63,6 +63,22 @@ class TestRenderers(unittest.TestCase):
             [{"start": 0.0, "end": 1.0, "text": "1234567890"}], max_line_width=4
         )
         self.assertEqual(got, "1234\n5678\n90\n")
+
+    def test_render_with_speaker_prefix(self):
+        speaker_segments = [
+            {"start": 0.0, "end": 1.2, "text": "你好", "speaker": 0},
+            {"start": 1.2, "end": 2.8, "text": "欢迎光临", "speaker": 1},
+        ]
+        txt = renderers.render_txt(speaker_segments)
+        srt = renderers.render_srt(speaker_segments)
+        tsv = renderers.render_tsv(speaker_segments)
+        vtt = renderers.render_vtt(speaker_segments)
+        self.assertIn("[spk=0] 你好", txt)
+        self.assertIn("[spk=1] 欢迎光临", txt)
+        self.assertIn("[spk=0] 你好", srt)
+        self.assertIn("[spk=1] 欢迎光临", srt)
+        self.assertIn("0.00\t1.20\t[spk=0] 你好", tsv)
+        self.assertIn("[spk=1] 欢迎光临", vtt)
 
     def test_render_all_zip(self):
         payload = renderers.build_verbose_json_payload(

@@ -37,9 +37,11 @@ class TestVadPresets(unittest.TestCase):
             vad_preset="anti_hallucination",
             merge_vad=True,
             merge_length_s=10,
+            vad_max_single_segment_time=15000,
         )
         self.assertEqual(out["merge_vad"], True)
         self.assertEqual(out["merge_length_s"], 10)
+        self.assertEqual(out["vad_kwargs"]["max_single_segment_time"], 15000)
         self.assertIn("max_end_silence_time", out)
 
     def test_merge_length_must_be_positive(self):
@@ -49,6 +51,17 @@ class TestVadPresets(unittest.TestCase):
                 vad_preset=None,
                 merge_vad=None,
                 merge_length_s=0,
+                vad_max_single_segment_time=None,
+            )
+
+    def test_vad_max_single_segment_time_must_be_positive(self):
+        with self.assertRaises(ValueError):
+            vad_presets.apply_vad_controls(
+                generate_kwargs={},
+                vad_preset=None,
+                merge_vad=None,
+                merge_length_s=None,
+                vad_max_single_segment_time=0,
             )
 
 

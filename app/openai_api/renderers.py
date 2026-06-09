@@ -75,12 +75,20 @@ def _wrap_text(text: str, max_line_width: Optional[int]) -> str:
     return "\n".join(lines)
 
 
+def _with_speaker_prefix(seg: Dict[str, Any], text: str) -> str:
+    speaker = seg.get("speaker", None)
+    if speaker is None or text == "":
+        return text
+    return f"[spk={speaker}] {text}"
+
+
 def render_txt(segments: List[Dict[str, Any]], *, max_line_width: Optional[int] = None) -> str:
     parts: List[str] = []
     for seg in segments:
         seg_text = str(seg.get("text", "") or "").strip()
         if not seg_text:
             continue
+        seg_text = _with_speaker_prefix(seg, seg_text)
         parts.append(_wrap_text(seg_text, max_line_width))
     return "\n\n".join(parts).strip() + ("\n" if parts else "")
 
@@ -91,6 +99,7 @@ def render_tsv(segments: List[Dict[str, Any]]) -> str:
         start = _clamp_seconds(seg.get("start", 0.0))
         end = _clamp_seconds(seg.get("end", 0.0))
         text = str(seg.get("text", "") or "").replace("\n", " ").strip()
+        text = _with_speaker_prefix(seg, text)
         lines.append(f"{start:.2f}\t{end:.2f}\t{text}")
     return "\n".join(lines).strip() + ("\n" if lines else "")
 
@@ -102,6 +111,7 @@ def render_srt(segments: List[Dict[str, Any]], *, max_line_width: Optional[int] 
         text = str(seg.get("text", "") or "").strip()
         if not text:
             continue
+        text = _with_speaker_prefix(seg, text)
         start = _format_timestamp_srt(seg.get("start", 0.0))
         end = _format_timestamp_srt(seg.get("end", 0.0))
         body = _wrap_text(text, max_line_width)
@@ -119,6 +129,7 @@ def render_vtt(segments: List[Dict[str, Any]], *, max_line_width: Optional[int] 
         text = str(seg.get("text", "") or "").strip()
         if not text:
             continue
+        text = _with_speaker_prefix(seg, text)
         start = _format_timestamp_vtt(seg.get("start", 0.0))
         end = _format_timestamp_vtt(seg.get("end", 0.0))
         body = _wrap_text(text, max_line_width)
