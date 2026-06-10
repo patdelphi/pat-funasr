@@ -70,6 +70,12 @@ API 实现：[server.py](../app/openai_api/server.py)
 | qwen3-asr-0.6b | Qwen/Qwen3-ASR-0.6B | Qwen/Qwen3-ASR-0.6B | ms | 与 `qwen3-asr` 相同：30 种语言 + 上述 22 种中文方言/口音 | ⚠️ | ⚠️ | ⚠️ | ⚠️ | 更轻量的 Qwen3-ASR（当前项目未接其原生 streaming/vLLM 链路） |
 | emotion2vec-plus-large | iic/emotion2vec_plus_large | iic/emotion2vec_plus_large | ms | 官方 README 强调跨语种/跨场景鲁棒性，但未公开逐项语言与中文方言名单 | ❌ | ❌ | ❌ | ❌ | 独立情感识别 |
 
+流式模型候选说明：
+
+- 当前项目已启用：`paraformer-zh-streaming`
+- 官方/Model Zoo 还有 Online/Streaming 候选：Paraformer-online、Paraformer-large-online、UniASR online 多语种系列
+- 本轮策略：只记录候选，不自动下载、不默认启用；新增模型前需要先确认模型缓存、依赖、显存与输出协议
+
 补充：本项目在 MODEL_CONFIGS 中的链路配置
 
 - sensevoice：vad_model=fsmn-vad，vad_kwargs.max_single_segment_time=30000；官方链路原生带标点，当前项目不默认挂外置 punc_model

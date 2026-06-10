@@ -4,6 +4,7 @@ REM Program: start FunASR API and Pat WebUI in a managed single CMD window.
 setlocal
 chcp 65001 >nul
 cd /d "%~dp0"
+if exist "%~dp0.env.local.bat" call "%~dp0.env.local.bat"
 set "DEVICE=%~1"
 if "%DEVICE%"=="" set "DEVICE=cuda"
 if not exist "%~dp0runtime\python\python.exe" (

@@ -16,6 +16,7 @@ if "%PORT%"=="" (
 
 echo Starting Pat WebUI on http://127.0.0.1:%PORT%
 cd /d "%~dp0app\pat_funasr_webui"
+if exist "%~dp0.env.local.bat" call "%~dp0.env.local.bat"
 set "PYTHONPATH=%~dp0runtime\python;%~dp0runtime\python\Lib\site-packages;%~dp0app"
 set "PATH=%~dp0runtime\python\Lib\site-packages\torch\lib;%PATH%"
 "%~dp0runtime\python\python.exe" -X utf8 gradio_app.py --base-url http://localhost:8000 --port %PORT%

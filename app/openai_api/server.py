@@ -33,6 +33,7 @@ from typing import Optional
 import uuid
 import urllib.request
 
+import numpy as np
 import uvicorn
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import JSONResponse, Response
@@ -101,6 +102,7 @@ def _dbg_report(
 app = FastAPI(title="FunASR OpenAI-Compatible API", version="1.0.0")
 
 MODEL_REGISTRY = {}
+MODEL_LOAD_STATUS: dict[str, dict] = {}
 DEVICE = "cpu"
 
 MODEL_CONFIGS = {
@@ -237,6 +239,18 @@ STREAMING_SESSIONS: dict[str, dict] = {}
 STREAMING_SESSION_TTL_S = 3600
 VALID_LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
 VALID_PUNC_MODES = {"auto", "disabled"}
+VALID_MODEL_HUBS = {"ms", "modelscope", "hf", "huggingface"}
+
+
+def get_default_model_hub() -> str | None:
+    """读取项目默认模型来源；空值表示使用模型静态配置。"""
+    raw = os.environ.get("FUNASR_MODEL_HUB", "").strip().lower()
+    if not raw:
+        return None
+    if raw not in VALID_MODEL_HUBS:
+        logger.warning("Ignoring unsupported FUNASR_MODEL_HUB=%s", raw)
+        return None
+    return "ms" if raw == "modelscope" else "hf" if raw == "huggingface" else raw
 
 
 def _parse_chunk_size(raw: str) -> list[int]:
@@ -303,8 +317,9 @@ def build_model_runtime_config(
     cfg["device"] = device or DEVICE
     cfg["disable_update"] = True if disable_update is None else bool(disable_update)
 
-    if hub:
-        cfg["hub"] = hub
+    effective_hub = hub or get_default_model_hub()
+    if effective_hub:
+        cfg["hub"] = effective_hub
     if ncpu is not None:
         if int(ncpu) <= 0:
             raise ValueError("ncpu must be > 0")
@@ -352,6 +367,24 @@ def _loaded_model_names() -> list[str]:
     return sorted({str(key).split("::", 1)[0] for key in MODEL_REGISTRY})
 
 
+def _model_load_state(model_name: str) -> dict:
+    """返回模型加载状态；ready 以缓存为最终依据。"""
+    if model_name not in MODEL_CONFIGS:
+        raise ValueError(f"Unknown model '{model_name}'. Available: {list(MODEL_CONFIGS.keys())}")
+    status = MODEL_LOAD_STATUS.get(model_name, {})
+    if _is_model_ready(model_name):
+        state = "ready"
+    else:
+        state = str(status.get("state") or "not_loaded")
+    return {
+        "model": model_name,
+        "ready": state == "ready",
+        "state": state,
+        "error": status.get("error"),
+        "updated_at": status.get("updated_at"),
+    }
+
+
 def load_model(
     model_name: str,
     *,
@@ -378,6 +411,7 @@ def load_model(
     )
     registry_key = build_model_registry_key(model_name, cfg)
     if registry_key in MODEL_REGISTRY:
+        MODEL_LOAD_STATUS[model_name] = {"state": "ready", "error": None, "updated_at": time.time()}
         return MODEL_REGISTRY[registry_key]
 
     from funasr import AutoModel
@@ -401,12 +435,18 @@ def load_model(
                     break
 
     logger.info(f"Loading model '{model_name}' on {cfg['device']}...")
+    MODEL_LOAD_STATUS[model_name] = {"state": "loading", "error": None, "updated_at": time.time()}
     t0 = time.time()
-    model = AutoModel(**cfg)
+    try:
+        model = AutoModel(**cfg)
+    except Exception as exc:
+        MODEL_LOAD_STATUS[model_name] = {"state": "error", "error": str(exc), "updated_at": time.time()}
+        raise
     elapsed = time.time() - t0
     logger.info(f"Model '{model_name}' loaded in {elapsed:.1f}s")
 
     MODEL_REGISTRY[registry_key] = model
+    MODEL_LOAD_STATUS[model_name] = {"state": "ready", "error": None, "updated_at": time.time()}
     return model
 
 
@@ -437,6 +477,512 @@ def merge_streaming_text(previous_text: str, chunk_text: str) -> str:
         if previous.endswith(current[:overlap]):
             return previous + current[overlap:]
     return previous + current
+
+
+def pcm16_bytes_to_float32_audio(chunk: bytes) -> np.ndarray:
+    """把 PCM16 little-endian 分片解码为 FunASR streaming 官方示例使用的 float32 采样数组。"""
+    if not chunk:
+        raise ValueError("上传分片为空")
+    usable = len(chunk) - (len(chunk) % 2)
+    if usable <= 0:
+        raise ValueError("PCM16 分片长度无效")
+    samples = np.frombuffer(chunk[:usable], dtype="<i2")
+    if samples.size == 0:
+        raise ValueError("PCM16 分片没有有效采样点")
+    return samples.astype(np.float32) / 32768.0
+
+
+def build_native_mic_stream_html() -> str:
+    """生成绕过 Gradio Audio 的原生浏览器 Mic 实时识别页面。"""
+    return """<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pat-FunASR Mic 实时识别</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #ffffff;
+      --panel: #ffffff;
+      --text: #111827;
+      --muted: #4b5563;
+      --border: #e5e7eb;
+      --control-border: #d1d5db;
+      --control-bg: #ffffff;
+      --subtle: #f9fafb;
+      --meter-bg: #f3f4f6;
+      --primary: #2563eb;
+      --danger: #dc2626;
+      --ok: #16a34a;
+      --wave-bg: #111827;
+      --wave-line: #22c55e;
+    }
+    :root[data-theme="light"] {
+      color-scheme: light;
+    }
+    :root[data-theme="dark"] {
+      --bg: #111827;
+      --panel: #1f2937;
+      --text: #f9fafb;
+      --muted: #d1d5db;
+      --border: #374151;
+      --control-border: #4b5563;
+      --control-bg: #111827;
+      --subtle: #111827;
+      --meter-bg: #374151;
+      --primary: #3b82f6;
+      --danger: #ef4444;
+      --ok: #22c55e;
+      --wave-bg: #030712;
+      --wave-line: #4ade80;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]) {
+        --bg: #111827;
+        --panel: #1f2937;
+        --text: #f9fafb;
+        --muted: #d1d5db;
+        --border: #374151;
+        --control-border: #4b5563;
+        --control-bg: #111827;
+        --subtle: #111827;
+        --meter-bg: #374151;
+        --primary: #3b82f6;
+        --danger: #ef4444;
+        --ok: #22c55e;
+        --wave-bg: #030712;
+        --wave-line: #4ade80;
+      }
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; overflow: hidden; }
+    body { margin: 0; background: transparent; color: var(--text); font-family: "Microsoft YaHei", "Segoe UI", Arial, sans-serif; font-size: 14px; }
+    main { width: 100%; max-width: 1120px; height: 100%; margin: 0 auto; padding: 10px; overflow: hidden; }
+    h1 { margin: 0 0 8px; font-size: 18px; font-weight: 600; letter-spacing: 0; }
+    .grid { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 10px; align-items: stretch; height: calc(100% - 34px); min-height: 0; }
+    section { background: var(--panel); border: 0; border-radius: 8px; padding: 10px; min-height: 0; overflow: hidden; }
+    label { display: block; color: var(--muted); font-size: 12px; margin: 8px 0 5px; }
+    select, input, textarea { width: 100%; border: 1px solid var(--control-border); border-radius: 6px; padding: 7px 9px; font: inherit; background: var(--control-bg); color: var(--text); }
+    select, input { min-height: 34px; }
+    textarea { resize: none; line-height: 1.45; }
+    .row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+    button, a { min-height: 34px; border-radius: 6px; border: 1px solid var(--control-border); background: var(--control-bg); color: var(--text); padding: 6px 11px; font: inherit; text-decoration: none; cursor: pointer; }
+    button.primary { background: var(--primary); border-color: var(--primary); color: white; }
+    button.stop { background: var(--danger); border-color: var(--danger); color: white; }
+    button:disabled, a[aria-disabled="true"] { opacity: .45; cursor: not-allowed; pointer-events: none; }
+    .meter { height: 10px; margin: 7px 0; border-radius: 999px; background: var(--meter-bg); border: 1px solid var(--border); overflow: hidden; }
+    .meter div { width: 0%; height: 100%; background: var(--ok); transition: width .08s linear; }
+    .stats { display: flex; gap: 14px; align-items: center; flex-wrap: nowrap; margin: 7px 0 8px; color: var(--muted); font-size: 12px; white-space: nowrap; }
+    .stat strong { color: var(--text); font-size: 13px; font-weight: 600; margin-left: 4px; }
+    canvas { width: 100%; height: 72px; border: 1px solid var(--border); border-radius: 8px; background: var(--wave-bg); display: block; }
+    .status { color: var(--muted); min-height: 18px; margin: 0 0 5px; font-size: 12px; }
+    details { margin-top: 10px; border-top: 1px solid var(--border); padding-top: 8px; }
+    summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+    .muted { color: var(--muted); font-size: 12px; margin: 7px 0 0; }
+    .control-section, .result-section { display: flex; flex-direction: column; }
+    .download-row { margin-top: auto; padding-top: 10px; }
+    #transcriptBox { flex: 1; min-height: 150px; }
+    #logBox { height: 70px; margin-top: 7px; }
+    @media (max-width: 880px) { html, body { height: auto; overflow: auto; } main { height: auto; padding: 10px; overflow: visible; } .grid { grid-template-columns: 1fr; height: auto; } section { overflow: visible; } #transcriptBox { height: 180px; } }
+  </style>
+  <script>
+    function applyTheme(theme) {
+      if (theme === "light" || theme === "dark") {
+        document.documentElement.dataset.theme = theme;
+        return;
+      }
+      document.documentElement.removeAttribute("data-theme");
+    }
+    const requestedTheme = new URLSearchParams(location.search).get("theme");
+    applyTheme(requestedTheme);
+    matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
+      if (!new URLSearchParams(location.search).get("theme")) applyTheme("auto");
+    });
+    window.addEventListener("message", (event) => {
+      let originHost = "";
+      try { originHost = new URL(event.origin).hostname; } catch (_) {}
+      if (originHost !== "127.0.0.1" && originHost !== "localhost") return;
+      const theme = event.data && event.data.type === "pat-theme" ? event.data.theme : "";
+      applyTheme(theme);
+    });
+  </script>
+</head>
+<body>
+  <main>
+    <h1>Mic 实时识别</h1>
+    <div class="grid">
+      <section class="control-section">
+        <label for="deviceSelect">输入设备</label>
+        <select id="deviceSelect"><option value="">系统默认输入设备</option></select>
+        <div class="row">
+          <button id="refreshButton">刷新设备</button>
+          <button id="startButton" class="primary" disabled>开始录制并识别</button>
+          <button id="stopButton" class="stop" disabled>停止录制</button>
+        </div>
+        <div class="row download-row">
+          <a id="downloadLink" aria-disabled="true">下载录音</a>
+        </div>
+        <details>
+          <summary>高级设置</summary>
+          <label for="modelInput">模型</label>
+          <input id="modelInput" value="paraformer-zh-streaming">
+          <label for="chunkSizeInput">chunk_size</label>
+          <input id="chunkSizeInput" value="0,30,15">
+          <p class="muted">默认约 1.8 秒一片，减少短词切碎。</p>
+        </details>
+      </section>
+      <section class="result-section">
+        <p id="status" class="status">未开始。</p>
+        <div class="meter"><div id="levelBar"></div></div>
+        <div class="stats">
+          <div class="stat">峰值<strong id="peakValue">0.0000</strong></div>
+          <div class="stat">RMS<strong id="rmsValue">0.0000</strong></div>
+          <div class="stat">分片<strong id="sentValue">0</strong></div>
+        </div>
+        <canvas id="waveCanvas" width="900" height="180"></canvas>
+        <label for="transcriptBox">识别结果</label>
+        <textarea id="transcriptBox" readonly></textarea>
+        <div class="row download-row">
+          <a id="downloadTranscriptLink" aria-disabled="true">下载识别结果</a>
+        </div>
+        <details>
+          <summary>运行日志</summary>
+          <textarea id="logBox" readonly style="min-height:120px;"></textarea>
+        </details>
+      </section>
+    </div>
+  </main>
+  <script>
+    const deviceSelect = document.getElementById("deviceSelect");
+    const refreshButton = document.getElementById("refreshButton");
+    const startButton = document.getElementById("startButton");
+    const stopButton = document.getElementById("stopButton");
+    const downloadLink = document.getElementById("downloadLink");
+    const downloadTranscriptLink = document.getElementById("downloadTranscriptLink");
+    const statusEl = document.getElementById("status");
+    const levelBar = document.getElementById("levelBar");
+    const peakValue = document.getElementById("peakValue");
+    const rmsValue = document.getElementById("rmsValue");
+    const sentValue = document.getElementById("sentValue");
+    const transcriptBox = document.getElementById("transcriptBox");
+    const logBox = document.getElementById("logBox");
+    const canvas = document.getElementById("waveCanvas");
+    const ctx = canvas.getContext("2d");
+    let stream = null, audioContext = null, source = null, processor = null, mediaRecorder = null, startupWatchdog = null;
+    let flushPromise = Promise.resolve();
+    let sessionId = "", sent = 0, running = false, starting = false, pcmBuffer = [], recordedChunks = [], objectUrl = "";
+    let transcriptObjectUrl = "";
+    let lastPeak = 0, lowSignalFrames = 0, autoRestarted = false;
+    let modelReady = false;
+    const targetRate = 16000;
+
+    function log(message) {
+      const time = new Date().toLocaleTimeString();
+      logBox.value += `[${time}] ${message}\\n`;
+      logBox.scrollTop = logBox.scrollHeight;
+    }
+    function setStatus(message) { statusEl.textContent = message; log(message); }
+    function formatBrowserError(error) {
+      const message = error?.message || String(error);
+      if (message.includes("Permission denied") || message.includes("NotAllowedError")) {
+        return "麦克风权限被浏览器拒绝，请在地址栏允许此页面使用麦克风后再开始。";
+      }
+      return message;
+    }
+    async function microphonePermissionState() {
+      try {
+        if (!navigator.permissions || !navigator.permissions.query) return "";
+        const permission = await navigator.permissions.query({ name: "microphone" });
+        return permission.state || "";
+      } catch (_) {
+        return "";
+      }
+    }
+    function updateTranscriptDownload() {
+      if (transcriptObjectUrl) URL.revokeObjectURL(transcriptObjectUrl);
+      const text = transcriptBox.value || "";
+      if (!text.trim()) {
+        downloadTranscriptLink.removeAttribute("href");
+        downloadTranscriptLink.setAttribute("aria-disabled", "true");
+        return;
+      }
+      transcriptObjectUrl = URL.createObjectURL(new Blob(["\\ufeff" + text.replace(/\\n/g, "\\r\\n")], { type: "text/plain;charset=utf-8" }));
+      downloadTranscriptLink.href = transcriptObjectUrl;
+      downloadTranscriptLink.download = `mic-transcript-${Date.now()}.txt`;
+      downloadTranscriptLink.setAttribute("aria-disabled", "false");
+    }
+    function uuid() { return crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2); }
+    function selectedModel() {
+      return document.getElementById("modelInput").value.trim() || "paraformer-zh-streaming";
+    }
+    function setModelReady(ready) {
+      modelReady = ready;
+      startButton.disabled = !ready || running || starting;
+    }
+    async function fetchModelStatus() {
+      const model = encodeURIComponent(selectedModel());
+      const response = await fetch(`/v1/models/${model}/status`);
+      if (!response.ok) throw new Error(await response.text());
+      return await response.json();
+    }
+    async function preloadSelectedModel() {
+      setModelReady(false);
+      const modelName = selectedModel();
+      setStatus(`正在检查模型 ${modelName}...`);
+      const status = await fetchModelStatus();
+      if (status.ready) {
+        setModelReady(true);
+        setStatus(`模型 ${modelName} 已就绪，可以开始录制。`);
+        return;
+      }
+      setStatus(`模型 ${modelName} 加载中，请稍候...`);
+      const response = await fetch(`/v1/models/${encodeURIComponent(modelName)}/load`, { method: "POST" });
+      if (!response.ok) throw new Error(await response.text());
+      const loaded = await response.json();
+      if (!loaded.ready) throw new Error(`模型状态异常：${loaded.state || "unknown"}`);
+      setModelReady(true);
+      setStatus(`模型 ${modelName} 已就绪，可以开始录制。`);
+    }
+    async function ensureModelReadyBeforeRecording() {
+      if (modelReady) return;
+      await preloadSelectedModel();
+    }
+    function currentChunkSamples() {
+      const raw = document.getElementById("chunkSizeInput").value.trim() || "0,30,15";
+      const parts = raw.split(",").map(part => Number.parseInt(part.trim(), 10));
+      if (parts.length !== 3 || parts.some(Number.isNaN) || parts.some(value => value < 0)) {
+        return 28800;
+      }
+      return Math.max(9600, parts[1] * 960);
+    }
+    function downsample(input, sourceRate) {
+      if (sourceRate === targetRate) return input;
+      const ratio = sourceRate / targetRate;
+      const outLen = Math.floor(input.length / ratio);
+      const output = new Float32Array(outLen);
+      for (let i = 0; i < outLen; i++) {
+        const start = Math.floor(i * ratio);
+        const end = Math.min(input.length, Math.floor((i + 1) * ratio));
+        let sum = 0, count = 0;
+        for (let j = start; j < end; j++) { sum += input[j]; count += 1; }
+        output[i] = count ? sum / count : 0;
+      }
+      return output;
+    }
+    function floatToPcm16(samples) {
+      const bytes = new Uint8Array(samples.length * 2);
+      const view = new DataView(bytes.buffer);
+      for (let i = 0; i < samples.length; i++) {
+        const s = Math.max(-1, Math.min(1, samples[i]));
+        view.setInt16(i * 2, s < 0 ? s * 32768 : s * 32767, true);
+      }
+      return bytes;
+    }
+    function draw(samples) {
+      const styles = getComputedStyle(document.documentElement);
+      ctx.fillStyle = styles.getPropertyValue("--wave-bg").trim() || "#111827";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.strokeStyle = styles.getPropertyValue("--wave-line").trim() || "#22c55e";
+      ctx.lineWidth = 2; ctx.beginPath();
+      const step = Math.max(1, Math.floor(samples.length / canvas.width));
+      for (let x = 0; x < canvas.width; x++) {
+        const y = (1 - (samples[x * step] || 0)) * canvas.height / 2;
+        if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+    }
+    function updateMeter(samples) {
+      let peak = 0, sum = 0;
+      for (const v of samples) { const a = Math.abs(v); peak = Math.max(peak, a); sum += v * v; }
+      const rms = Math.sqrt(sum / Math.max(1, samples.length));
+      lastPeak = peak;
+      lowSignalFrames = peak < 0.002 && rms < 0.0008 ? lowSignalFrames + 1 : 0;
+      peakValue.textContent = peak.toFixed(4);
+      rmsValue.textContent = rms.toFixed(4);
+      levelBar.style.width = `${Math.min(100, Math.round(peak * 100))}%`;
+      draw(samples);
+    }
+    async function enumerateAudioInputs() {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
+        setStatus("当前浏览器不支持 mediaDevices.enumerateDevices。");
+        return [];
+      }
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        return devices.filter(d => d.kind === "audioinput");
+      } catch (error) {
+        log(`设备枚举失败：${error.message}`);
+        return [];
+      }
+    }
+    function resetDeviceOptions() {
+      deviceSelect.innerHTML = "";
+      const def = document.createElement("option");
+      def.value = ""; def.textContent = "系统默认输入设备"; deviceSelect.appendChild(def);
+    }
+    async function refreshDevices(preferConcreteDevice = true) {
+      const previousValue = deviceSelect.value;
+      resetDeviceOptions();
+      let inputs = await enumerateAudioInputs();
+      inputs.forEach((d, i) => {
+        const option = document.createElement("option");
+        option.value = d.deviceId; option.textContent = d.label || `麦克风 ${i + 1}`;
+        deviceSelect.appendChild(option);
+      });
+      if ([...deviceSelect.options].some(option => option.value === previousValue)) {
+        deviceSelect.value = previousValue;
+      } else if (preferConcreteDevice && inputs.length > 0) {
+        const defaultInput = inputs.find(d => d.deviceId === "default");
+        deviceSelect.value = (defaultInput || inputs[0]).deviceId;
+      }
+      const selectedLabel = deviceSelect.selectedOptions[0]?.textContent || "系统默认输入设备";
+      const permissionState = await microphonePermissionState();
+      if (permissionState === "denied") {
+        setStatus(`麦克风权限被拒绝，无法读取真实设备名；当前选择：${selectedLabel}`);
+      } else {
+        setStatus(`发现 ${inputs.length} 个输入设备；当前选择：${selectedLabel}`);
+      }
+    }
+    async function postChunk(samples, isFinal) {
+      const form = new FormData();
+      form.append("file", new Blob([floatToPcm16(samples)], { type: "application/octet-stream" }), "chunk.pcm");
+      form.append("model", selectedModel());
+      form.append("session_id", sessionId);
+      form.append("reset", sent === 0 ? "true" : "false");
+      form.append("is_final", isFinal ? "true" : "false");
+      form.append("chunk_size", document.getElementById("chunkSizeInput").value.trim() || "0,30,15");
+      form.append("encoder_chunk_look_back", "4");
+      form.append("decoder_chunk_look_back", "1");
+      const response = await fetch("/v1/funasr/streaming", { method: "POST", body: form });
+      if (!response.ok) throw new Error(await response.text());
+      const payload = await response.json();
+      sent += 1; sentValue.textContent = String(sent);
+      if (Object.prototype.hasOwnProperty.call(payload, "full_text")) {
+        transcriptBox.value = payload.full_text;
+        updateTranscriptDownload();
+      }
+      if (payload.text) {
+        log(`识别：${payload.text}`);
+      } else if (sent % 5 === 0) {
+        log(`已发送 ${sent} 个分片，后端暂未返回文字。`);
+      }
+    }
+    async function flushChunks(isFinal=false) {
+      const samplesPerChunk = currentChunkSamples();
+      while (pcmBuffer.length >= samplesPerChunk || (isFinal && pcmBuffer.length > 0)) {
+        const size = isFinal && pcmBuffer.length < samplesPerChunk ? pcmBuffer.length : samplesPerChunk;
+        const chunk = new Float32Array(pcmBuffer.splice(0, size));
+        await postChunk(chunk, isFinal && pcmBuffer.length === 0);
+      }
+    }
+    function queueFlush(isFinal=false) {
+      flushPromise = flushPromise.catch(() => {}).then(() => flushChunks(isFinal));
+      return flushPromise;
+    }
+    async function start() {
+      if (starting) return;
+      starting = true;
+      await stop(false);
+      await ensureModelReadyBeforeRecording();
+      sessionId = uuid(); sent = 0; pcmBuffer = []; transcriptBox.value = ""; recordedChunks = []; running = true; flushPromise = Promise.resolve();
+      updateTranscriptDownload();
+      lastPeak = 0; lowSignalFrames = 0;
+      try {
+        const deviceId = deviceSelect.value;
+        const constraints = { audio: deviceId ? { deviceId: { exact: deviceId }, echoCancellation: false, noiseSuppression: false, autoGainControl: false } : { echoCancellation: false, noiseSuppression: false, autoGainControl: false }, video: false };
+        stream = await navigator.mediaDevices.getUserMedia(constraints);
+        await refreshDevices();
+        const activeDeviceId = stream.getAudioTracks()[0]?.getSettings?.().deviceId || "";
+        if (activeDeviceId && [...deviceSelect.options].some(option => option.value === activeDeviceId)) {
+          deviceSelect.value = activeDeviceId;
+        }
+        audioContext = new AudioContext();
+        if (audioContext.state === "suspended") {
+          await audioContext.resume();
+        }
+        source = audioContext.createMediaStreamSource(stream);
+        processor = audioContext.createScriptProcessor(4096, 1, 1);
+        processor.onaudioprocess = async (event) => {
+          if (!running) return;
+          if (startupWatchdog) {
+            clearTimeout(startupWatchdog);
+            startupWatchdog = null;
+          }
+          const input = event.inputBuffer.getChannelData(0);
+          updateMeter(input);
+          if (!autoRestarted && lowSignalFrames >= 18) {
+            autoRestarted = true;
+            setStatus("检测到启动后持续近静音，正在自动重建麦克风采集链路...");
+            setTimeout(() => start().catch(error => setStatus(`自动重启失败：${error.message}`)), 0);
+            return;
+          }
+          const down = downsample(input, audioContext.sampleRate);
+          for (const v of down) pcmBuffer.push(v);
+          queueFlush(false).catch(error => setStatus(`发送分片失败：${error.message}`));
+        };
+        source.connect(processor); processor.connect(audioContext.destination);
+        mediaRecorder = new MediaRecorder(stream);
+        mediaRecorder.ondataavailable = e => { if (e.data && e.data.size) recordedChunks.push(e.data); };
+        mediaRecorder.onstop = () => {
+          if (objectUrl) URL.revokeObjectURL(objectUrl);
+          objectUrl = URL.createObjectURL(new Blob(recordedChunks, { type: mediaRecorder.mimeType || "audio/webm" }));
+          downloadLink.href = objectUrl; downloadLink.download = `native-mic-${Date.now()}.webm`; downloadLink.setAttribute("aria-disabled", "false");
+        };
+        mediaRecorder.start(500);
+        startButton.disabled = true; stopButton.disabled = false; downloadLink.setAttribute("aria-disabled", "true");
+        setStatus("正在原生收声并实时识别。");
+        startupWatchdog = setTimeout(() => {
+          if (running && sent === 0 && !autoRestarted) {
+            autoRestarted = true;
+            setStatus("启动后没有收到音频回调，正在自动重建麦克风采集链路...");
+            start().catch(error => setStatus(`自动重启失败：${error.message}`));
+          }
+        }, 1800);
+      } finally {
+        starting = false;
+      }
+    }
+    async function stop(show=true) {
+      running = false;
+      if (startupWatchdog) { clearTimeout(startupWatchdog); startupWatchdog = null; }
+      try { await flushPromise; if (pcmBuffer.length) await queueFlush(true); } catch (error) { log(`最终分片失败：${error.message}`); }
+      if (mediaRecorder && mediaRecorder.state !== "inactive") mediaRecorder.stop();
+      if (processor) { processor.disconnect(); processor = null; }
+      if (source) { source.disconnect(); source = null; }
+      if (audioContext) { await audioContext.close(); audioContext = null; }
+      if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+      startButton.disabled = !modelReady; stopButton.disabled = true;
+      if (show) setStatus("已停止录制。");
+    }
+    refreshButton.onclick = () => refreshDevices(true).catch(e => setStatus(`刷新设备失败：${e.message}`));
+    startButton.onclick = () => {
+      autoRestarted = false;
+      start().catch(e => setStatus(`启动失败：${formatBrowserError(e)}`));
+    };
+    stopButton.onclick = () => stop(true);
+    deviceSelect.onchange = () => {
+      if (running && !starting) {
+        autoRestarted = false;
+        setStatus("输入设备已切换，正在自动重启采集...");
+        start().catch(e => setStatus(`切换设备失败：${formatBrowserError(e)}`));
+      }
+    };
+    document.getElementById("modelInput").onchange = () => {
+      setModelReady(false);
+      preloadSelectedModel().catch(e => setStatus(`模型加载失败：${e.message}`));
+    };
+    window.addEventListener("beforeunload", () => {
+      if (stream) stream.getTracks().forEach(t => t.stop());
+      if (transcriptObjectUrl) URL.revokeObjectURL(transcriptObjectUrl);
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    });
+    refreshDevices(true).catch(e => setStatus(`初始化失败：${e.message}`));
+    preloadSelectedModel().catch(e => setStatus(`模型加载失败：${e.message}`));
+  </script>
+</body>
+</html>
+"""
 
 
 def build_generate_kwargs(
@@ -821,8 +1367,8 @@ async def transcribe_streaming(
     reset: Optional[bool] = Form(default=False),
     is_final: Optional[bool] = Form(default=False),
     chunk_size: str = Form(default="0,10,5"),
-    encoder_chunk_look_back: int = Form(default=0),
-    decoder_chunk_look_back: int = Form(default=0),
+    encoder_chunk_look_back: int = Form(default=4),
+    decoder_chunk_look_back: int = Form(default=1),
 ):
     if model not in MODEL_CONFIGS:
         raise HTTPException(
@@ -857,8 +1403,9 @@ async def transcribe_streaming(
 
     try:
         asr_model = load_model(model)
+        speech_chunk = pcm16_bytes_to_float32_audio(chunk)
         result = asr_model.generate(
-            input=chunk,
+            input=speech_chunk,
             cache=state["cache"],
             is_final=bool(is_final),
             chunk_size=parsed_chunk_size,
@@ -1038,6 +1585,37 @@ async def list_models():
             ),
         })
     return JSONResponse({"object": "list", "data": models})
+
+
+@app.get("/v1/models/{model}/status")
+async def model_status(model: str):
+    """查询模型是否已加载完成。"""
+    try:
+        return JSONResponse(_model_load_state(model))
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/v1/models/{model}/load")
+async def preload_model(model: str):
+    """主动加载模型，供前端在开始收音前等待。"""
+    if model not in MODEL_CONFIGS:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Model '{model}' not found. Available: {list(MODEL_CONFIGS.keys())}",
+        )
+    try:
+        load_model(model)
+        return JSONResponse(_model_load_state(model))
+    except Exception as exc:
+        logger.error(f"Model preload error: {exc}")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.get("/mic-stream")
+async def native_mic_stream_page():
+    """原生浏览器 Mic 流式识别页，绕过 Gradio Audio 采集层。"""
+    return Response(build_native_mic_stream_html(), media_type="text/html; charset=utf-8")
 
 
 @app.get("/health")

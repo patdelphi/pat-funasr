@@ -8,6 +8,7 @@
 """
 
 import importlib.util
+import os
 import sys
 import unittest
 from pathlib import Path
@@ -116,6 +117,38 @@ class TestServerTranscriptionsEndpoint(unittest.TestCase):
             self._captured_generate_kwargs["vad_kwargs"]["max_single_segment_time"],
             15000,
         )
+
+    def test_transcriptions_preserves_uploaded_audio_suffix_without_wav_conversion(self):
+        resp = self.client.post(
+            "/v1/audio/transcriptions",
+            data={"model": "paraformer", "response_format": "json"},
+            files={"file": ("demo.mp3", b"ID3" + b"\x00" * 128, "audio/mpeg")},
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertIsNotNone(self._captured_generate_kwargs)
+        self.assertTrue(self._captured_generate_kwargs["input"].endswith(".mp3"))
+
+    def test_default_model_hub_can_come_from_environment(self):
+        old_value = os.environ.get("FUNASR_MODEL_HUB")
+        try:
+            os.environ["FUNASR_MODEL_HUB"] = "hf"
+            cfg = self.server.build_model_runtime_config(
+                model_name="paraformer",
+                device=None,
+                hub=None,
+                disable_update=None,
+                ncpu=None,
+                log_level=None,
+                disable_pbar=None,
+                punc_mode=None,
+            )
+        finally:
+            if old_value is None:
+                os.environ.pop("FUNASR_MODEL_HUB", None)
+            else:
+                os.environ["FUNASR_MODEL_HUB"] = old_value
+
+        self.assertEqual(cfg["hub"], "hf")
 
 
 if __name__ == "__main__":
