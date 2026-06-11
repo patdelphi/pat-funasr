@@ -2861,8 +2861,17 @@ def build_app(default_base_url: str, default_timeout: float):
                         stream_download = gr.File(label="下载结果", visible=True)
                     with gr.Column(scale=1, min_width=420):
                         gr.Markdown("### Mic 实时识别", elem_classes=["pat-compact-markdown"])
+                        gr.HTML(
+                            '<div style="border:1px solid var(--border-color-primary,#dce2eb);border-radius:8px;padding:14px;background:var(--background-fill-secondary,#f9fafb);margin-bottom:10px;">'
+                            '<div style="font-size:14px;font-weight:600;margin-bottom:6px;">原生 Mic 页面（推荐）</div>'
+                            '<div style="color:var(--body-text-color-subdued,#667386);font-size:12px;line-height:1.5;margin-bottom:10px;">'
+                            '独立处理麦克风权限、设备枚举、实时波形、结果下载，兼容性更好。</div>'
+                            '<a href="http://127.0.0.1:8000/mic-stream" target="_blank" rel="noreferrer" '
+                            'style="display:inline-flex;align-items:center;justify-content:center;min-height:36px;padding:6px 12px;border-radius:6px;background:var(--button-primary-background-fill,#2563eb);color:var(--button-primary-text-color,#fff);font-weight:600;text-decoration:none;">'
+                            '打开 Mic 实时识别</a></div>'
+                        )
                         stream_microphone = gr.Audio(
-                            label="Gradio 麦克风",
+                            label="Gradio 麦克风（备用）",
                             sources=["microphone"],
                             type="numpy",
                         )
