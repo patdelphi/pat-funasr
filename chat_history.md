@@ -1,4 +1,4 @@
-﻿#
+#
 Chat History
 
 ## 2026-06-08 08:21:21
@@ -2631,3 +2631,46 @@ un_gradio_streaming_asr_test.bat 和测试 	ests/test_aipython_gradio_streaming_
 ## 2026-06-11 11:24:21 +08:00 Assistant
 
 开始执行发布前验证、文档更新、提交与推送流程；范围包括正式 Gradio 原生 Mic 流式识别改动、独立 Gradio Mic 测试页、相关测试与文档更新。
+
+## 2026-06-11 +08:00 User
+
+先整体理解一下项目
+
+## 2026-06-11 +08:00 Assistant
+
+完成项目整体理解：Pat FunASR 是 FunASR 的 Windows GPU 便携版封装，含 OpenAI 兼容 API + Gradio WebUI，接入 8 个 ASR 模型，支持离线/流式/说话人分离/情感识别。
+
+## 2026-06-11 +08:00 User
+
+你先做个探查看看还有什么具体问题没解决，有哪些没有对齐，有哪些bug要解决，除了官方，还有gradio组件调用方法对不对，先做探查，记录文档
+
+## 2026-06-11 +08:00 Assistant
+
+启动 3 个并行探查 agent（API 服务端 / Gradio WebUI / 测试与文档），共发现 37 个问题（5 高 / 19 中 / 13 低），写入探查报告与修复计划。
+
+## 2026-06-11 +08:00 User
+
+[计划已批准，开始执行修复]
+
+## 2026-06-11 +08:00 Assistant
+
+执行修复计划，完成以下改动：
+
+**P0 修复（3项）：**
+- H1: `server.py:1294` result[0] 加空列表保护，避免 IndexError
+- G-H1: `gradio_app.py:1497` 返回类型标注从 `tuple[str,str,str]` 修正为 `tuple[str,str,str,str]`
+- D1: `Docs/api.md:126-127` streaming 端点默认值修正（encoder 0→4, decoder 0→1）
+
+**P1 修复（4项）：**
+- H2: `server.py` load_model 加 `threading.Lock` 保护 MODEL_REGISTRY 并发访问
+- H3: `server.py` /health 端点移除 `model_variants_loaded` 内部 key 暴露
+- M4: `server.py` 上传文件加 2GB 大小限制
+- M6: `segmentation.py` _to_seconds 阈值从 `>=1000` 改为 `>=10000 且为整数`
+
+**文档与 todo.md 清理：**
+- D2: `Docs/model-capability-matrix.md` 端点列表补全 5 个缺失端点
+- D3: 模型别名补全 paraformer-zh-streaming 和 emotion2vec-plus-large
+- D4: 参数白名单更新为当前实际实现
+- T1-T5: todo.md 任务 1-6 标记 [x]，A2/C2 标记 [x]，streaming 参数标记 [x]
+
+**验证：** 全量 134 测试通过，无新增 warning。

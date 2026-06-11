@@ -1494,7 +1494,7 @@ def build_service_dashboard_snapshot(base_url: str, timeout: float, capability_f
     return status_text, raw_json, overview_markdown, capability_markdown, target_markdown
 
 
-def check_service_and_capabilities(base_url: str, timeout: float, capability_filter: str) -> tuple[str, str, str]:
+def check_service_and_capabilities(base_url: str, timeout: float, capability_filter: str) -> tuple[str, str, str, str]:
     """同时返回服务状态原始 JSON 与模型能力看板。"""
     _, raw_json, overview_markdown, capability_markdown, target_markdown = build_service_dashboard_snapshot(
         base_url,

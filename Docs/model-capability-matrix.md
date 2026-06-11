@@ -1,4 +1,4 @@
-﻿#
+#
 ASR 模型能力矩阵与 API 参数说明
 
 目的：让你快速理解“不同模型能做到什么/不能做到什么”，以及在本项目里“可调用的 API、可用参数、可得到的输出格式”分别是什么。
@@ -6,7 +6,7 @@ ASR 模型能力矩阵与 API 参数说明
 范围：
 
 - 当前项目已接入的 OpenAI 兼容 API（FastAPI）："app/openai_api/server.py"
-- 当前 API 已内置的模型别名（model 参数）：sensevoice / paraformer / paraformer-en / fun-asr-nano / qwen3-asr / qwen3-asr-0.6b
+- 当前 API 已内置的模型别名（model 参数）：sensevoice / paraformer / paraformer-en / paraformer-zh-streaming / fun-asr-nano / qwen3-asr / qwen3-asr-0.6b / emotion2vec-plus-large
 - 输出格式：json / verbose_json / txt / srt / vtt / tsv / all(zip)
 
 ## 命名说明（重要）
@@ -28,22 +28,33 @@ API 实现：[server.py](../app/openai_api/server.py)
 
 ### 1) 端点
 
-- POST "/v1/audio/transcriptions"
-- GET "/v1/models"
-- GET "/health"
+- POST "/v1/audio/transcriptions" — 离线转写
+- POST "/v1/funasr/streaming" — 流式识别（PCM16/16k 分片）
+- POST "/v1/funasr/diarization" — 说话人分离
+- POST "/v1/funasr/emotion" — 情感识别
+- GET "/v1/models" — 模型列表
+- GET "/v1/models/{model}/status" — 单模型加载状态
+- POST "/v1/models/{model}/load" — 触发模型预加载
+- GET "/health" — 健康检查
 
 ### 2) POST /v1/audio/transcriptions（已实现参数）
 
-- file：音频文件（必填）
+- file：音频文件（必填，最大 2GB）
 - model：模型别名（默认 "sensevoice"）
-  - 可选：sensevoice / paraformer / paraformer-en / fun-asr-nano / qwen3-asr / qwen3-asr-0.6b
+  - 可选：sensevoice / paraformer / paraformer-en / paraformer-zh-streaming / fun-asr-nano / qwen3-asr / qwen3-asr-0.6b / emotion2vec-plus-large
 - language：语言提示（可选，透传给 FunASR generate）
 - response_format：输出格式（默认 "json"）
   - 已实现：json / verbose_json / txt / srt / vtt / tsv / all(zip)
 - max_line_width：每行最大字符数（可选，仅影响 txt/srt/vtt 渲染）
 - vad_preset：default / anti_hallucination（可选）
+- vad_max_single_segment_time：单段最大时长毫秒（可选）
 - merge_vad：true/false（可选）
 - merge_length_s：合并段长度（秒，可选，需要 merge_vad=true）
+- hotword：热词字符串（可选，逗号/空格分隔）
+- use_itn：是否开启逆文本正规化（可选）
+- batch_size_s：动态批总时长（可选）
+- batch_size_threshold_s：长音频动态批阈值（可选）
+- punc_mode：auto / disabled（可选）
 
 ### 3) 输出字段（已实现）
 
@@ -129,10 +140,13 @@ API 实现：[server.py](../app/openai_api/server.py)
 
 建议 API 只开放：
 
-- 通用：model / language / response_format
-- 字幕渲染：max_line_width / max_words_per_line / max_line_count
-- VAD：vad_preset / merge_vad / merge_length_s（vad_kwargs 仅开放白名单字段）
-- 文本：use_itn（仅 sensevoice）/ hotword（仅 paraformer 优先）
+- 通用：model / language / response_format / device / hub / disable_update / ncpu / log_level / disable_pbar
+- 字幕渲染：max_line_width
+- VAD：vad_preset / merge_vad / merge_length_s / vad_max_single_segment_time
+- 文本：use_itn（仅 sensevoice）/ hotword（仅 paraformer 优先）/ batch_size_s / batch_size_threshold_s / punc_mode
+- 流式：chunk_size / encoder_chunk_look_back / decoder_chunk_look_back / session_id / reset / is_final
+- 说话人分离：spk_model / spk_mode / preset_spk_num
+- 情感识别：granularity
 
 ## 六、你关心的“输出能力差异”怎么落地成产品体验
 

@@ -30,6 +30,7 @@ import re
 import logging
 import json
 from typing import Optional
+import threading
 import uuid
 import urllib.request
 
@@ -103,6 +104,7 @@ app = FastAPI(title="FunASR OpenAI-Compatible API", version="1.0.0")
 
 MODEL_REGISTRY = {}
 MODEL_LOAD_STATUS: dict[str, dict] = {}
+MODEL_LOAD_LOCK = threading.Lock()
 DEVICE = "cpu"
 
 MODEL_CONFIGS = {
@@ -397,7 +399,7 @@ def load_model(
     punc_mode: Optional[str] = None,
     spk_model: Optional[str] = None,
 ):
-    """Load a model and store in registry."""
+    """Load a model and store in registry. Thread-safe via MODEL_LOAD_LOCK."""
     cfg = build_model_runtime_config(
         model_name=model_name,
         device=device,
@@ -410,9 +412,11 @@ def load_model(
         spk_model=spk_model,
     )
     registry_key = build_model_registry_key(model_name, cfg)
-    if registry_key in MODEL_REGISTRY:
-        MODEL_LOAD_STATUS[model_name] = {"state": "ready", "error": None, "updated_at": time.time()}
-        return MODEL_REGISTRY[registry_key]
+
+    with MODEL_LOAD_LOCK:
+        if registry_key in MODEL_REGISTRY:
+            MODEL_LOAD_STATUS[model_name] = {"state": "ready", "error": None, "updated_at": time.time()}
+            return MODEL_REGISTRY[registry_key]
 
     from funasr import AutoModel
 
@@ -422,14 +426,12 @@ def load_model(
         # ModelScope local cache lookup
         cache_root = os.environ.get("MODELSCOPE_CACHE", "")
         if cache_root:
-            # ModelScope creates models/<org>/<repo> under cache dir
             local_paths = [
                 os.path.join(cache_root, model_id, "model.pt"),
                 os.path.join(cache_root, "models", model_id, "model.pt"),
             ]
             for pt in local_paths:
                 if os.path.exists(pt):
-                    # Pass local dir as model; keep original model_id for vad lookup
                     cfg["model"] = os.path.dirname(pt)
                     logger.info(f"Using local model: {cfg['model']}")
                     break
@@ -445,8 +447,9 @@ def load_model(
     elapsed = time.time() - t0
     logger.info(f"Model '{model_name}' loaded in {elapsed:.1f}s")
 
-    MODEL_REGISTRY[registry_key] = model
-    MODEL_LOAD_STATUS[model_name] = {"state": "ready", "error": None, "updated_at": time.time()}
+    with MODEL_LOAD_LOCK:
+        MODEL_REGISTRY[registry_key] = model
+        MODEL_LOAD_STATUS[model_name] = {"state": "ready", "error": None, "updated_at": time.time()}
     return model
 
 
@@ -1184,11 +1187,17 @@ async def transcribe(
             detail=f"Unsupported punc_mode '{punc_mode}'. Allowed: {sorted(VALID_PUNC_MODES)}",
         )
 
-    # Save uploaded file
+    # Save uploaded file (with size limit)
     trace_id = uuid.uuid4().hex
+    MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024  # 2 GB
     suffix = os.path.splitext(file.filename)[1] if file.filename else ".wav"
+    content = await file.read()
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Upload too large: {len(content)} bytes exceeds limit of {MAX_UPLOAD_BYTES} bytes",
+        )
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-        content = await file.read()
         tmp.write(content)
         tmp_path = tmp.name
     # #region debug-point D:transcription-upload
@@ -1291,8 +1300,9 @@ async def transcribe(
             f"duration_s={duration_s:.2f}, "
             f"rtf={rtf:.3f}"
         )
-        text = clean_text(result[0].get("text", ""))
-        segments = segmentation.build_segments(result0=result[0], duration_s=duration_s, clean_text=clean_text)
+        result0 = result[0] if result else {"text": ""}
+        text = clean_text(result0.get("text", ""))
+        segments = segmentation.build_segments(result0=result0, duration_s=duration_s, clean_text=clean_text)
         if not segments:
             segments = [{"start": 0.0, "end": round(duration_s, 3), "text": text, "speaker": None}]
         # #region debug-point D:transcription-generate-done
@@ -1625,7 +1635,6 @@ async def health():
         "status": "ok",
         "device": DEVICE,
         "models_loaded": _loaded_model_names(),
-        "model_variants_loaded": sorted(MODEL_REGISTRY.keys()),
         "models_available": list(MODEL_CONFIGS.keys()),
     }
 

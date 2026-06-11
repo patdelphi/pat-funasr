@@ -1,4 +1,4 @@
-﻿﻿#
+#
 Pat WebUI 开发 Todo
 
 说明：本文件是当前唯一执行清单，只跟踪下一阶段的 "Pat WebUI" 开发工作；已完成的旧事项仅保留归档摘要，不再作为当前待办继续维护。
@@ -32,8 +32,8 @@ Pat WebUI 开发 Todo
 
 ## 当前进行中
 
-- [ ] 阶段 A：Pat WebUI 分支隔离
-- [ ] 阶段 B：Pat WebUI 第一版
+- [x] 阶段 A：Pat WebUI 分支隔离
+- [x] 阶段 B：Pat WebUI 第一版
 
 ## 当前专项计划：FunASR 官方文档对齐与稳定性优化
 
@@ -57,60 +57,59 @@ Pat WebUI 开发 Todo
 
 ### 任务 1：修正 SenseVoice 默认标点模型配置
 
-- [ ] 修改文件：`"app/openai_api/server.py"`
-- [ ] 修改点：从 `MODEL_CONFIGS["sensevoice"]` 中移除 `punc_model`
-- [ ] 保留点：`MODEL_CONFIGS["paraformer"]` 与 `MODEL_CONFIGS["paraformer-zh-streaming"]` 继续保留 `punc_model="ct-punc"`
-- [ ] 同步文件：`"scripts/prefetch_models.py"`、`"scripts/batch_transcribe.py"` 中的 `sensevoice` 配置保持一致
-- [ ] 先改测试：`"tests/test_model_configs.py"` 增加断言，确认 `sensevoice` 没有 `punc_model`，`paraformer` 仍有
-- [ ] 验证命令：`python -m pytest "tests/test_model_configs.py" -q`
+- [x] 修改文件：`"app/openai_api/server.py"`
+- [x] 修改点：从 `MODEL_CONFIGS["sensevoice"]` 中移除 `punc_model`
+- [x] 保留点：`MODEL_CONFIGS["paraformer"]` 与 `MODEL_CONFIGS["paraformer-zh-streaming"]` 继续保留 `punc_model="ct-punc"`
+- [x] 同步文件：`"scripts/prefetch_models.py"`、`"scripts/batch_transcribe.py"` 中的 `sensevoice` 配置保持一致
+- [x] 先改测试：`"tests/test_model_configs.py"` 增加断言，确认 `sensevoice` 没有 `punc_model`，`paraformer` 仍有
+- [x] 验证命令：`python -m pytest "tests/test_model_configs.py" -q`
 
 ### 任务 2：调试上报增加默认关闭开关
 
-- [ ] 修改文件：`"app/openai_api/server.py"`
-- [ ] 修改点：`_dbg_report()` 开头判断环境变量，例如 `FUNASR_DEBUG_REPORT=1` 时才继续发送事件
-- [ ] 默认行为：未设置环境变量时直接 return，不访问 `127.0.0.1:7777`
-- [ ] 先改测试：新增或扩展 server 纯函数测试，验证默认关闭与显式开启的分支
-- [ ] 验证命令：`python -m pytest "tests/test_server_generate_kwargs.py" -q`
+- [x] 修改文件：`"app/openai_api/server.py"`
+- [x] 修改点：`_dbg_report()` 开头判断环境变量，例如 `FUNASR_DEBUG_REPORT=1` 时才继续发送事件
+- [x] 默认行为：未设置环境变量时直接 return，不访问 `127.0.0.1:7777`
+- [x] 先改测试：新增或扩展 server 纯函数测试，验证默认关闭与显式开启的分支
+- [x] 验证命令：`python -m pytest "tests/test_server_generate_kwargs.py" -q`
 
 ### 任务 3：新增 `batch_size_threshold_s` 参数白名单
 
-- [ ] 修改文件：`"app/openai_api/server.py"`
-- [ ] 修改点：`transcribe()` 增加表单字段 `batch_size_threshold_s: Optional[int]`
-- [ ] 修改点：`build_generate_kwargs()` 增加入参并校验 `> 0`
-- [ ] 透传规则：用户传入时设置 `generate_kwargs["batch_size_threshold_s"] = int(batch_size_threshold_s)`
-- [ ] 错误规则：`batch_size_threshold_s <= 0` 返回 HTTP 400，错误信息清晰
-- [ ] 先改测试：`"tests/test_server_generate_kwargs.py"` 覆盖正常透传与非法值
-- [ ] 验证命令：`python -m pytest "tests/test_server_generate_kwargs.py" -q`
+- [x] 修改文件：`"app/openai_api/server.py"`
+- [x] 修改点：`transcribe()` 增加表单字段 `batch_size_threshold_s: Optional[int]`
+- [x] 修改点：`build_generate_kwargs()` 增加入参并校验 `> 0`
+- [x] 透传规则：用户传入时设置 `generate_kwargs["batch_size_threshold_s"] = int(batch_size_threshold_s)`
+- [x] 错误规则：`batch_size_threshold_s <= 0` 返回 HTTP 400，错误信息清晰
+- [x] 先改测试：`"tests/test_server_generate_kwargs.py"` 覆盖正常透传与非法值
+- [x] 验证命令：`python -m pytest "tests/test_server_generate_kwargs.py" -q`
 
 ### 任务 4：同步 Pat WebUI 参数透传
 
-- [ ] 修改文件：`"app/pat_funasr_webui/gradio_app.py"`
-- [ ] 修改点：高级参数区增加 `batch_size_threshold_s` 数值输入
-- [ ] 修改点：请求后端时带上 `batch_size_threshold_s`
-- [ ] 修改文件：`"app/pat_funasr_webui/app_utils.py"`
-- [ ] 修改点：参数归一化白名单加入 `batch_size_threshold_s`
-- [ ] 先改测试：`"tests/test_pat_webui_utils.py"` 覆盖该字段的数值归一化
-- [ ] 验证命令：`python -m pytest "tests/test_pat_webui_utils.py" -q`
+- [x] 修改文件：`"app/pat_funasr_webui/gradio_app.py"`
+- [x] 修改点：高级参数区增加 `batch_size_threshold_s` 数值输入
+- [x] 修改点：请求后端时带上 `batch_size_threshold_s`
+- [x] 修改文件：`"app/pat_funasr_webui/app_utils.py"`
+- [x] 修改点：参数归一化白名单加入 `batch_size_threshold_s`
+- [x] 先改测试：`"tests/test_pat_webui_utils.py"` 覆盖该字段的数值归一化
+- [x] 验证命令：`python -m pytest "tests/test_pat_webui_utils.py" -q`
 
 ### 任务 5：更新 API 文档与 OpenAPI
 
-- [ ] 修改文件：`"Docs/api.md"`
-- [ ] 修正点：`models_available` 示例补齐当前实际模型：`sensevoice / paraformer / paraformer-en / paraformer-zh-streaming / fun-asr-nano / qwen3-asr / qwen3-asr-0.6b / emotion2vec-plus-large`
-- [ ] 修正点：说明 SenseVoice 不默认挂外置 `punc_model`
-- [ ] 新增点：记录 `batch_size_threshold_s`
-- [ ] 修改文件：`"Docs/model-capability-matrix.md"`
-- [ ] 修正点：补充本轮配置差异与官方文档对齐说明
-- [ ] 修改文件：`"app/openai_api/openapi.json"`
-- [ ] 修正点：补齐新参数、模型枚举与新增端点说明（如当前静态文档缺失 streaming/emotion/diarization，也一并补齐）
-- [ ] 验证命令：`python -m pytest "tests/test_server_transcriptions_endpoint.py" "tests/test_server_streaming_endpoint.py" "tests/test_server_emotion_endpoint.py" "tests/test_server_diarization_endpoint.py" -q`
+- [x] 修改文件：`"Docs/api.md"`
+- [x] 修正点：`models_available` 示例补齐当前实际模型：`sensevoice / paraformer / paraformer-en / paraformer-zh-streaming / fun-asr-nano / qwen3-asr / qwen3-asr-0.6b / emotion2vec-plus-large`
+- [x] 修正点：说明 SenseVoice 不默认挂外置 `punc_model`
+- [x] 新增点：记录 `batch_size_threshold_s`
+- [x] 修改文件：`"Docs/model-capability-matrix.md"`
+- [x] 修正点：补充本轮配置差异与官方文档对齐说明
+- [ ] 修改文件：`"app/openai_api/openapi.json"`（需后续验证是否已同步）
+- [x] 验证命令：`python -m pytest "tests/test_server_transcriptions_endpoint.py" "tests/test_server_streaming_endpoint.py" "tests/test_server_emotion_endpoint.py" "tests/test_server_diarization_endpoint.py" -q`
 
 ### 任务 6：新增上游同步说明
 
-- [ ] 创建文件：`"Docs/upstream-sync.md"`
-- [ ] 内容包括：当前 vendored FunASR 版本、官方教程链接、官方 API 链接、官方仓库链接、同步策略、升级前验证清单
-- [ ] 注意：文档使用 UTF-8 BOM 与 Windows CRLF
-- [ ] 同步索引：更新 `"Docs/README.md"` 增加该文档入口
-- [ ] 验证命令：`python -m pytest "tests/test_model_configs.py" -q`
+- [x] 创建文件：`"Docs/upstream-sync.md"`
+- [x] 内容包括：当前 vendored FunASR 版本、官方教程链接、官方 API 链接、官方仓库链接、同步策略、升级前验证清单
+- [x] 注意：文档使用 UTF-8 BOM 与 Windows CRLF
+- [x] 同步索引：更新 `"Docs/README.md"` 增加该文档入口
+- [x] 验证命令：`python -m pytest "tests/test_model_configs.py" -q`
 
 ### 任务 7：最终回归与收尾
 
@@ -206,14 +205,14 @@ Pat WebUI 开发 Todo
 
 - [x] A0. 补最小化测试与验证骨架
 - [x] A1. 搭建独立目录与启动入口
-- [ ] A2. 打通基础转写链路
+- [x] A2. 打通基础转写链路
 - [x] B1. 动态模型列表
 - [x] B2. 多格式输出与下载
 - [x] B3. 高级参数面板
 - [x] B4. 批量与队列
 - [x] B5. 第一版回归验证
 - [x] C1. 技术路线决策
-- [ ] C2. 官方增强能力逐项落地
+- [x] C2. 官方增强能力逐项落地
 
 ## 当前目标
 
@@ -398,7 +397,7 @@ Pat WebUI 开发 Todo
 - [x] 通用参数：model / device / hub / disable_update / ncpu / log_level / disable_pbar
 - [x] ASR 参数：batch_size_s / hotword / language / use_itn / merge_vad / merge_length_s
 - [x] VAD 参数：vad_kwargs.max_single_segment_time
-- [ ] Streaming 参数：chunk_size / encoder_chunk_look_back / decoder_chunk_look_back / cache / is_final
+- [x] Streaming 参数：chunk_size / encoder_chunk_look_back / decoder_chunk_look_back / cache / is_final
 - [x] Diarization 参数：spk_model / spk_mode
 - [x] Emotion 参数：granularity
 

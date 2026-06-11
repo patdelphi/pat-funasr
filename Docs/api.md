@@ -1,4 +1,4 @@
-﻿#
+#
 OpenAI 兼容 API 说明（API）
 
 实现文件：["app/openai_api/server.py"](../app/openai_api/server.py)
@@ -123,8 +123,8 @@ OpenAI 兼容 API 说明（API）
 - "reset"（可选，默认 false）：是否重置该 session 的 cache
 - "is_final"（可选，默认 false）：最后一个分片标记
 - "chunk_size"（可选，默认 "0,10,5"）：Paraformer-Streaming 的 chunk 配置
-- "encoder_chunk_look_back"（可选，默认 0）
-- "decoder_chunk_look_back"（可选，默认 0）
+- "encoder_chunk_look_back"（可选，默认 4）
+- "decoder_chunk_look_back"（可选，默认 1）
 
 响应示例：
 
