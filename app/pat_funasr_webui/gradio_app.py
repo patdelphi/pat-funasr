@@ -311,6 +311,17 @@ APP_CSS = """
   padding: 12px 14px;
   background: #fafbfc;
 }
+.audio-preview-wrap .wrap {
+  min-height: 120px;
+}
+.audio-preview-wrap .timeline {
+  height: 24px !important;
+  min-height: 24px !important;
+}
+.audio-preview-wrap .player {
+  padding-bottom: 8px;
+}
+}
 """
 
 
@@ -2495,18 +2506,18 @@ def update_media_preview(file_path: str | None):
     if not file_path:
         return (
             gr.Video(value=None, visible=False),
-            gr.Audio(value=None, visible=False, recording=False),
+            gr.update(visible=False),
             "支持音频与视频文件。视频和音频都会显示可播放预览。",
         )
     if is_video_file(file_path):
         return (
             gr.Video(value=file_path, visible=True),
-            gr.Audio(value=None, visible=False, recording=False),
+            gr.update(visible=False),
             f"已加载视频：{Path(file_path).name}",
         )
     return (
         gr.Video(value=None, visible=False),
-        gr.Audio(value=file_path, visible=True, recording=False),
+        gr.update(value=file_path, visible=True),
         f"已加载音频：{Path(file_path).name}",
     )
 
@@ -2787,7 +2798,7 @@ def build_app(default_base_url: str, default_timeout: float):
                             height=220,
                             elem_classes=["pat-media-preview"],
                         )
-                        media_audio_preview = gr.Audio(label="音频预览", visible=False, type="filepath", recording=False)
+                        media_audio_preview = gr.Audio(label="音频预览", visible=False, type="filepath", recording=False, elem_classes=["audio-preview-wrap"])
                         transcribe_button = gr.Button("开始识别", variant="primary")
                         transcript_preview_format = gr.Radio(
                             label="预览格式",

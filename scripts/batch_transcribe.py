@@ -80,7 +80,7 @@ MODEL_CONFIGS = {
     "fun-asr-nano": {
         "model": "FunAudioLLM/Fun-ASR-Nano-2512",
         "hub": "ms",
-        "trust_remote_code": False,
+        "trust_remote_code": True,
         "vad_model": "fsmn-vad",
         "vad_kwargs": {"max_single_segment_time": 30000},
     },

@@ -54,7 +54,7 @@ class TestModelConfigs(unittest.TestCase):
 
         self.assertEqual(cfgs["fun-asr-nano"]["model"], "FunAudioLLM/Fun-ASR-Nano-2512")
         self.assertEqual(cfgs["fun-asr-nano"].get("hub"), "ms")
-        self.assertFalse(cfgs["fun-asr-nano"].get("trust_remote_code"))
+        self.assertTrue(cfgs["fun-asr-nano"].get("trust_remote_code"))
 
         self.assertEqual(cfgs["qwen3-asr"]["model"], "Qwen/Qwen3-ASR-1.7B")
         self.assertEqual(cfgs["qwen3-asr"].get("hub"), "ms")

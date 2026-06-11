@@ -518,8 +518,8 @@ class TestPatWebUiDiarizationExports(unittest.TestCase):
             r"y:\NewStore\AI\FunASR-Portable-GPU\test\demo.wav"
         )
         self.assertEqual(video_update.visible, False)
-        self.assertEqual(audio_update.visible, True)
-        self.assertIn("demo.wav", str(audio_update.value))
+        self.assertTrue(audio_update.get("visible", False))
+        self.assertIn("demo.wav", str(audio_update.get("value", "")))
         self.assertIn("已加载音频", status)
 
     def test_format_streaming_preview_text_keeps_single_paragraph(self):
