@@ -2788,7 +2788,7 @@ def build_app(default_base_url: str, default_timeout: float):
                             height=220,
                             elem_classes=["pat-media-preview"],
                         )
-                        media_audio_preview = gr.Audio(label="音频预览", visible=False)
+                        media_audio_preview = gr.Audio(label="音频预览", visible=False, type="filepath")
                         transcript_preview_format = gr.Radio(
                             label="预览格式",
                             choices=PREVIEW_FORMAT_CHOICES,
@@ -2854,7 +2854,7 @@ def build_app(default_base_url: str, default_timeout: float):
                             height=220,
                             elem_classes=["pat-media-preview"],
                         )
-                        stream_audio_preview = gr.Audio(label="音频预览", visible=False)
+                        stream_audio_preview = gr.Audio(label="音频预览", visible=False, type="filepath")
                         stream_status = gr.Textbox(label="文件识别状态", interactive=False)
                         stream_transcript = gr.Textbox(label="文件流式输出", lines=8, max_lines=18, buttons=["copy"])
                         stream_download_button = gr.Button("生成结果下载", variant="secondary")
@@ -2893,7 +2893,7 @@ def build_app(default_base_url: str, default_timeout: float):
                         height=260,
                         elem_classes=["pat-media-preview"],
                     )
-                    diarization_audio_preview = gr.Audio(label="音频预览", visible=False)
+                    diarization_audio_preview = gr.Audio(label="音频预览", visible=False, type="filepath")
                     diarization_media_status = gr.Markdown("当前支持 paraformer / fun-asr-nano / sensevoice + cam++ 组合。")
                 with gr.Row():
                     diarization_spk_model = gr.Dropdown(
@@ -2948,7 +2948,7 @@ def build_app(default_base_url: str, default_timeout: float):
                         height=260,
                         elem_classes=["pat-media-preview"],
                     )
-                    emotion_audio_preview = gr.Audio(label="音频预览", visible=False)
+                    emotion_audio_preview = gr.Audio(label="音频预览", visible=False, type="filepath")
                     emotion_media_status = gr.Markdown("当前先支持整体情感识别，后续再补时间片能力。")
                 with gr.Row():
                     emotion_granularity = gr.Dropdown(
