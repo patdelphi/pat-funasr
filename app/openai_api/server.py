@@ -46,6 +46,15 @@ import segmentation
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
+
+class _PadTokenIdFilter(logging.Filter):
+    """抑制 transformers 反复打印 pad_token_id 警告。"""
+    def filter(self, record: logging.LogRecord) -> bool:
+        return "pad_token_id" not in record.getMessage()
+
+
+logging.getLogger("transformers").addFilter(_PadTokenIdFilter())
+
 # #region debug-point C:debug-report
 def is_debug_report_enabled() -> bool:
     """判断是否启用本地调试事件上报；默认关闭，避免常规运行时访问调试端口。"""
