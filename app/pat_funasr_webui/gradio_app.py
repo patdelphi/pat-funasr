@@ -2235,19 +2235,18 @@ def batch_transcribe(
     import gradio as gr
 
     paths = normalize_uploaded_paths(batch_files)
-    hidden_batch_download = gr.File(value=None, visible=False)
     if not paths:
-        yield "请先上传至少一个批量文件。", hidden_batch_download, []
+        yield "请先上传至少一个批量文件。", gr.update(visible=False), []
         return
 
     results = initialize_batch_results(paths)
-    yield summarize_batch_results(results), hidden_batch_download, []
+    yield summarize_batch_results(results), gr.update(visible=False), []
 
     for index, file_path in enumerate(paths):
         results[index]["status"] = "running"
         results[index]["message"] = ""
         if index % BATCH_RUNNING_STATUS_UPDATE_EVERY_ITEMS == 0:
-            yield summarize_batch_results(results), hidden_batch_download, [
+            yield summarize_batch_results(results), gr.update(visible=False), [
                 item["source_path"] for item in results if item.get("status") == "error"
             ]
 
@@ -2293,14 +2292,14 @@ def batch_transcribe(
             )
             results[index]["result_path"] = ""
 
-        yield summarize_batch_results(results), hidden_batch_download, [
+        yield summarize_batch_results(results), gr.update(visible=False), [
             item["source_path"] for item in results if item.get("status") == "error"
         ]
 
     summary = summarize_batch_results(results)
     archive_path = build_batch_archive(results)
     failed_paths = [item["source_path"] for item in results if item.get("status") == "error"]
-    yield summary, gr.File(value=archive_path, visible=bool(archive_path)), failed_paths
+    yield summary, gr.update(value=archive_path, visible=bool(archive_path)), failed_paths
 
 
 def retry_failed_batch(
@@ -2873,6 +2872,7 @@ def build_app(default_base_url: str, default_timeout: float):
                             label="Gradio 麦克风",
                             sources=["microphone"],
                             type="numpy",
+                            streaming=True,
                         )
                         mic_status = gr.Textbox(label="麦克风识别状态", interactive=False)
                         mic_signal_status = gr.Textbox(label="麦克风信号", interactive=False)

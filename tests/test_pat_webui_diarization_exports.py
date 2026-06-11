@@ -389,10 +389,10 @@ class TestPatWebUiDiarizationExports(unittest.TestCase):
 
         first_download_update = updates[0][1]
         final_download_update = updates[-1][1]
-        self.assertEqual(first_download_update.visible, False)
-        self.assertIsNone(first_download_update.value)
-        self.assertEqual(final_download_update.visible, True)
-        self.assertIsNotNone(final_download_update.value)
+        self.assertEqual(first_download_update.get("visible", True), False)
+        self.assertIsNone(first_download_update.get("value"))
+        self.assertEqual(final_download_update.get("visible", False), True)
+        self.assertIsNotNone(final_download_update.get("value"))
 
     def test_update_transcription_preview(self):
         payload_json = json.dumps(
