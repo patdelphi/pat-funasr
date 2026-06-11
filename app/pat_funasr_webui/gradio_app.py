@@ -30,7 +30,11 @@ import zipfile
 import subprocess
 import importlib.util
 
+import logging
+
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 CURRENT_DIR = Path(__file__).resolve().parent
 if str(CURRENT_DIR) not in sys.path:
@@ -174,8 +178,8 @@ def _dbg_report(
                     url = line.split("=", 1)[1].strip() or url
                 elif line.startswith("DEBUG_SESSION_ID="):
                     session_id = line.split("=", 1)[1].strip() or session_id
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed to read debug env: %s", exc)
         payload = {
             "sessionId": session_id,
             "runId": run_id,
@@ -193,8 +197,8 @@ def _dbg_report(
             method="POST",
         )
         urllib.request.urlopen(req, timeout=2).read()
-    except Exception:
-        return
+    except Exception as exc:
+        logger.debug("Debug report failed: %s", exc)
 
 
 # #endregion
@@ -212,8 +216,8 @@ def _dbg_get_server_config() -> tuple[str, str]:
                 url = line.split("=", 1)[1].strip() or url
             elif line.startswith("DEBUG_SESSION_ID="):
                 session_id = line.split("=", 1)[1].strip() or session_id
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Failed to read debug config: %s", exc)
     return url, session_id
 
 
@@ -417,7 +421,7 @@ def read_runtime_logs_ui_guard(enabled: bool, max_lines: int, max_bytes_kb: int,
             import gradio as gr
         except Exception:
             return None
-        return gr.update()
+        return gr.Textbox()
     return read_runtime_logs_ui(max_lines, max_bytes_kb, max_section_chars)
 
 
@@ -879,13 +883,13 @@ def run_system_microphone_capture(
             if stream is not None:
                 stream.stop_stream()
                 stream.close()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed to close audio stream: %s", exc)
         try:
             if audio_api is not None:
                 audio_api.terminate()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed to terminate PyAudio: %s", exc)
         with SYSTEM_MIC_STREAMS_LOCK:
             session = SYSTEM_MIC_STREAMS.get(session_id)
             if session is not None:
@@ -917,14 +921,14 @@ def toggle_system_microphone_stream(
         return (
             current_id,
             "正在停止系统麦克风录制...",
-            gr.update(value="开始录制并识别", variant="primary"),
+            gr.Button(value="开始录制并识别", variant="primary"),
         )
 
     try:
         parse_chunk_size_text(chunk_size)
         load_pyaudio_module()
     except Exception as exc:
-        return "", f"系统麦克风启动失败：{exc}", gr.update(value="开始录制并识别", variant="primary")
+        return "", f"系统麦克风启动失败：{exc}", gr.Button(value="开始录制并识别", variant="primary")
 
     new_id = uuid.uuid4().hex
     stop_event = threading.Event()
@@ -956,7 +960,7 @@ def toggle_system_microphone_stream(
     )
     session["thread"] = thread
     thread.start()
-    return new_id, "系统麦克风录制已启动，正在等待音频帧...", gr.update(value="停止录制并识别", variant="stop")
+    return new_id, "系统麦克风录制已启动，正在等待音频帧...", gr.Button(value="停止录制并识别", variant="stop")
 
 
 def start_system_microphone_stream(
@@ -1001,11 +1005,11 @@ def poll_system_microphone_stream(session_id: str | None):
 
     current_id = str(session_id or "")
     if not current_id:
-        return gr.update(), gr.update(), gr.update(), ""
+        return gr.Textbox(), gr.Textbox(), gr.Textbox(), ""
     with SYSTEM_MIC_STREAMS_LOCK:
         session = dict(SYSTEM_MIC_STREAMS.get(current_id) or {})
     if not session:
-        return gr.update(), "系统麦克风会话不存在或已清理。", gr.update(), ""
+        return gr.Textbox(), "系统麦克风会话不存在或已清理。", gr.Textbox(), ""
 
     transcript = format_streaming_preview_text(str(session.get("full_text", "")), final_flag=not bool(session.get("active")))
     status = str(session.get("status", ""))
@@ -1276,8 +1280,8 @@ def stream_transcribe_file(
         try:
             if proc.poll() is None:
                 proc.kill()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed to kill ffmpeg process: %s", exc)
 
 
 def request_transcription_payload(
@@ -1494,7 +1498,7 @@ def build_service_dashboard_snapshot(base_url: str, timeout: float, capability_f
     return status_text, raw_json, overview_markdown, capability_markdown, target_markdown
 
 
-def check_service_and_capabilities(base_url: str, timeout: float, capability_filter: str) -> tuple[str, str, str]:
+def check_service_and_capabilities(base_url: str, timeout: float, capability_filter: str) -> tuple[str, str, str, str]:
     """同时返回服务状态原始 JSON 与模型能力看板。"""
     _, raw_json, overview_markdown, capability_markdown, target_markdown = build_service_dashboard_snapshot(
         base_url,
@@ -2097,12 +2101,12 @@ def auto_refresh_service_dashboard_guard(
         return (None, None, None, None, None, None)
     if not enabled or not tab_active:
         return (
-            gr.update(),
-            gr.update(),
-            gr.update(),
-            gr.update(),
-            gr.update(),
-            gr.update(),
+            gr.Textbox(),
+            gr.Textbox(),
+            gr.Textbox(),
+            gr.Textbox(),
+            gr.Textbox(),
+            gr.Textbox(),
         )
     try:
         status_text, raw_json, overview_markdown, capability_markdown, target_markdown = build_service_dashboard_snapshot(
@@ -2221,7 +2225,7 @@ def batch_transcribe(
     import gradio as gr
 
     paths = normalize_uploaded_paths(batch_files)
-    hidden_batch_download = gr.update(value=None, visible=False)
+    hidden_batch_download = gr.File(value=None, visible=False)
     if not paths:
         yield "请先上传至少一个批量文件。", hidden_batch_download, []
         return
@@ -2286,7 +2290,7 @@ def batch_transcribe(
     summary = summarize_batch_results(results)
     archive_path = build_batch_archive(results)
     failed_paths = [item["source_path"] for item in results if item.get("status") == "error"]
-    yield summary, gr.update(value=archive_path, visible=bool(archive_path)), failed_paths
+    yield summary, gr.File(value=archive_path, visible=bool(archive_path)), failed_paths
 
 
 def retry_failed_batch(
@@ -2476,9 +2480,8 @@ def build_transcription_export_files(payload: dict) -> dict[str, str]:
     return exports
 
 
-def format_streaming_preview_text(full_text: str, final_flag: bool) -> str:
+def format_streaming_preview_text(full_text: str, final_flag: bool = False) -> str:
     """把 streaming 全量文本整理为预览文本，合并过短句并按自然边界换行。"""
-    _ = final_flag
     return truncate_tail_text(format_streaming_text_for_display(full_text), STREAMING_PREVIEW_MAX_CHARS)
 
 
@@ -2491,19 +2494,19 @@ def update_media_preview(file_path: str | None):
 
     if not file_path:
         return (
-            gr.update(value=None, visible=False),
-            gr.update(value=None, visible=False),
+            gr.Video(value=None, visible=False),
+            gr.Audio(value=None, visible=False),
             "支持音频与视频文件。视频和音频都会显示可播放预览。",
         )
     if is_video_file(file_path):
         return (
-            gr.update(value=file_path, visible=True),
-            gr.update(value=None, visible=False),
+            gr.Video(value=file_path, visible=True),
+            gr.Audio(value=None, visible=False),
             f"已加载视频：{Path(file_path).name}",
         )
     return (
-        gr.update(value=None, visible=False),
-        gr.update(value=file_path, visible=True),
+        gr.Video(value=None, visible=False),
+        gr.Audio(value=file_path, visible=True),
         f"已加载音频：{Path(file_path).name}",
     )
 
@@ -2554,16 +2557,16 @@ def refresh_model_dropdown(base_url: str, timeout: float):
         fallback=DEFAULT_DIARIZATION_MODEL,
     )
     return (
-        gr.update(choices=choices, value=choose_default_model(choices) or DEFAULT_MODEL),
-        gr.update(
+        gr.Dropdown(choices=choices, value=choose_default_model(choices) or DEFAULT_MODEL),
+        gr.Dropdown(
             choices=streaming_choices,
             value=choose_default_streaming_model(streaming_choices) or DEFAULT_STREAMING_MODEL,
         ),
-        gr.update(
+        gr.Dropdown(
             choices=emotion_choices,
             value=choose_default_emotion_model(emotion_choices) or DEFAULT_EMOTION_MODEL,
         ),
-        gr.update(
+        gr.Dropdown(
             choices=diarization_choices,
             value=choose_default_diarization_model(diarization_choices) or DEFAULT_DIARIZATION_MODEL,
         ),
@@ -2609,16 +2612,16 @@ def initialize_service_dashboard(base_url: str, timeout: float, capability_filte
         target_markdown = "### 使用建议\n\n加载失败，无法生成建议入口。"
 
     return (
-        gr.update(choices=choices, value=choose_default_model(choices) or DEFAULT_MODEL),
-        gr.update(
+        gr.Dropdown(choices=choices, value=choose_default_model(choices) or DEFAULT_MODEL),
+        gr.Dropdown(
             choices=streaming_choices,
             value=choose_default_streaming_model(streaming_choices) or DEFAULT_STREAMING_MODEL,
         ),
-        gr.update(
+        gr.Dropdown(
             choices=emotion_choices,
             value=choose_default_emotion_model(emotion_choices) or DEFAULT_EMOTION_MODEL,
         ),
-        gr.update(
+        gr.Dropdown(
             choices=diarization_choices,
             value=choose_default_diarization_model(diarization_choices) or DEFAULT_DIARIZATION_MODEL,
         ),
@@ -2638,11 +2641,11 @@ def update_emotion_granularity_options(model: str):
     except ImportError as error:
         raise SystemExit("Install Gradio first: pip install gradio") from error
     if model == "sensevoice":
-        return gr.update(
+        return gr.Dropdown(
             choices=[("utterance", "utterance")],
             value="utterance",
         )
-    return gr.update(
+    return gr.Dropdown(
         choices=[("utterance", "utterance"), ("frame", "frame")],
         value="utterance",
     )
@@ -2861,17 +2864,8 @@ def build_app(default_base_url: str, default_timeout: float):
                         stream_download = gr.File(label="下载结果", visible=True)
                     with gr.Column(scale=1, min_width=420):
                         gr.Markdown("### Mic 实时识别", elem_classes=["pat-compact-markdown"])
-                        gr.HTML(
-                            '<div style="border:1px solid var(--border-color-primary,#dce2eb);border-radius:8px;padding:14px;background:var(--background-fill-secondary,#f9fafb);margin-bottom:10px;">'
-                            '<div style="font-size:14px;font-weight:600;margin-bottom:6px;">原生 Mic 页面（推荐）</div>'
-                            '<div style="color:var(--body-text-color-subdued,#667386);font-size:12px;line-height:1.5;margin-bottom:10px;">'
-                            '独立处理麦克风权限、设备枚举、实时波形、结果下载，兼容性更好。</div>'
-                            '<a href="http://127.0.0.1:8000/mic-stream" target="_blank" rel="noreferrer" '
-                            'style="display:inline-flex;align-items:center;justify-content:center;min-height:36px;padding:6px 12px;border-radius:6px;background:var(--button-primary-background-fill,#2563eb);color:var(--button-primary-text-color,#fff);font-weight:600;text-decoration:none;">'
-                            '打开 Mic 实时识别</a></div>'
-                        )
                         stream_microphone = gr.Audio(
-                            label="Gradio 麦克风（备用）",
+                            label="Gradio 麦克风",
                             sources=["microphone"],
                             type="numpy",
                         )
@@ -3312,8 +3306,8 @@ def main() -> None:
 
             try:
                 asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Failed to set Windows event loop policy: %s", exc)
 
             try:
                 loop = asyncio.get_event_loop()
