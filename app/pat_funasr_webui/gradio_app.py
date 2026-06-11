@@ -3211,11 +3211,6 @@ def build_app(default_base_url: str, default_timeout: float):
             ],
             outputs=[stream_transcript, stream_status],
         )
-        stream_microphone.start_recording(
-            fn=init_microphone_streaming_state,
-            inputs=[base_url, stream_model, timeout],
-            outputs=[stream_mic_session, mic_status],
-        )
         stream_mic_event = stream_microphone.stream(
             fn=stream_transcribe_microphone,
             inputs=[
