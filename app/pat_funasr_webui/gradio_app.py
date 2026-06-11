@@ -2777,7 +2777,6 @@ def build_app(default_base_url: str, default_timeout: float):
                             file_types=list(MEDIA_FILE_SUFFIXES),
                             height=176,
                         )
-                        transcribe_button = gr.Button("开始识别", variant="primary")
                         media_status = gr.Markdown(
                             "支持音频与视频文件。视频和音频都会显示可播放预览。",
                             elem_classes=["pat-compact-markdown"],
@@ -2789,6 +2788,7 @@ def build_app(default_base_url: str, default_timeout: float):
                             elem_classes=["pat-media-preview"],
                         )
                         media_audio_preview = gr.Audio(label="音频预览", visible=False, type="filepath")
+                        transcribe_button = gr.Button("开始识别", variant="primary")
                         transcript_preview_format = gr.Radio(
                             label="预览格式",
                             choices=PREVIEW_FORMAT_CHOICES,
@@ -2806,9 +2806,6 @@ def build_app(default_base_url: str, default_timeout: float):
                                 download_zip = gr.File(label="ZIP", visible=True)
                     with gr.Column(scale=1, min_width=420):
                         gr.Markdown("### 批量文件处理", elem_classes=["pat-compact-markdown"])
-                        with gr.Row():
-                            batch_button = gr.Button("批量执行", variant="primary")
-                            retry_failed_button = gr.Button("重试失败项", variant="primary")
                         batch_files = gr.Files(
                             label="批量文件",
                             file_count="multiple",
@@ -2816,6 +2813,9 @@ def build_app(default_base_url: str, default_timeout: float):
                             file_types=list(MEDIA_FILE_SUFFIXES),
                             height=176,
                         )
+                        with gr.Row():
+                            batch_button = gr.Button("批量执行", variant="primary")
+                            retry_failed_button = gr.Button("重试失败项", variant="primary")
                         batch_status = gr.Textbox(label="批量结果", lines=8, max_lines=16)
                         batch_download = gr.File(label="批量下载结果", visible=False)
                 failed_batch_state = gr.State([])
