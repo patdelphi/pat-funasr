@@ -16,6 +16,9 @@ import zipfile
 from typing import Any, Dict, List, Optional
 
 
+_MAX_SECONDS = 100 * 3600  # 100 小时上限，防止 SRT/VTT 输出异常长时间范围
+
+
 def _clamp_seconds(value: Any) -> float:
     try:
         v = float(value)
@@ -23,6 +26,8 @@ def _clamp_seconds(value: Any) -> float:
         return 0.0
     if v < 0:
         return 0.0
+    if v > _MAX_SECONDS:
+        return float(_MAX_SECONDS)
     return v
 
 

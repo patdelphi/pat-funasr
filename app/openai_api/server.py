@@ -106,6 +106,7 @@ def _dbg_report(
 # #endregion
 
 app = FastAPI(title="FunASR OpenAI-Compatible API", version="1.0.0")
+SERVER_START_EPOCH = int(time.time())
 
 MODEL_REGISTRY = {}
 MODEL_LOAD_STATUS: dict[str, dict] = {}
@@ -243,7 +244,7 @@ STREAMING_MODELS = {"paraformer-zh-streaming"}
 EMOTION_MODELS = {"emotion2vec-plus-large", "sensevoice"}
 DIARIZATION_MODELS = {"paraformer", "fun-asr-nano", "sensevoice"}
 STREAMING_SESSIONS: dict[str, dict] = {}
-STREAMING_SESSION_TTL_S = 3600
+STREAMING_SESSION_TTL_S = int(os.environ.get("FUNASR_STREAMING_SESSION_TTL_S", "3600"))
 VALID_LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
 VALID_PUNC_MODES = {"auto", "disabled"}
 VALID_MODEL_HUBS = {"ms", "modelscope", "hf", "huggingface"}
@@ -480,7 +481,7 @@ def merge_streaming_text(previous_text: str, chunk_text: str) -> str:
     if current == previous or previous.endswith(current):
         return previous
 
-    max_overlap = min(len(previous), len(current))
+    max_overlap = min(len(previous), len(current), 500)
     for overlap in range(max_overlap, 0, -1):
         if previous.endswith(current[:overlap]):
             return previous + current[overlap:]
@@ -1569,7 +1570,7 @@ async def list_models():
         models.append({
             "id": name,
             "object": "model",
-            "created": 1700000000,
+            "created": SERVER_START_EPOCH,
             "owned_by": "funasr",
             "ready": _is_model_ready(name),
             "capabilities": MODEL_CAPABILITIES.get(

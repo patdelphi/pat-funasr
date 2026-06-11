@@ -32,6 +32,9 @@ def ffprobe_duration_s(path: str) -> float:
         return 0.0
 
 
+_FALLBACK_CHUNK_SIZE = 30
+
+
 def _split_text(text: str) -> List[str]:
     t = (text or "").strip()
     if not t:
@@ -42,7 +45,7 @@ def _split_text(text: str) -> List[str]:
     if len(parts) >= 2:
         return parts
 
-    chunk_size = 30
+    chunk_size = _FALLBACK_CHUNK_SIZE
     chunks: List[str] = []
     buf: List[str] = []
     for ch in t:

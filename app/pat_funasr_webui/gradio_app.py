@@ -883,13 +883,13 @@ def run_system_microphone_capture(
             if stream is not None:
                 stream.stop_stream()
                 stream.close()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed to close audio stream: %s", exc)
         try:
             if audio_api is not None:
                 audio_api.terminate()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed to terminate PyAudio: %s", exc)
         with SYSTEM_MIC_STREAMS_LOCK:
             session = SYSTEM_MIC_STREAMS.get(session_id)
             if session is not None:
@@ -1280,8 +1280,8 @@ def stream_transcribe_file(
         try:
             if proc.poll() is None:
                 proc.kill()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed to kill ffmpeg process: %s", exc)
 
 
 def request_transcription_payload(
@@ -3306,8 +3306,8 @@ def main() -> None:
 
             try:
                 asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Failed to set Windows event loop policy: %s", exc)
 
             try:
                 loop = asyncio.get_event_loop()
