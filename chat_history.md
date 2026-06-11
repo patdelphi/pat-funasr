@@ -2674,3 +2674,28 @@ un_gradio_streaming_asr_test.bat 和测试 	ests/test_aipython_gradio_streaming_
 - T1-T5: todo.md 任务 1-6 标记 [x]，A2/C2 标记 [x]，streaming 参数标记 [x]
 
 **验证：** 全量 134 测试通过，无新增 warning。
+
+## 2026-06-11 +08:00 User
+
+按计划完成全部修复
+
+## 2026-06-11 +08:00 Assistant
+
+完成剩余 P2/P3 修复与测试补充：
+
+**P2 修复（5项）：**
+- M1: `_dbg_report` 改为 `threading.Thread(daemon=True)` 后台执行，不再阻塞 asyncio 事件循环
+- M3: transcribe/emotion/diarization 三个端点临时文件改用 `TemporaryDirectory` 上下文管理器
+- G-M2/M3: 移除 `gr.Audio(streaming=True)` 冗余参数和 `recording=False` 无意义赋值
+- G-M4: `gradio_app.py` 调试代码 `except pass` 改为 `logger.debug` 记录
+- D5: `openapi.json` streaming 端点补充 `encoder_chunk_look_back` / `decoder_chunk_look_back` 参数
+
+**P3 修复（3项）：**
+- L5: `--host` 默认值从 `0.0.0.0` 改为 `127.0.0.1`
+- L6: `--model` 参数标记 deprecated 保留兼容（run_api.bat/start_services.py 仍使用）
+- G-L3: `format_streaming_preview_text` 移除未使用的 `final_flag` 赋值
+
+**测试补充：**
+- 新增 `tests/test_server_health_and_models.py`：13个测试覆盖 `/health`(5)、`/v1/models`(4)、`/v1/models/{model}/status` 和 `/load`(4)
+
+**验证：** 全量 147 测试通过（134原 + 13新）

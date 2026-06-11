@@ -350,6 +350,16 @@
           "chunk_size": {
             "type": "string",
             "default": "0,10,5"
+          },
+          "encoder_chunk_look_back": {
+            "type": "integer",
+            "default": 4,
+            "description": "Encoder look-back chunk count."
+          },
+          "decoder_chunk_look_back": {
+            "type": "integer",
+            "default": 1,
+            "description": "Decoder look-back chunk count."
           }
         }
       },

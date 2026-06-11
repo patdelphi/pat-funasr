@@ -5,7 +5,7 @@ Drop-in replacement for OpenAI's /v1/audio/transcriptions endpoint.
 Works with any agent framework that supports OpenAI audio API.
 
 Usage:
-    python server.py --model sensevoice --device cuda --port 8000
+    python server.py --device cuda --port 8000
 
 Then use with any OpenAI-compatible client:
     curl http://localhost:8000/v1/audio/transcriptions \
@@ -61,41 +61,46 @@ def _dbg_report(
     trace_id: str | None = None,
     run_id: str = "pre-fix",
 ) -> None:
+    """后台线程发送调试事件，避免阻塞 asyncio 事件循环。"""
     if not is_debug_report_enabled():
         return
-    try:
-        root = Path(__file__).resolve().parents[2]
-        env_path = root / ".dbg" / "gradio-page-hung.env"
-        url = "http://127.0.0.1:7777/event"
-        session_id = "gradio-page-hung"
+
+    def _send() -> None:
         try:
-            content = env_path.read_text(encoding="utf-8", errors="replace")
-            for line in content.splitlines():
-                if line.startswith("DEBUG_SERVER_URL="):
-                    url = line.split("=", 1)[1].strip() or url
-                elif line.startswith("DEBUG_SESSION_ID="):
-                    session_id = line.split("=", 1)[1].strip() or session_id
+            root = Path(__file__).resolve().parents[2]
+            env_path = root / ".dbg" / "gradio-page-hung.env"
+            url = "http://127.0.0.1:7777/event"
+            session_id = "gradio-page-hung"
+            try:
+                content = env_path.read_text(encoding="utf-8", errors="replace")
+                for line in content.splitlines():
+                    if line.startswith("DEBUG_SERVER_URL="):
+                        url = line.split("=", 1)[1].strip() or url
+                    elif line.startswith("DEBUG_SESSION_ID="):
+                        session_id = line.split("=", 1)[1].strip() or session_id
+            except Exception:
+                pass
+            payload = {
+                "sessionId": session_id,
+                "runId": run_id,
+                "hypothesisId": hypothesis_id,
+                "location": location,
+                "msg": f"[DEBUG] {msg}",
+                "data": data or {},
+                "traceId": trace_id,
+                "ts": int(time.time() * 1000),
+            }
+            req = urllib.request.Request(
+                url,
+                data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            urllib.request.urlopen(req, timeout=2).read()
         except Exception:
             pass
-        payload = {
-            "sessionId": session_id,
-            "runId": run_id,
-            "hypothesisId": hypothesis_id,
-            "location": location,
-            "msg": f"[DEBUG] {msg}",
-            "data": data or {},
-            "traceId": trace_id,
-            "ts": int(time.time() * 1000),
-        }
-        req = urllib.request.Request(
-            url,
-            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        urllib.request.urlopen(req, timeout=2).read()
-    except Exception:
-        return
+
+    threading.Thread(target=_send, daemon=True).start()
 
 
 # #endregion
@@ -1197,11 +1202,12 @@ async def transcribe(
             status_code=413,
             detail=f"Upload too large: {len(content)} bytes exceeds limit of {MAX_UPLOAD_BYTES} bytes",
         )
-    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-        tmp.write(content)
-        tmp_path = tmp.name
-    # #region debug-point D:transcription-upload
-    try:
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_path = os.path.join(tmpdir, f"upload{suffix}")
+        with open(tmp_path, "wb") as f:
+            f.write(content)
+
         _dbg_report(
             hypothesis_id="D",
             msg="api_upload_saved",
@@ -1215,45 +1221,41 @@ async def transcribe(
                 "tmp_bytes": os.path.getsize(tmp_path) if os.path.exists(tmp_path) else 0,
             },
         )
-    except Exception:
-        pass
-    # #endregion
-
-    try:
-        try:
-            asr_model = load_model(
-                model,
-                device=device,
-                hub=hub,
-                disable_update=disable_update,
-                ncpu=ncpu,
-                log_level=log_level,
-                disable_pbar=disable_pbar,
-                punc_mode=punc_mode,
-            )
-        except ValueError as ve:
-            raise HTTPException(status_code=400, detail=str(ve))
-        t0 = time.time()
-
-        duration_s = segmentation.ffprobe_duration_s(tmp_path)
-        try:
-            generate_kwargs = build_generate_kwargs(
-                tmp_path=tmp_path,
-                model=model,
-                language=language,
-                hotword=hotword,
-                use_itn=use_itn,
-                vad_preset=vad_preset,
-                merge_vad=merge_vad,
-                merge_length_s=merge_length_s,
-                batch_size_s=batch_size_s,
-                batch_size_threshold_s=batch_size_threshold_s,
-                vad_max_single_segment_time=vad_max_single_segment_time,
-            )
-        except ValueError as ve:
-            raise HTTPException(status_code=400, detail=str(ve))
 
         try:
+            try:
+                asr_model = load_model(
+                    model,
+                    device=device,
+                    hub=hub,
+                    disable_update=disable_update,
+                    ncpu=ncpu,
+                    log_level=log_level,
+                    disable_pbar=disable_pbar,
+                    punc_mode=punc_mode,
+                )
+            except ValueError as ve:
+                raise HTTPException(status_code=400, detail=str(ve))
+            t0 = time.time()
+
+            duration_s = segmentation.ffprobe_duration_s(tmp_path)
+            try:
+                generate_kwargs = build_generate_kwargs(
+                    tmp_path=tmp_path,
+                    model=model,
+                    language=language,
+                    hotword=hotword,
+                    use_itn=use_itn,
+                    vad_preset=vad_preset,
+                    merge_vad=merge_vad,
+                    merge_length_s=merge_length_s,
+                    batch_size_s=batch_size_s,
+                    batch_size_threshold_s=batch_size_threshold_s,
+                    vad_max_single_segment_time=vad_max_single_segment_time,
+                )
+            except ValueError as ve:
+                raise HTTPException(status_code=400, detail=str(ve))
+
             logger.info(
                 "Transcription start: "
                 f"model={model}, "
@@ -1264,49 +1266,43 @@ async def transcribe(
                 f"batch_size_threshold_s={batch_size_threshold_s or ''}, "
                 f"file={getattr(file, 'filename', '')}"
             )
-            # #region debug-point D:transcription-generate-start
+            _dbg_report(
+                hypothesis_id="D",
+                msg="api_generate_start",
+                location="openai_api/server.py:/v1/audio/transcriptions",
+                trace_id=trace_id,
+                data={
+                    "duration_s": duration_s,
+                    "generate_kwargs_keys": sorted(list(generate_kwargs.keys())),
+                },
+            )
             try:
-                _dbg_report(
-                    hypothesis_id="D",
-                    msg="api_generate_start",
-                    location="openai_api/server.py:/v1/audio/transcriptions",
-                    trace_id=trace_id,
-                    data={
-                        "duration_s": duration_s,
-                        "generate_kwargs_keys": sorted(list(generate_kwargs.keys())),
-                    },
-                )
-            except Exception:
-                pass
-            # #endregion
-            result = asr_model.generate(**generate_kwargs)
-        except KeyError as ke:
-            if str(ke) == "'timestamp'" and "sentence_timestamp" in generate_kwargs:
-                generate_kwargs.pop("sentence_timestamp", None)
                 result = asr_model.generate(**generate_kwargs)
-            else:
-                raise
-        elapsed = time.time() - t0
+            except KeyError as ke:
+                if str(ke) == "'timestamp'" and "sentence_timestamp" in generate_kwargs:
+                    generate_kwargs.pop("sentence_timestamp", None)
+                    result = asr_model.generate(**generate_kwargs)
+                else:
+                    raise
+            elapsed = time.time() - t0
 
-        duration_s = duration_s if duration_s > 0 else elapsed
-        try:
-            rtf = elapsed / duration_s if duration_s > 0 else 0.0
-        except Exception:
-            rtf = 0.0
-        logger.info(
-            "Transcription done: "
-            f"model={model}, "
-            f"elapsed_s={elapsed:.2f}, "
-            f"duration_s={duration_s:.2f}, "
-            f"rtf={rtf:.3f}"
-        )
-        result0 = result[0] if result else {"text": ""}
-        text = clean_text(result0.get("text", ""))
-        segments = segmentation.build_segments(result0=result0, duration_s=duration_s, clean_text=clean_text)
-        if not segments:
-            segments = [{"start": 0.0, "end": round(duration_s, 3), "text": text, "speaker": None}]
-        # #region debug-point D:transcription-generate-done
-        try:
+            duration_s = duration_s if duration_s > 0 else elapsed
+            try:
+                rtf = elapsed / duration_s if duration_s > 0 else 0.0
+            except Exception:
+                rtf = 0.0
+            logger.info(
+                "Transcription done: "
+                f"model={model}, "
+                f"elapsed_s={elapsed:.2f}, "
+                f"duration_s={duration_s:.2f}, "
+                f"rtf={rtf:.3f}"
+            )
+            result0 = result[0] if result else {"text": ""}
+            text = clean_text(result0.get("text", ""))
+            segments = segmentation.build_segments(result0=result0, duration_s=duration_s, clean_text=clean_text)
+            if not segments:
+                segments = [{"start": 0.0, "end": round(duration_s, 3), "text": text, "speaker": None}]
             _dbg_report(
                 hypothesis_id="D",
                 msg="api_generate_done",
@@ -1320,53 +1316,48 @@ async def transcribe(
                     "segments": len(segments) if isinstance(segments, list) else 0,
                 },
             )
-        except Exception:
-            pass
-        # #endregion
 
-        verbose_payload = renderers.build_verbose_json_payload(
-            full_text=text,
-            segments=segments,
-            meta={
-                "language": language or "auto",
-                "duration": round(duration_s, 3),
-                "model": model,
-            },
-        )
-
-        if response_format == "json":
-            return JSONResponse({"text": text})
-        if response_format == "verbose_json":
-            return JSONResponse(verbose_payload)
-        if response_format == "txt":
-            content = renderers.render_txt(segments, max_line_width=max_line_width)
-            return Response(content=content, media_type="text/plain; charset=utf-8")
-        if response_format == "tsv":
-            content = renderers.render_tsv(segments)
-            return Response(content=content, media_type="text/tab-separated-values; charset=utf-8")
-        if response_format == "srt":
-            content = renderers.render_srt(segments, max_line_width=max_line_width)
-            return Response(content=content, media_type="application/x-subrip; charset=utf-8")
-        if response_format == "vtt":
-            content = renderers.render_vtt(segments, max_line_width=max_line_width)
-            return Response(content=content, media_type="text/vtt; charset=utf-8")
-        if response_format == "all":
-            zbytes = renderers.render_all_zip(
+            verbose_payload = renderers.build_verbose_json_payload(
                 full_text=text,
                 segments=segments,
-                json_payload=verbose_payload,
-                max_line_width=max_line_width,
+                meta={
+                    "language": language or "auto",
+                    "duration": round(duration_s, 3),
+                    "model": model,
+                },
             )
-            headers = {"Content-Disposition": "attachment; filename=\"output.zip\""}
-            return Response(content=zbytes, media_type="application/zip", headers=headers)
 
-        return JSONResponse({"text": text})
+            if response_format == "json":
+                return JSONResponse({"text": text})
+            if response_format == "verbose_json":
+                return JSONResponse(verbose_payload)
+            if response_format == "txt":
+                resp_content = renderers.render_txt(segments, max_line_width=max_line_width)
+                return Response(content=resp_content, media_type="text/plain; charset=utf-8")
+            if response_format == "tsv":
+                resp_content = renderers.render_tsv(segments)
+                return Response(content=resp_content, media_type="text/tab-separated-values; charset=utf-8")
+            if response_format == "srt":
+                resp_content = renderers.render_srt(segments, max_line_width=max_line_width)
+                return Response(content=resp_content, media_type="application/x-subrip; charset=utf-8")
+            if response_format == "vtt":
+                resp_content = renderers.render_vtt(segments, max_line_width=max_line_width)
+                return Response(content=resp_content, media_type="text/vtt; charset=utf-8")
+            if response_format == "all":
+                zbytes = renderers.render_all_zip(
+                    full_text=text,
+                    segments=segments,
+                    json_payload=verbose_payload,
+                    max_line_width=max_line_width,
+                )
+                headers = {"Content-Disposition": "attachment; filename=\"output.zip\""}
+                return Response(content=zbytes, media_type="application/zip", headers=headers)
 
-    except Exception as e:
-        logger.error(f"Transcription error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        os.unlink(tmp_path)
+            return JSONResponse({"text": text})
+
+        except Exception as e:
+            logger.error(f"Transcription error: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/v1/funasr/streaming")
@@ -1469,38 +1460,38 @@ async def recognize_emotion(
         )
 
     suffix = os.path.splitext(file.filename)[1] if file.filename else ".wav"
-    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-        content = await file.read()
-        tmp.write(content)
-        tmp_path = tmp.name
+    content = await file.read()
 
-    try:
-        emotion_model = load_model(model)
-        result = emotion_model.generate(
-            input=tmp_path,
-            granularity=granularity,
-            extract_embedding=False,
-        )
-        result0 = result[0] if result else {}
-        if model == "sensevoice":
-            payload = build_sensevoice_emotion_payload(
-                model=model,
-                raw_text=str(result0.get("text", "") or ""),
-            )
-        else:
-            payload = build_emotion_payload(
-                model=model,
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_path = os.path.join(tmpdir, f"upload{suffix}")
+        with open(tmp_path, "wb") as f:
+            f.write(content)
+
+        try:
+            emotion_model = load_model(model)
+            result = emotion_model.generate(
+                input=tmp_path,
                 granularity=granularity,
-                result0=result0,
+                extract_embedding=False,
             )
-        return JSONResponse(payload)
-    except HTTPException:
-        raise
-    except Exception as exc:
-        logger.error(f"Emotion recognition error: {exc}")
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
-    finally:
-        os.unlink(tmp_path)
+            result0 = result[0] if result else {}
+            if model == "sensevoice":
+                payload = build_sensevoice_emotion_payload(
+                    model=model,
+                    raw_text=str(result0.get("text", "") or ""),
+                )
+            else:
+                payload = build_emotion_payload(
+                    model=model,
+                    granularity=granularity,
+                    result0=result0,
+                )
+            return JSONResponse(payload)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logger.error(f"Emotion recognition error: {exc}")
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @app.post("/v1/funasr/diarization")
@@ -1529,45 +1520,45 @@ async def recognize_diarization(
         )
 
     suffix = os.path.splitext(file.filename)[1] if file.filename else ".wav"
-    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-        content = await file.read()
-        tmp.write(content)
-        tmp_path = tmp.name
+    content = await file.read()
 
-    try:
-        duration_s = segmentation.ffprobe_duration_s(tmp_path)
-        effective_spk_mode = resolve_diarization_spk_mode(model, spk_mode)
-        load_kwargs = {"spk_model": spk_model}
-        # SenseVoice 说话人分离在 vad_segment 下仍加载 punc_model 时，可能触发时间戳异常。
-        if model == "sensevoice" and effective_spk_mode == "vad_segment":
-            load_kwargs["punc_mode"] = "disabled"
-        asr_model = load_model(model, **load_kwargs)
-        generate_kwargs = {
-            "input": tmp_path,
-            "batch_size": 1,
-            "spk_mode": effective_spk_mode,
-            "return_spk_res": True,
-            "output_timestamp": True,
-        }
-        if preset_spk_num is not None:
-            generate_kwargs["preset_spk_num"] = int(preset_spk_num)
-        result = asr_model.generate(**generate_kwargs)
-        result0 = result[0] if result else {}
-        payload = build_diarization_payload(
-            model=model,
-            spk_model=spk_model,
-            spk_mode=effective_spk_mode,
-            result0=result0,
-            duration_s=duration_s,
-        )
-        return JSONResponse(payload)
-    except HTTPException:
-        raise
-    except Exception as exc:
-        logger.error(f"Diarization error: {exc}")
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
-    finally:
-        os.unlink(tmp_path)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_path = os.path.join(tmpdir, f"upload{suffix}")
+        with open(tmp_path, "wb") as f:
+            f.write(content)
+
+        try:
+            duration_s = segmentation.ffprobe_duration_s(tmp_path)
+            effective_spk_mode = resolve_diarization_spk_mode(model, spk_mode)
+            load_kwargs = {"spk_model": spk_model}
+            # SenseVoice 说话人分离在 vad_segment 下仍加载 punc_model 时，可能触发时间戳异常。
+            if model == "sensevoice" and effective_spk_mode == "vad_segment":
+                load_kwargs["punc_mode"] = "disabled"
+            asr_model = load_model(model, **load_kwargs)
+            generate_kwargs = {
+                "input": tmp_path,
+                "batch_size": 1,
+                "spk_mode": effective_spk_mode,
+                "return_spk_res": True,
+                "output_timestamp": True,
+            }
+            if preset_spk_num is not None:
+                generate_kwargs["preset_spk_num"] = int(preset_spk_num)
+            result = asr_model.generate(**generate_kwargs)
+            result0 = result[0] if result else {}
+            payload = build_diarization_payload(
+                model=model,
+                spk_model=spk_model,
+                spk_mode=effective_spk_mode,
+                result0=result0,
+                duration_s=duration_s,
+            )
+            return JSONResponse(payload)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logger.error(f"Diarization error: {exc}")
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @app.get("/v1/models")
@@ -1641,10 +1632,10 @@ async def health():
 
 def main():
     parser = argparse.ArgumentParser(description="FunASR OpenAI-Compatible API Server")
-    parser.add_argument("--host", default="0.0.0.0", help="Bind host")
+    parser.add_argument("--host", default="127.0.0.1", help="Bind host")
     parser.add_argument("--port", type=int, default=8000, help="Bind port")
     parser.add_argument("--device", default="cuda", help="Device: cuda, cpu, mps")
-    parser.add_argument("--model", default="sensevoice", help="Default model alias for lazy loading")
+    parser.add_argument("--model", default="sensevoice", help="(deprecated, unused) Model alias for lazy loading")
     args = parser.parse_args()
 
     global DEVICE
@@ -1652,7 +1643,6 @@ def main():
 
     logger.info(f"FunASR API server starting on http://{args.host}:{args.port}")
     logger.info(f"  Device: {DEVICE}")
-    logger.info(f"  Default model alias: {args.model} (lazy-load)")
     logger.info(f"  Models: {list(MODEL_CONFIGS.keys())}")
     logger.info(f"  Docs:   http://{args.host}:{args.port}/docs")
     uvicorn.run(app, host=args.host, port=args.port)

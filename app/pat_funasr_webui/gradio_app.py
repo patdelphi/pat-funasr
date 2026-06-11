@@ -30,7 +30,11 @@ import zipfile
 import subprocess
 import importlib.util
 
+import logging
+
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 CURRENT_DIR = Path(__file__).resolve().parent
 if str(CURRENT_DIR) not in sys.path:
@@ -174,8 +178,8 @@ def _dbg_report(
                     url = line.split("=", 1)[1].strip() or url
                 elif line.startswith("DEBUG_SESSION_ID="):
                     session_id = line.split("=", 1)[1].strip() or session_id
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed to read debug env: %s", exc)
         payload = {
             "sessionId": session_id,
             "runId": run_id,
@@ -193,8 +197,8 @@ def _dbg_report(
             method="POST",
         )
         urllib.request.urlopen(req, timeout=2).read()
-    except Exception:
-        return
+    except Exception as exc:
+        logger.debug("Debug report failed: %s", exc)
 
 
 # #endregion
@@ -212,8 +216,8 @@ def _dbg_get_server_config() -> tuple[str, str]:
                 url = line.split("=", 1)[1].strip() or url
             elif line.startswith("DEBUG_SESSION_ID="):
                 session_id = line.split("=", 1)[1].strip() or session_id
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Failed to read debug config: %s", exc)
     return url, session_id
 
 
@@ -2476,9 +2480,8 @@ def build_transcription_export_files(payload: dict) -> dict[str, str]:
     return exports
 
 
-def format_streaming_preview_text(full_text: str, final_flag: bool) -> str:
+def format_streaming_preview_text(full_text: str, final_flag: bool = False) -> str:
     """把 streaming 全量文本整理为预览文本，合并过短句并按自然边界换行。"""
-    _ = final_flag
     return truncate_tail_text(format_streaming_text_for_display(full_text), STREAMING_PREVIEW_MAX_CHARS)
 
 
@@ -2865,8 +2868,6 @@ def build_app(default_base_url: str, default_timeout: float):
                             label="Gradio 麦克风",
                             sources=["microphone"],
                             type="numpy",
-                            streaming=True,
-                            recording=False,
                         )
                         mic_status = gr.Textbox(label="麦克风识别状态", interactive=False)
                         mic_signal_status = gr.Textbox(label="麦克风信号", interactive=False)
