@@ -2823,7 +2823,7 @@ def build_app(default_base_url: str, default_timeout: float):
                             batch_button = gr.Button("批量执行", variant="primary")
                             retry_failed_button = gr.Button("重试失败项", variant="primary")
                         batch_status = gr.Textbox(label="批量结果", lines=8, max_lines=16)
-                        batch_download = gr.File(label="批量下载结果", visible=False)
+                        batch_download = gr.File(label="批量下载结果")
                 failed_batch_state = gr.State([])
 
             with gr.Tab("流式识别") as streaming_tab:
@@ -2872,7 +2872,6 @@ def build_app(default_base_url: str, default_timeout: float):
                             label="Gradio 麦克风",
                             sources=["microphone"],
                             type="numpy",
-                            streaming=True,
                         )
                         mic_status = gr.Textbox(label="麦克风识别状态", interactive=False)
                         mic_signal_status = gr.Textbox(label="麦克风信号", interactive=False)
