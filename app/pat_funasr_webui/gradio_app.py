@@ -2497,7 +2497,11 @@ def format_streaming_preview_text(full_text: str, final_flag: bool = False) -> s
 
 
 def update_media_preview(file_path: str | None):
-    """根据已选择文件更新视频预览与提示。"""
+    """根据已选择文件更新视频预览与提示。
+
+    音频和视频统一使用 gr.Video(include_audio=True) 预览，
+    避免 gr.Audio 作为输出组件时进入 processing 状态的问题。
+    """
     try:
         import gradio as gr
     except ImportError as error:
@@ -2505,20 +2509,12 @@ def update_media_preview(file_path: str | None):
 
     if not file_path:
         return (
-            gr.Video(value=None, visible=False),
             gr.update(visible=False),
             "支持音频与视频文件。视频和音频都会显示可播放预览。",
         )
-    if is_video_file(file_path):
-        return (
-            gr.Video(value=file_path, visible=True),
-            gr.update(visible=False),
-            f"已加载视频：{Path(file_path).name}",
-        )
     return (
-        gr.Video(value=None, visible=False),
         gr.update(value=file_path, visible=True),
-        f"已加载音频：{Path(file_path).name}",
+        f"已加载：{Path(file_path).name}",
     )
 
 
@@ -2793,12 +2789,13 @@ def build_app(default_base_url: str, default_timeout: float):
                             elem_classes=["pat-compact-markdown"],
                         )
                         media_preview = gr.Video(
-                            label="视频预览",
+                            label="媒体预览",
+                            sources=["upload"],
+                            include_audio=True,
                             visible=False,
                             height=220,
                             elem_classes=["pat-media-preview"],
                         )
-                        media_audio_preview = gr.Audio(label="音频预览", visible=False, type="filepath", recording=False, elem_classes=["audio-preview-wrap"])
                         transcribe_button = gr.Button("开始识别", variant="primary")
                         transcript_preview_format = gr.Radio(
                             label="预览格式",
@@ -2860,12 +2857,13 @@ def build_app(default_base_url: str, default_timeout: float):
                         stream_button = gr.Button("开始流式识别", variant="primary")
                         stream_file_stop_button = gr.Button("停止文件识别", variant="secondary")
                         stream_preview = gr.Video(
-                            label="视频预览",
+                            label="媒体预览",
+                            sources=["upload"],
+                            include_audio=True,
                             visible=False,
                             height=220,
                             elem_classes=["pat-media-preview"],
                         )
-                        stream_audio_preview = gr.Audio(label="音频预览", visible=False, type="filepath", recording=False)
                         stream_status = gr.Textbox(label="文件识别状态", interactive=False)
                         stream_transcript = gr.Textbox(label="文件流式输出", lines=8, max_lines=18, buttons=["copy"])
                         stream_download_button = gr.Button("生成结果下载", variant="secondary")
@@ -2899,12 +2897,13 @@ def build_app(default_base_url: str, default_timeout: float):
                     )
                 with gr.Row():
                     diarization_preview = gr.Video(
-                        label="视频预览",
+                        label="媒体预览",
+                        sources=["upload"],
+                        include_audio=True,
                         visible=False,
                         height=260,
                         elem_classes=["pat-media-preview"],
                     )
-                    diarization_audio_preview = gr.Audio(label="音频预览", visible=False, type="filepath", recording=False)
                     diarization_media_status = gr.Markdown("当前支持 paraformer / fun-asr-nano / sensevoice + cam++ 组合。")
                 with gr.Row():
                     diarization_spk_model = gr.Dropdown(
@@ -2954,12 +2953,13 @@ def build_app(default_base_url: str, default_timeout: float):
                     )
                 with gr.Row():
                     emotion_preview = gr.Video(
-                        label="视频预览",
+                        label="媒体预览",
+                        sources=["upload"],
+                        include_audio=True,
                         visible=False,
                         height=260,
                         elem_classes=["pat-media-preview"],
                     )
-                    emotion_audio_preview = gr.Audio(label="音频预览", visible=False, type="filepath", recording=False)
                     emotion_media_status = gr.Markdown("当前先支持整体情感识别，后续再补时间片能力。")
                 with gr.Row():
                     emotion_granularity = gr.Dropdown(
@@ -3084,17 +3084,17 @@ def build_app(default_base_url: str, default_timeout: float):
         media_file.change(
             fn=update_media_preview,
             inputs=[media_file],
-            outputs=[media_preview, media_audio_preview, media_status],
+            outputs=[media_preview, media_status],
         )
         stream_media_file.change(
             fn=update_media_preview,
             inputs=[stream_media_file],
-            outputs=[stream_preview, stream_audio_preview, stream_media_status],
+            outputs=[stream_preview, stream_media_status],
         )
         emotion_media_file.change(
             fn=update_media_preview,
             inputs=[emotion_media_file],
-            outputs=[emotion_preview, emotion_audio_preview, emotion_media_status],
+            outputs=[emotion_preview, emotion_media_status],
         )
         emotion_model.change(
             fn=update_emotion_granularity_options,
@@ -3104,7 +3104,7 @@ def build_app(default_base_url: str, default_timeout: float):
         diarization_media_file.change(
             fn=update_media_preview,
             inputs=[diarization_media_file],
-            outputs=[diarization_preview, diarization_audio_preview, diarization_media_status],
+            outputs=[diarization_preview, diarization_media_status],
         )
         transcribe_button.click(
             fn=safe_transcribe_with_exports,

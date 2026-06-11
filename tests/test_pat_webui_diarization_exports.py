@@ -514,13 +514,12 @@ class TestPatWebUiDiarizationExports(unittest.TestCase):
         self.assertIn('"speakers": [', preview_json)
 
     def test_update_media_preview_for_audio(self):
-        video_update, audio_update, status = gradio_app.update_media_preview(
+        preview_update, status = gradio_app.update_media_preview(
             r"y:\NewStore\AI\FunASR-Portable-GPU\test\demo.wav"
         )
-        self.assertEqual(video_update.visible, False)
-        self.assertTrue(audio_update.get("visible", False))
-        self.assertIn("demo.wav", str(audio_update.get("value", "")))
-        self.assertIn("已加载音频", status)
+        self.assertTrue(preview_update.get("visible", False))
+        self.assertIn("demo.wav", str(preview_update.get("value", "")))
+        self.assertIn("已加载", status)
 
     def test_format_streaming_preview_text_keeps_single_paragraph(self):
         formatted = gradio_app.format_streaming_preview_text(
