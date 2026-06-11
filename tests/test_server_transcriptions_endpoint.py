@@ -107,7 +107,7 @@ class TestServerTranscriptionsEndpoint(unittest.TestCase):
         self.assertEqual(self._captured_load_kwargs["punc_mode"], "disabled")
 
         self.assertIsNotNone(self._captured_generate_kwargs)
-        self.assertEqual(self._captured_generate_kwargs["language"], "zh")
+        self.assertEqual(self._captured_generate_kwargs["language"], "Chinese")
         self.assertEqual(self._captured_generate_kwargs["hotword"], "项目名,术语")
         self.assertEqual(self._captured_generate_kwargs["use_itn"], True)
         self.assertEqual(self._captured_generate_kwargs["merge_vad"], True)

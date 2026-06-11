@@ -53,7 +53,7 @@ class TestServerGenerateKwargs(unittest.TestCase):
 
         self.assertEqual(got["input"], "demo.wav")
         self.assertEqual(got["batch_size"], 1)
-        self.assertEqual(got["language"], "zh")
+        self.assertEqual(got["language"], "Chinese")
         self.assertEqual(got["hotword"], "项目名,术语")
         self.assertEqual(got["use_itn"], True)
         self.assertEqual(got["sentence_timestamp"], True)

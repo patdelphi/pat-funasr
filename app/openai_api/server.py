@@ -250,6 +250,50 @@ MODEL_CAPABILITIES = {
     },
 }
 
+LANGUAGE_CODE_MAP = {
+    "zh": "Chinese", "cn": "Chinese", "chinese": "Chinese",
+    "en": "English", "english": "English",
+    "ja": "Japanese", "jp": "Japanese", "japanese": "Japanese",
+    "ko": "Korean", "kr": "Korean", "korean": "Korean",
+    "yue": "Cantonese", "cantonese": "Cantonese",
+    "ar": "Arabic", "arabic": "Arabic",
+    "de": "German", "german": "German",
+    "fr": "French", "french": "French",
+    "es": "Spanish", "spanish": "Spanish",
+    "pt": "Portuguese", "portuguese": "Portuguese",
+    "id": "Indonesian", "indonesian": "Indonesian",
+    "it": "Italian", "italian": "Italian",
+    "ru": "Russian", "russian": "Russian",
+    "th": "Thai", "thai": "Thai",
+    "vi": "Vietnamese", "vietnamese": "Vietnamese",
+    "tr": "Turkish", "turkish": "Turkish",
+    "hi": "Hindi", "hindi": "Hindi",
+    "ms": "Malay", "malay": "Malay",
+    "nl": "Dutch", "dutch": "Dutch",
+    "sv": "Swedish", "swedish": "Swedish",
+    "da": "Danish", "danish": "Danish",
+    "fi": "Finnish", "finnish": "Finnish",
+    "pl": "Polish", "polish": "Polish",
+    "cs": "Czech", "czech": "Czech",
+    "fil": "Filipino", "filipino": "Filipino",
+    "fa": "Persian", "persian": "Persian",
+    "el": "Greek", "greek": "Greek",
+    "ro": "Romanian", "romanian": "Romanian",
+    "hu": "Hungarian", "hungarian": "Hungarian",
+    "mk": "Macedonian", "macedonian": "Macedonian",
+}
+
+
+def normalize_language(lang: str | None) -> str | None:
+    """将语言码/缩写/全称统一为模型接受的全称格式。"""
+    if not lang:
+        return None
+    normalized = lang.strip().lower()
+    if not normalized:
+        return None
+    return LANGUAGE_CODE_MAP.get(normalized, lang)
+
+
 STREAMING_MODELS = {"paraformer-zh-streaming"}
 EMOTION_MODELS = {"emotion2vec-plus-large", "sensevoice"}
 DIARIZATION_MODELS = {"paraformer", "fun-asr-nano", "sensevoice"}
@@ -1020,8 +1064,9 @@ def build_generate_kwargs(
 ):
     """构建传给 FunASR generate() 的白名单参数。"""
     generate_kwargs = {"input": tmp_path, "batch_size": 1}
-    if language:
-        generate_kwargs["language"] = language
+    normalized_lang = normalize_language(language)
+    if normalized_lang:
+        generate_kwargs["language"] = normalized_lang
     if hotword:
         generate_kwargs["hotword"] = hotword
     if use_itn is not None:
