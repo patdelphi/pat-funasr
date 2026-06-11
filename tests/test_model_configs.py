@@ -58,12 +58,12 @@ class TestModelConfigs(unittest.TestCase):
 
         self.assertEqual(cfgs["qwen3-asr"]["model"], "Qwen/Qwen3-ASR-1.7B")
         self.assertEqual(cfgs["qwen3-asr"].get("hub"), "ms")
-        self.assertFalse(cfgs["qwen3-asr"].get("trust_remote_code"))
+        self.assertTrue(cfgs["qwen3-asr"].get("trust_remote_code"))
         self.assertEqual(cfgs["qwen3-asr"].get("dtype"), "fp16")
 
         self.assertEqual(cfgs["qwen3-asr-0.6b"]["model"], "Qwen/Qwen3-ASR-0.6B")
         self.assertEqual(cfgs["qwen3-asr-0.6b"].get("hub"), "ms")
-        self.assertFalse(cfgs["qwen3-asr-0.6b"].get("trust_remote_code"))
+        self.assertTrue(cfgs["qwen3-asr-0.6b"].get("trust_remote_code"))
         self.assertEqual(cfgs["qwen3-asr-0.6b"].get("dtype"), "fp16")
 
         self.assertEqual(cfgs["emotion2vec-plus-large"]["model"], "iic/emotion2vec_plus_large")

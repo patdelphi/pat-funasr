@@ -87,7 +87,7 @@ MODEL_CONFIGS = {
     "qwen3-asr": {
         "model": "Qwen/Qwen3-ASR-1.7B",
         "hub": "ms",
-        "trust_remote_code": False,
+        "trust_remote_code": True,
         "dtype": "fp16",
         "vad_model": "fsmn-vad",
         "vad_kwargs": {"max_single_segment_time": 30000},

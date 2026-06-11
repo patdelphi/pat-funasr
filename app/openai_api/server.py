@@ -53,7 +53,8 @@ class _PadTokenIdFilter(logging.Filter):
         return "pad_token_id" not in record.getMessage()
 
 
-logging.getLogger("transformers").addFilter(_PadTokenIdFilter())
+# 过滤所有 logger 中的 pad_token_id 警告
+logging.getLogger().addFilter(_PadTokenIdFilter())
 
 # #region debug-point C:debug-report
 def is_debug_report_enabled() -> bool:
@@ -155,7 +156,7 @@ MODEL_CONFIGS = {
     "qwen3-asr": {
         "model": "Qwen/Qwen3-ASR-1.7B",
         "hub": "ms",
-        "trust_remote_code": False,
+        "trust_remote_code": True,
         "dtype": "fp16",
         "vad_model": "fsmn-vad",
         "vad_kwargs": {"max_single_segment_time": 30000},
@@ -163,7 +164,7 @@ MODEL_CONFIGS = {
     "qwen3-asr-0.6b": {
         "model": "Qwen/Qwen3-ASR-0.6B",
         "hub": "ms",
-        "trust_remote_code": False,
+        "trust_remote_code": True,
         "dtype": "fp16",
         "vad_model": "fsmn-vad",
         "vad_kwargs": {"max_single_segment_time": 30000},

@@ -321,7 +321,6 @@ APP_CSS = """
 .audio-preview-wrap .player {
   padding-bottom: 8px;
 }
-}
 """
 
 
