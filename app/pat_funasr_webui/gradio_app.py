@@ -30,11 +30,7 @@ import zipfile
 import subprocess
 import importlib.util
 
-import logging
-
 import numpy as np
-
-logger = logging.getLogger(__name__)
 
 CURRENT_DIR = Path(__file__).resolve().parent
 if str(CURRENT_DIR) not in sys.path:
@@ -178,8 +174,8 @@ def _dbg_report(
                     url = line.split("=", 1)[1].strip() or url
                 elif line.startswith("DEBUG_SESSION_ID="):
                     session_id = line.split("=", 1)[1].strip() or session_id
-        except Exception as exc:
-            logger.debug("Failed to read debug env: %s", exc)
+        except Exception:
+            pass
         payload = {
             "sessionId": session_id,
             "runId": run_id,
@@ -197,8 +193,8 @@ def _dbg_report(
             method="POST",
         )
         urllib.request.urlopen(req, timeout=2).read()
-    except Exception as exc:
-        logger.debug("Debug report failed: %s", exc)
+    except Exception:
+        return
 
 
 # #endregion
@@ -216,8 +212,8 @@ def _dbg_get_server_config() -> tuple[str, str]:
                 url = line.split("=", 1)[1].strip() or url
             elif line.startswith("DEBUG_SESSION_ID="):
                 session_id = line.split("=", 1)[1].strip() or session_id
-    except Exception as exc:
-        logger.debug("Failed to read debug config: %s", exc)
+    except Exception:
+        pass
     return url, session_id
 
 
@@ -310,16 +306,6 @@ APP_CSS = """
   border-radius: 10px;
   padding: 12px 14px;
   background: #fafbfc;
-}
-.audio-preview-wrap .wrap {
-  min-height: 120px;
-}
-.audio-preview-wrap .timeline {
-  height: 24px !important;
-  min-height: 24px !important;
-}
-.audio-preview-wrap .player {
-  padding-bottom: 8px;
 }
 """
 
@@ -431,7 +417,7 @@ def read_runtime_logs_ui_guard(enabled: bool, max_lines: int, max_bytes_kb: int,
             import gradio as gr
         except Exception:
             return None
-        return gr.Textbox()
+        return gr.update()
     return read_runtime_logs_ui(max_lines, max_bytes_kb, max_section_chars)
 
 
@@ -893,13 +879,13 @@ def run_system_microphone_capture(
             if stream is not None:
                 stream.stop_stream()
                 stream.close()
-        except Exception as exc:
-            logger.debug("Failed to close audio stream: %s", exc)
+        except Exception:
+            pass
         try:
             if audio_api is not None:
                 audio_api.terminate()
-        except Exception as exc:
-            logger.debug("Failed to terminate PyAudio: %s", exc)
+        except Exception:
+            pass
         with SYSTEM_MIC_STREAMS_LOCK:
             session = SYSTEM_MIC_STREAMS.get(session_id)
             if session is not None:
@@ -931,14 +917,14 @@ def toggle_system_microphone_stream(
         return (
             current_id,
             "正在停止系统麦克风录制...",
-            gr.Button(value="开始录制并识别", variant="primary"),
+            gr.update(value="开始录制并识别", variant="primary"),
         )
 
     try:
         parse_chunk_size_text(chunk_size)
         load_pyaudio_module()
     except Exception as exc:
-        return "", f"系统麦克风启动失败：{exc}", gr.Button(value="开始录制并识别", variant="primary")
+        return "", f"系统麦克风启动失败：{exc}", gr.update(value="开始录制并识别", variant="primary")
 
     new_id = uuid.uuid4().hex
     stop_event = threading.Event()
@@ -970,7 +956,7 @@ def toggle_system_microphone_stream(
     )
     session["thread"] = thread
     thread.start()
-    return new_id, "系统麦克风录制已启动，正在等待音频帧...", gr.Button(value="停止录制并识别", variant="stop")
+    return new_id, "系统麦克风录制已启动，正在等待音频帧...", gr.update(value="停止录制并识别", variant="stop")
 
 
 def start_system_microphone_stream(
@@ -1015,11 +1001,11 @@ def poll_system_microphone_stream(session_id: str | None):
 
     current_id = str(session_id or "")
     if not current_id:
-        return gr.Textbox(), gr.Textbox(), gr.Textbox(), ""
+        return gr.update(), gr.update(), gr.update(), ""
     with SYSTEM_MIC_STREAMS_LOCK:
         session = dict(SYSTEM_MIC_STREAMS.get(current_id) or {})
     if not session:
-        return gr.Textbox(), "系统麦克风会话不存在或已清理。", gr.Textbox(), ""
+        return gr.update(), "系统麦克风会话不存在或已清理。", gr.update(), ""
 
     transcript = format_streaming_preview_text(str(session.get("full_text", "")), final_flag=not bool(session.get("active")))
     status = str(session.get("status", ""))
@@ -1290,8 +1276,8 @@ def stream_transcribe_file(
         try:
             if proc.poll() is None:
                 proc.kill()
-        except Exception as exc:
-            logger.debug("Failed to kill ffmpeg process: %s", exc)
+        except Exception:
+            pass
 
 
 def request_transcription_payload(
@@ -1508,7 +1494,7 @@ def build_service_dashboard_snapshot(base_url: str, timeout: float, capability_f
     return status_text, raw_json, overview_markdown, capability_markdown, target_markdown
 
 
-def check_service_and_capabilities(base_url: str, timeout: float, capability_filter: str) -> tuple[str, str, str, str]:
+def check_service_and_capabilities(base_url: str, timeout: float, capability_filter: str) -> tuple[str, str, str]:
     """同时返回服务状态原始 JSON 与模型能力看板。"""
     _, raw_json, overview_markdown, capability_markdown, target_markdown = build_service_dashboard_snapshot(
         base_url,
@@ -2111,12 +2097,12 @@ def auto_refresh_service_dashboard_guard(
         return (None, None, None, None, None, None)
     if not enabled or not tab_active:
         return (
-            gr.Textbox(),
-            gr.Textbox(),
-            gr.Textbox(),
-            gr.Textbox(),
-            gr.Textbox(),
-            gr.Textbox(),
+            gr.update(),
+            gr.update(),
+            gr.update(),
+            gr.update(),
+            gr.update(),
+            gr.update(),
         )
     try:
         status_text, raw_json, overview_markdown, capability_markdown, target_markdown = build_service_dashboard_snapshot(
@@ -2235,18 +2221,19 @@ def batch_transcribe(
     import gradio as gr
 
     paths = normalize_uploaded_paths(batch_files)
+    hidden_batch_download = gr.update(value=None, visible=False)
     if not paths:
-        yield "请先上传至少一个批量文件。", gr.update(visible=False), []
+        yield "请先上传至少一个批量文件。", hidden_batch_download, []
         return
 
     results = initialize_batch_results(paths)
-    yield summarize_batch_results(results), gr.update(visible=False), []
+    yield summarize_batch_results(results), hidden_batch_download, []
 
     for index, file_path in enumerate(paths):
         results[index]["status"] = "running"
         results[index]["message"] = ""
         if index % BATCH_RUNNING_STATUS_UPDATE_EVERY_ITEMS == 0:
-            yield summarize_batch_results(results), gr.update(visible=False), [
+            yield summarize_batch_results(results), hidden_batch_download, [
                 item["source_path"] for item in results if item.get("status") == "error"
             ]
 
@@ -2292,7 +2279,7 @@ def batch_transcribe(
             )
             results[index]["result_path"] = ""
 
-        yield summarize_batch_results(results), gr.update(visible=False), [
+        yield summarize_batch_results(results), hidden_batch_download, [
             item["source_path"] for item in results if item.get("status") == "error"
         ]
 
@@ -2489,17 +2476,14 @@ def build_transcription_export_files(payload: dict) -> dict[str, str]:
     return exports
 
 
-def format_streaming_preview_text(full_text: str, final_flag: bool = False) -> str:
+def format_streaming_preview_text(full_text: str, final_flag: bool) -> str:
     """把 streaming 全量文本整理为预览文本，合并过短句并按自然边界换行。"""
+    _ = final_flag
     return truncate_tail_text(format_streaming_text_for_display(full_text), STREAMING_PREVIEW_MAX_CHARS)
 
 
 def update_media_preview(file_path: str | None):
-    """根据已选择文件更新视频预览与提示。
-
-    音频和视频统一使用 gr.Video(include_audio=True) 预览，
-    避免 gr.Audio 作为输出组件时进入 processing 状态的问题。
-    """
+    """根据已选择文件更新视频预览与提示。"""
     try:
         import gradio as gr
     except ImportError as error:
@@ -2507,12 +2491,20 @@ def update_media_preview(file_path: str | None):
 
     if not file_path:
         return (
-            gr.update(visible=False),
+            gr.update(value=None, visible=False),
+            gr.update(value=None, visible=False),
             "支持音频与视频文件。视频和音频都会显示可播放预览。",
         )
+    if is_video_file(file_path):
+        return (
+            gr.update(value=file_path, visible=True),
+            gr.update(value=None, visible=False),
+            f"已加载视频：{Path(file_path).name}",
+        )
     return (
+        gr.update(value=None, visible=False),
         gr.update(value=file_path, visible=True),
-        f"已加载：{Path(file_path).name}",
+        f"已加载音频：{Path(file_path).name}",
     )
 
 
@@ -2562,16 +2554,16 @@ def refresh_model_dropdown(base_url: str, timeout: float):
         fallback=DEFAULT_DIARIZATION_MODEL,
     )
     return (
-        gr.Dropdown(choices=choices, value=choose_default_model(choices) or DEFAULT_MODEL),
-        gr.Dropdown(
+        gr.update(choices=choices, value=choose_default_model(choices) or DEFAULT_MODEL),
+        gr.update(
             choices=streaming_choices,
             value=choose_default_streaming_model(streaming_choices) or DEFAULT_STREAMING_MODEL,
         ),
-        gr.Dropdown(
+        gr.update(
             choices=emotion_choices,
             value=choose_default_emotion_model(emotion_choices) or DEFAULT_EMOTION_MODEL,
         ),
-        gr.Dropdown(
+        gr.update(
             choices=diarization_choices,
             value=choose_default_diarization_model(diarization_choices) or DEFAULT_DIARIZATION_MODEL,
         ),
@@ -2617,16 +2609,16 @@ def initialize_service_dashboard(base_url: str, timeout: float, capability_filte
         target_markdown = "### 使用建议\n\n加载失败，无法生成建议入口。"
 
     return (
-        gr.Dropdown(choices=choices, value=choose_default_model(choices) or DEFAULT_MODEL),
-        gr.Dropdown(
+        gr.update(choices=choices, value=choose_default_model(choices) or DEFAULT_MODEL),
+        gr.update(
             choices=streaming_choices,
             value=choose_default_streaming_model(streaming_choices) or DEFAULT_STREAMING_MODEL,
         ),
-        gr.Dropdown(
+        gr.update(
             choices=emotion_choices,
             value=choose_default_emotion_model(emotion_choices) or DEFAULT_EMOTION_MODEL,
         ),
-        gr.Dropdown(
+        gr.update(
             choices=diarization_choices,
             value=choose_default_diarization_model(diarization_choices) or DEFAULT_DIARIZATION_MODEL,
         ),
@@ -2646,11 +2638,11 @@ def update_emotion_granularity_options(model: str):
     except ImportError as error:
         raise SystemExit("Install Gradio first: pip install gradio") from error
     if model == "sensevoice":
-        return gr.Dropdown(
+        return gr.update(
             choices=[("utterance", "utterance")],
             value="utterance",
         )
-    return gr.Dropdown(
+    return gr.update(
         choices=[("utterance", "utterance"), ("frame", "frame")],
         value="utterance",
     )
@@ -2773,45 +2765,49 @@ def build_app(default_base_url: str, default_timeout: float):
                                     value="true",
                                 )
                 transcript_payload_state = gr.State("{}")
+                gr.Markdown("### 单文件处理", elem_classes=["pat-compact-markdown"])
                 with gr.Row(equal_height=False):
                     with gr.Column(scale=1, min_width=420):
-                        gr.Markdown("### 单文件处理", elem_classes=["pat-compact-markdown"])
                         media_file = gr.File(
                             label="音频/视频文件",
                             type="filepath",
                             file_types=list(MEDIA_FILE_SUFFIXES),
-                            height=176,
+                            height=208,
                         )
+                        transcribe_button = gr.Button("开始识别", variant="primary")
                         media_status = gr.Markdown(
                             "支持音频与视频文件。视频和音频都会显示可播放预览。",
                             elem_classes=["pat-compact-markdown"],
                         )
                         media_preview = gr.Video(
-                            label="媒体预览",
-                            sources=["upload"],
-                            include_audio=True,
+                            label="视频预览",
                             visible=False,
-                            height=220,
+                            height=260,
                             elem_classes=["pat-media-preview"],
                         )
-                        transcribe_button = gr.Button("开始识别", variant="primary")
+                        media_audio_preview = gr.Audio(label="音频预览", visible=False)
+                    with gr.Column(scale=1, min_width=420):
                         transcript_preview_format = gr.Radio(
                             label="预览格式",
                             choices=PREVIEW_FORMAT_CHOICES,
                             value=DEFAULT_PREVIEW_FORMAT,
                         )
-                        transcript = gr.Textbox(label="结果预览", lines=10, max_lines=16, buttons=["copy"])
+                        transcript = gr.Textbox(label="结果预览", lines=12, max_lines=20, buttons=["copy"])
                         with gr.Accordion("下载文件", open=False):
                             with gr.Row():
-                                download_json = gr.File(label="JSON", visible=True)
-                                download_txt = gr.File(label="TXT", visible=True)
-                                download_srt = gr.File(label="SRT", visible=True)
+                                download_json = gr.File(label="下载 JSON", visible=True)
+                                download_txt = gr.File(label="下载 TXT", visible=True)
+                                download_srt = gr.File(label="下载 SRT", visible=True)
                             with gr.Row():
-                                download_vtt = gr.File(label="VTT", visible=True)
-                                download_tsv = gr.File(label="TSV", visible=True)
-                                download_zip = gr.File(label="ZIP", visible=True)
+                                download_vtt = gr.File(label="下载 VTT", visible=True)
+                                download_tsv = gr.File(label="下载 TSV", visible=True)
+                                download_zip = gr.File(label="下载 ZIP", visible=True)
+                gr.Markdown("### 批量文件处理", elem_classes=["pat-compact-markdown"])
+                with gr.Row(equal_height=False):
                     with gr.Column(scale=1, min_width=420):
-                        gr.Markdown("### 批量文件处理", elem_classes=["pat-compact-markdown"])
+                        with gr.Row():
+                            batch_button = gr.Button("批量执行", variant="primary")
+                            retry_failed_button = gr.Button("重试失败项", variant="primary")
                         batch_files = gr.Files(
                             label="批量文件",
                             file_count="multiple",
@@ -2819,11 +2815,9 @@ def build_app(default_base_url: str, default_timeout: float):
                             file_types=list(MEDIA_FILE_SUFFIXES),
                             height=176,
                         )
-                        with gr.Row():
-                            batch_button = gr.Button("批量执行", variant="primary")
-                            retry_failed_button = gr.Button("重试失败项", variant="primary")
-                        batch_status = gr.Textbox(label="批量结果", lines=8, max_lines=16)
-                        batch_download = gr.File(label="批量下载结果")
+                    with gr.Column(scale=1, min_width=420):
+                        batch_status = gr.Textbox(label="批量结果", lines=5, max_lines=10)
+                        batch_download = gr.File(label="批量下载结果", visible=False)
                 failed_batch_state = gr.State([])
 
             with gr.Tab("流式识别") as streaming_tab:
@@ -2855,13 +2849,12 @@ def build_app(default_base_url: str, default_timeout: float):
                         stream_button = gr.Button("开始流式识别", variant="primary")
                         stream_file_stop_button = gr.Button("停止文件识别", variant="secondary")
                         stream_preview = gr.Video(
-                            label="媒体预览",
-                            sources=["upload"],
-                            include_audio=True,
+                            label="视频预览",
                             visible=False,
                             height=220,
                             elem_classes=["pat-media-preview"],
                         )
+                        stream_audio_preview = gr.Audio(label="音频预览", visible=False)
                         stream_status = gr.Textbox(label="文件识别状态", interactive=False)
                         stream_transcript = gr.Textbox(label="文件流式输出", lines=8, max_lines=18, buttons=["copy"])
                         stream_download_button = gr.Button("生成结果下载", variant="secondary")
@@ -2897,13 +2890,12 @@ def build_app(default_base_url: str, default_timeout: float):
                     )
                 with gr.Row():
                     diarization_preview = gr.Video(
-                        label="媒体预览",
-                        sources=["upload"],
-                        include_audio=True,
+                        label="视频预览",
                         visible=False,
                         height=260,
                         elem_classes=["pat-media-preview"],
                     )
+                    diarization_audio_preview = gr.Audio(label="音频预览", visible=False)
                     diarization_media_status = gr.Markdown("当前支持 paraformer / fun-asr-nano / sensevoice + cam++ 组合。")
                 with gr.Row():
                     diarization_spk_model = gr.Dropdown(
@@ -2953,13 +2945,12 @@ def build_app(default_base_url: str, default_timeout: float):
                     )
                 with gr.Row():
                     emotion_preview = gr.Video(
-                        label="媒体预览",
-                        sources=["upload"],
-                        include_audio=True,
+                        label="视频预览",
                         visible=False,
                         height=260,
                         elem_classes=["pat-media-preview"],
                     )
+                    emotion_audio_preview = gr.Audio(label="音频预览", visible=False)
                     emotion_media_status = gr.Markdown("当前先支持整体情感识别，后续再补时间片能力。")
                 with gr.Row():
                     emotion_granularity = gr.Dropdown(
@@ -3084,17 +3075,17 @@ def build_app(default_base_url: str, default_timeout: float):
         media_file.change(
             fn=update_media_preview,
             inputs=[media_file],
-            outputs=[media_preview, media_status],
+            outputs=[media_preview, media_audio_preview, media_status],
         )
         stream_media_file.change(
             fn=update_media_preview,
             inputs=[stream_media_file],
-            outputs=[stream_preview, stream_media_status],
+            outputs=[stream_preview, stream_audio_preview, stream_media_status],
         )
         emotion_media_file.change(
             fn=update_media_preview,
             inputs=[emotion_media_file],
-            outputs=[emotion_preview, emotion_media_status],
+            outputs=[emotion_preview, emotion_audio_preview, emotion_media_status],
         )
         emotion_model.change(
             fn=update_emotion_granularity_options,
@@ -3104,7 +3095,7 @@ def build_app(default_base_url: str, default_timeout: float):
         diarization_media_file.change(
             fn=update_media_preview,
             inputs=[diarization_media_file],
-            outputs=[diarization_preview, diarization_media_status],
+            outputs=[diarization_preview, diarization_audio_preview, diarization_media_status],
         )
         transcribe_button.click(
             fn=safe_transcribe_with_exports,
@@ -3314,8 +3305,8 @@ def main() -> None:
 
             try:
                 asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-            except Exception as exc:
-                logger.debug("Failed to set Windows event loop policy: %s", exc)
+            except Exception:
+                pass
 
             try:
                 loop = asyncio.get_event_loop()
