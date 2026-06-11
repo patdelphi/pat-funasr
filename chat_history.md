@@ -2699,3 +2699,30 @@ un_gradio_streaming_asr_test.bat 和测试 	ests/test_aipython_gradio_streaming_
 - 新增 `tests/test_server_health_and_models.py`：13个测试覆盖 `/health`(5)、`/v1/models`(4)、`/v1/models/{model}/status` 和 `/load`(4)
 
 **验证：** 全量 147 测试通过（134原 + 13新）
+
+## 2026-06-11 +08:00 User
+
+按计划完成全部修复
+
+## 2026-06-11 +08:00 Assistant
+
+完成最后一项技术债 G-M1 及剩余低优先级改进：
+
+**G-M1: gr.update() → 新式组件写法（30处全部迁移）：**
+- `gr.update()` 无操作 → `gr.Textbox()` 等对应组件
+- `gr.update(value=..., variant=...)` 按钮 → `gr.Button(value=..., variant=...)`
+- `gr.update(choices=..., value=...)` 下拉 → `gr.Dropdown(choices=..., value=...)`
+- `gr.update(value=..., visible=...)` 文件 → `gr.File(value=..., visible=...)`
+- `gr.update(value=..., visible=...)` 视频/音频 → `gr.Video(value=..., visible=...)` / `gr.Audio(value=..., visible=...)`
+- 同步更新 4 个测试用例适配新式组件属性访问
+
+**其余低优先级改进（7项）：**
+- L1: STREAMING_SESSION_TTL_S 支持环境变量配置
+- L2: /v1/models created 改为服务器启动时间戳
+- L4: segmentation chunk_size 提取为模块常量
+- L7: renderers._clamp_seconds 加 100 小时上限截断
+- L8: merge_streaming_text 重叠检测限制最多 500 字符
+- G-L1: asyncio 初始化加 debug 日志
+- G-L2: finally 块清理异常加 debug 日志
+
+**验证：** 全量 147 测试通过
