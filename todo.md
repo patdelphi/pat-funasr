@@ -1,4 +1,4 @@
-﻿#
+﻿﻿#
 Pat WebUI 开发 Todo
 
 说明：本文件是当前唯一执行清单，只跟踪下一阶段的 "Pat WebUI" 开发工作；已完成的旧事项仅保留归档摘要，不再作为当前待办继续维护。
@@ -441,3 +441,21 @@ Pat WebUI 开发 Todo
 - [x] 跑批脚本修复："run_test_all_models.ps1"
 - [x] 文档同步："Docs/api.md"、"Docs/model-capability-matrix.md"
 - [x] 冒烟校验与测试通过
+## 当前专项计划：Gradio 原生流式 Mic 重写
+
+说明：本专项已完成，正式“流式识别”页回到 Gradio 原生组件实现，不再在正式页自绘设备选择器或跳转 `/mic-stream`。
+
+### 已完成
+
+- [x] 正式页 Mic 实时识别使用 `gr.Audio(sources=["microphone"], type="numpy", streaming=True)` 与 `.stream(...)`
+- [x] 文件流式识别与 Mic 实时识别保持左右两栏，状态、输出、下载互相独立
+- [x] 移除正式页自定义设备 HTML/JS、`getUserMedia` 注入与 `/mic-stream` 正式入口
+- [x] Mic 开始录制前检查 `/v1/models/{model}/status`，必要时调用 `/v1/models/{model}/load`
+- [x] 修复 Gradio numpy int16 双声道音频被错误放大导致削波的问题
+- [x] 流式预览默认单段连续显示，不再按短句自动换行
+- [x] 增加正式页配置与音频转换相关测试
+
+### 验证
+
+- [x] `python -m pytest "tests\test_pat_webui_diarization_exports.py" -q`
+- [x] 浏览器打开 `http://127.0.0.1:7861/`，进入“流式识别”，确认 Mic 区为 Gradio 原生控件，且无 `patFormalMicDeviceSelect` / `patchedFormalGetUserMedia` / `/mic-stream`

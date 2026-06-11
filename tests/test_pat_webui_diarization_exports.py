@@ -522,12 +522,12 @@ class TestPatWebUiDiarizationExports(unittest.TestCase):
         self.assertEqual(audio_update["value"], r"y:\NewStore\AI\FunASR-Portable-GPU\test\demo.wav")
         self.assertIn("已加载音频", status)
 
-    def test_format_streaming_preview_text(self):
+    def test_format_streaming_preview_text_keeps_single_paragraph(self):
         formatted = gradio_app.format_streaming_preview_text(
             full_text="你好欢迎光临林肯中心今天我们试驾新车。咱们是有预约吗？先生然后这边请",
             final_flag=True,
         )
-        self.assertEqual(formatted, "你好欢迎光临林肯中心今天我们试驾新车。\n咱们是有预约吗？先生然后这边请")
+        self.assertEqual(formatted, "你好欢迎光临林肯中心今天我们试驾新车。咱们是有预约吗？先生然后这边请")
 
     def test_format_streaming_preview_keeps_very_short_sentences_together(self):
         formatted = gradio_app.format_streaming_preview_text(
@@ -558,6 +558,13 @@ class TestPatWebUiDiarizationExports(unittest.TestCase):
         samples = np.frombuffer(pcm, dtype=np.int16)
 
         self.assertEqual(samples.tolist(), [0, 1000, -1000])
+
+    def test_numpy_audio_to_pcm_bytes_preserves_int16_stereo_scale(self):
+        audio = (16000, np.array([[1000, -1000], [2000, 2000]], dtype=np.int16))
+        pcm = gradio_app.numpy_audio_to_pcm_bytes(audio)
+        samples = np.frombuffer(pcm, dtype=np.int16)
+
+        self.assertEqual(samples.tolist(), [0, 2000])
 
     def test_describe_microphone_signal_reports_peak_level(self):
         status = gradio_app.describe_microphone_signal(
@@ -763,7 +770,15 @@ class TestPatWebUiDiarizationExports(unittest.TestCase):
             updates = list(
                 gradio_app.stream_transcribe_microphone(
                     audio=(16000, np.array([0, 1000, -1000], dtype=np.int16)),
-                    state={},
+                    state={
+                        "session_id": "test-session",
+                        "model": "paraformer-zh-streaming",
+                        "full_text": "",
+                        "last_chunk_bytes": b"",
+                        "sent": 0,
+                        "started": True,
+                        "model_ready": True,
+                    },
                     base_url="http://127.0.0.1:8000",
                     model="paraformer-zh-streaming",
                     timeout=1,
@@ -781,6 +796,54 @@ class TestPatWebUiDiarizationExports(unittest.TestCase):
         self.assertIn("已发送分片：1", status)
         self.assertEqual(state["sent"], 1)
         self.assertIn("峰值：0.0305", signal_status)
+
+    def test_init_microphone_streaming_state_waits_for_model_ready(self):
+        original_ensure = gradio_app.ensure_streaming_model_ready
+        try:
+            gradio_app.ensure_streaming_model_ready = lambda *_args, **_kwargs: "模型 paraformer-zh-streaming 已就绪。"
+            state, status = gradio_app.init_microphone_streaming_state(
+                "http://127.0.0.1:8000",
+                "paraformer-zh-streaming",
+                1,
+            )
+        finally:
+            gradio_app.ensure_streaming_model_ready = original_ensure
+
+        self.assertTrue(state["model_ready"])
+        self.assertTrue(state["started"])
+        self.assertIn("已就绪", status)
+
+    def test_stream_transcribe_microphone_skips_when_model_not_ready(self):
+        original_post_streaming_chunk = gradio_app.post_streaming_chunk
+        calls = []
+        try:
+            gradio_app.post_streaming_chunk = lambda **kwargs: calls.append(kwargs) or {"full_text": "不应出现"}
+            updates = list(
+                gradio_app.stream_transcribe_microphone(
+                    audio=(16000, np.array([0, 1000, -1000], dtype=np.int16)),
+                    state={
+                        "session_id": "test-session",
+                        "model": "paraformer-zh-streaming",
+                        "full_text": "",
+                        "sent": 0,
+                        "started": False,
+                        "model_ready": False,
+                        "status": "模型加载失败",
+                    },
+                    base_url="http://127.0.0.1:8000",
+                    model="paraformer-zh-streaming",
+                    timeout=1,
+                    chunk_size="0,10,5",
+                    encoder_chunk_look_back=0,
+                    decoder_chunk_look_back=0,
+                )
+            )
+        finally:
+            gradio_app.post_streaming_chunk = original_post_streaming_chunk
+
+        self.assertEqual(calls, [])
+        self.assertEqual(len(updates), 1)
+        self.assertIn("模型加载失败", updates[0][1])
 
     def test_build_app_contains_service_controls(self):
         demo, created_loops = build_demo_with_tracked_loops("http://127.0.0.1:8000", 1)
@@ -809,6 +872,7 @@ class TestPatWebUiDiarizationExports(unittest.TestCase):
             self.assertIn("刷新运行日志", button_values)
             self.assertIn("停止文件识别", button_values)
             self.assertIn("生成结果下载", button_values)
+            self.assertIn("生成 Mic 结果下载", button_values)
             self.assertNotIn("开始录制并识别", button_values)
             self.assertIn("timer", component_types)
         finally:
@@ -887,21 +951,21 @@ class TestPatWebUiDiarizationExports(unittest.TestCase):
             self.assertEqual(textbox_values["分块大小(chunk_size)"], "0,30,15")
             self.assertIn("编码器回看帧数(encoder_chunk_look_back)", labels)
             self.assertIn("解码器回看帧数(decoder_chunk_look_back)", labels)
+            self.assertIn("Gradio 麦克风", labels)
+            self.assertIn("麦克风识别状态", labels)
+            self.assertIn("麦克风信号", labels)
+            self.assertIn("Mic 流式输出", labels)
             self.assertNotIn("麦克风设备", labels)
             html_values = [
                 str(component.get("props", {}).get("value", ""))
                 for component in demo.config.get("components", [])
                 if component.get("type") == "html"
             ]
-            self.assertTrue(
-                any(
-                    "/mic-stream" in value
-                    and "打开 Mic 实时识别" in value
-                    and "iframe" not in value
-                    and "postMessage" not in value
-                    for value in html_values
-                )
-            )
+            self.assertFalse(any("patFormalMicDeviceSelect" in value for value in html_values))
+            self.assertFalse(any("patchedFormalGetUserMedia" in value for value in html_values))
+            self.assertFalse(any("/mic-stream" in value for value in html_values))
+            self.assertFalse(hasattr(gradio_app, "GRADIO_MIC_DEVICE_PICKER_HTML"))
+            self.assertFalse(hasattr(gradio_app, "GRADIO_MIC_DEVICE_PICKER_JS"))
             self.assertIn("说话人模型(spk_model)", labels)
             self.assertIn("说话人模式(spk_mode)", labels)
             self.assertIn("预设说话人数(preset_spk_num)", labels)

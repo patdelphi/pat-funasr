@@ -23,6 +23,7 @@ import tempfile
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 import zipfile
@@ -469,6 +470,18 @@ def request_json(url: str, timeout: float) -> dict:
         return json.loads(response.read().decode("utf-8"))
 
 
+def post_json(url: str, timeout: float) -> dict:
+    """发送空 JSON POST 请求，用于触发后端模型预加载等控制 API。"""
+    request = urllib.request.Request(
+        url,
+        data=b"",
+        method="POST",
+        headers={"Accept": "application/json", "Content-Length": "0"},
+    )
+    with open_url(request, timeout) as response:
+        return json.loads(response.read().decode("utf-8", errors="replace"))
+
+
 def multipart_body(audio_path: Path, fields: dict[str, str]) -> tuple[bytes, str]:
     boundary = f"----funasr-gradio-{uuid.uuid4().hex}"
     content_type = mimetypes.guess_type(str(audio_path))[0] or "application/octet-stream"
@@ -575,42 +588,30 @@ def post_streaming_chunk(
         return json.loads(response.read().decode("utf-8", errors="replace"))
 
 
+def ensure_streaming_model_ready(base_url: str, model: str, timeout: float) -> str:
+    """开始 Mic 录制前确认后端模型已加载，未加载则主动预加载。"""
+    normalized_base_url = str(base_url or DEFAULT_BASE_URL).rstrip("/")
+    model_name = str(model or "").strip()
+    if not model_name:
+        raise ValueError("未选择流式识别模型。")
+    encoded_model = urllib.parse.quote(model_name, safe="")
+    status = request_json(f"{normalized_base_url}/v1/models/{encoded_model}/status", timeout)
+    if status.get("ready"):
+        return f"模型 {model_name} 已就绪，麦克风录制已开始。"
+
+    loaded = post_json(f"{normalized_base_url}/v1/models/{encoded_model}/load", timeout)
+    if not loaded.get("ready"):
+        state = loaded.get("state") or status.get("state") or "unknown"
+        error = loaded.get("error") or status.get("error") or ""
+        detail = f"：{error}" if error else ""
+        raise RuntimeError(f"模型 {model_name} 未就绪，状态 {state}{detail}")
+    return f"模型 {model_name} 已就绪，麦克风录制已开始。"
+
+
 def format_streaming_text_for_display(text: str) -> str:
-    """把流式累计文本整理为更自然的阅读分行，避免每个短句单独成行。"""
+    """把流式累计文本整理为单段文本，避免短句被主动拆行。"""
     cleaned = re.sub(r"[\r\n|]+", " ", str(text or ""))
-    cleaned = re.sub(r"\s+", " ", cleaned).strip()
-    if not cleaned:
-        return ""
-
-    parts = [part for part in re.split(r"([^。！？!?；;]+[。！？!?；;]?)", cleaned) if part]
-    if not parts:
-        parts = [cleaned]
-
-    lines: list[str] = []
-    current = ""
-    for part in parts:
-        part = part.strip()
-        if not part:
-            continue
-        if not current:
-            current = part
-            continue
-        if len(current) < STREAMING_DISPLAY_MIN_LINE_CHARS:
-            current += part
-            continue
-        if re.search(r"[。！？!?；;]$", current):
-            lines.append(current)
-            current = part
-            continue
-        if len(current) + len(part) > STREAMING_DISPLAY_MAX_LINE_CHARS:
-            lines.append(current)
-            current = part
-            continue
-        current += part
-    if current:
-        lines.append(current)
-
-    return "\n".join(lines)
+    return re.sub(r"\s+", " ", cleaned).strip()
 
 
 def build_streaming_download_file(text: str) -> str:
@@ -628,10 +629,10 @@ def numpy_audio_to_pcm_bytes(audio) -> bytes:
     array = np.asarray(data)
     if array.size == 0:
         return b""
-    if array.ndim > 1:
-        array = array.mean(axis=1)
     source_is_float = array.dtype.kind == "f"
     array = array.astype(np.float32, copy=False)
+    if array.ndim > 1:
+        array = array.mean(axis=1)
     if source_is_float:
         array = np.clip(array, -1.0, 1.0) * 32767.0
 
@@ -655,10 +656,10 @@ def describe_microphone_signal(audio) -> str:
         array = np.asarray(data)
         if array.size == 0:
             return "收到空麦克风音频块。请检查输入设备或浏览器权限。"
-        if array.ndim > 1:
-            array = array.mean(axis=1)
         source_is_float = array.dtype.kind == "f"
         values = array.astype(np.float32, copy=False)
+        if values.ndim > 1:
+            values = values.mean(axis=1)
         if not source_is_float:
             values = values / 32768.0
         peak = float(np.max(np.abs(values)))
@@ -1016,16 +1017,30 @@ def poll_system_microphone_stream(session_id: str | None):
     return transcript, status, signal, ""
 
 
-def init_microphone_streaming_state(model: str) -> tuple[dict, str]:
+def init_microphone_streaming_state(base_url: str, model: str, timeout: float) -> tuple[dict, str]:
     """初始化浏览器麦克风流式识别状态。"""
-    return {
+    state = {
         "session_id": uuid.uuid4().hex,
         "model": model,
         "full_text": "",
         "last_chunk_bytes": b"",
         "sent": 0,
-        "started": True,
-    }, "麦克风录制已开始，正在实时识别。"
+        "started": False,
+        "model_ready": False,
+    }
+    try:
+        status = ensure_streaming_model_ready(base_url, model, timeout)
+        state["started"] = True
+        state["model_ready"] = True
+        state["status"] = status
+        return state, status
+    except urllib.error.HTTPError as error:
+        detail = error.read().decode("utf-8", errors="replace")
+        status = f"模型加载失败：HTTP {error.code}: {detail}"
+    except Exception as error:
+        status = f"模型加载失败：{error}"
+    state["status"] = status
+    return state, status
 
 
 def finish_microphone_streaming_state(
@@ -1087,8 +1102,12 @@ def stream_transcribe_microphone(
     """接收 Gradio 麦克风流式音频块，并转发到后端 streaming 端点。"""
     state = dict(state or {})
     if not state.get("session_id") or state.get("model") != model:
-        state, _ = init_microphone_streaming_state(model)
+        state, _ = init_microphone_streaming_state(base_url, model, timeout)
     signal_status = describe_microphone_signal(audio)
+    if state.get("model_ready") is False:
+        status = str(state.get("status") or "模型未就绪，已跳过麦克风分片。")
+        yield format_streaming_preview_text(state.get("full_text", ""), final_flag=False), status, state, signal_status
+        return
 
     try:
         parse_chunk_size_text(chunk_size)
@@ -2842,38 +2861,18 @@ def build_app(default_base_url: str, default_timeout: float):
                         stream_download = gr.File(label="下载结果", visible=True)
                     with gr.Column(scale=1, min_width=420):
                         gr.Markdown("### Mic 实时识别", elem_classes=["pat-compact-markdown"])
-                        gr.HTML(
-                            """
-                            <div style="border:1px solid var(--border-color-primary,#dce2eb);border-radius:8px;padding:18px;background:var(--background-fill-secondary,#f9fafb);">
-                              <div style="font-size:15px;font-weight:600;margin-bottom:8px;">浏览器原生 Mic 实时识别</div>
-                              <div style="color:var(--body-text-color-subdued,#667386);font-size:13px;line-height:1.6;margin-bottom:14px;">
-                                原生 Mic 页面独立处理麦克风权限、设备枚举、实时波形、结果下载和录音下载，避免嵌入式页面造成设备列表为空。
-                              </div>
-                              <a
-                                href="http://127.0.0.1:8000/mic-stream"
-                                target="_blank"
-                                rel="noreferrer"
-                                style="display:inline-flex;align-items:center;justify-content:center;min-height:40px;padding:8px 14px;border-radius:6px;background:var(--button-primary-background-fill,#2563eb);color:var(--button-primary-text-color,#fff);font-weight:600;text-decoration:none;"
-                              >打开 Mic 实时识别</a>
-                            </div>
-                            """
-                        )
                         stream_microphone = gr.Audio(
-                            label="系统麦克风",
+                            label="Gradio 麦克风",
                             sources=["microphone"],
                             type="numpy",
                             streaming=True,
                             recording=False,
-                            visible=False,
                         )
-                        mic_signal_status = gr.Textbox(label="麦克风信号", interactive=False, visible=False)
-                        mic_runtime_status = gr.Textbox(
-                            label="麦克风采集链路",
-                            value="Mic 采集链路：当前正式入口使用 /mic-stream 原生浏览器收声，旧 Gradio Audio 控件已隐藏。",
-                            interactive=False,
-                            lines=2,
-                            visible=False,
-                        )
+                        mic_status = gr.Textbox(label="麦克风识别状态", interactive=False)
+                        mic_signal_status = gr.Textbox(label="麦克风信号", interactive=False)
+                        mic_transcript = gr.Textbox(label="Mic 流式输出", lines=8, max_lines=18, buttons=["copy"])
+                        mic_download_button = gr.Button("生成 Mic 结果下载", variant="secondary")
+                        mic_download = gr.File(label="Mic 下载结果", visible=True)
                 stream_state = gr.State({})
                 stream_mic_session = gr.State("")
 
@@ -3212,8 +3211,8 @@ def build_app(default_base_url: str, default_timeout: float):
         )
         stream_microphone.start_recording(
             fn=init_microphone_streaming_state,
-            inputs=[stream_model],
-            outputs=[stream_mic_session, stream_status],
+            inputs=[base_url, stream_model, timeout],
+            outputs=[stream_mic_session, mic_status],
         )
         stream_mic_event = stream_microphone.stream(
             fn=stream_transcribe_microphone,
@@ -3227,7 +3226,7 @@ def build_app(default_base_url: str, default_timeout: float):
                 stream_encoder_lb,
                 stream_decoder_lb,
             ],
-            outputs=[stream_transcript, stream_status, stream_mic_session, mic_signal_status],
+            outputs=[mic_transcript, mic_status, stream_mic_session, mic_signal_status],
             show_progress="hidden",
             trigger_mode="multiple",
             stream_every=0.6,
@@ -3243,7 +3242,7 @@ def build_app(default_base_url: str, default_timeout: float):
                 stream_encoder_lb,
                 stream_decoder_lb,
             ],
-            outputs=[stream_mic_session, stream_status, stream_transcript],
+            outputs=[stream_mic_session, mic_status, mic_transcript],
             cancels=[stream_mic_event],
         )
         stream_file_stop_button.click(
@@ -3255,6 +3254,11 @@ def build_app(default_base_url: str, default_timeout: float):
             fn=build_streaming_download_file,
             inputs=[stream_transcript],
             outputs=[stream_download],
+        )
+        mic_download_button.click(
+            fn=build_streaming_download_file,
+            inputs=[mic_transcript],
+            outputs=[mic_download],
         )
         emotion_button.click(
             fn=safe_recognize_emotion,

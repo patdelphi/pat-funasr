@@ -2560,7 +2560,8 @@ http://127.0.0.1:8000/mic-stream  先搞定这个页面，有时候可以有时�
 
 ## 2026-06-10 19:32:10 +08:00 Assistant
 
-处理“可以收声但没有识别结果显示”：实测后端 /v1/funasr/streaming 可返回文本，定位到前端实时分片可能并发发送导致 eset=true 重复重置 session，且前端只在 ull_text truthy 时更新。已改为串行发送队列、按字段存在更新识别框，并增加空返回日志提示。测试通过，实际 HTML/JS 已验证并重启 API。
+处理“可以收声但没有识别结果显示”：实测后端 /v1/funasr/streaming 可返回文本，定位到前端实时分片可能并发发送导致 
+eset=true 重复重置 session，且前端只在 ull_text truthy 时更新。已改为串行发送队列、按字段存在更新识别框，并增加空返回日志提示。测试通过，实际 HTML/JS 已验证并重启 API。
 
 ## 2026-06-10 19:39:41 +08:00 User
 
@@ -2577,3 +2578,56 @@ http://127.0.0.1:8000/mic-stream  先搞定这个页面，有时候可以有时�
 ## 2026-06-10 20:10:31 +08:00 User
 
 先commit进度。我的目标还是要用gradio实现mic流式识别，我不相信没法做到。你自己先去搜索github类似项目、代码，我见过gradio完整实现，不是gradio不行。你单独起一个测试页面来测试gradio实现目前 8000这个同样功能
+
+## 2026-06-10 20:17:02 +08:00 Assistant
+
+已先提交当前进度 commit 90fff95。随后参考 Gradio 官方 Audio.stream demo、Gradio Audio 文档和实时语音识别教程，新建独立 Gradio FunASR 流式测试页 ipython/gradio_streaming_asr_test.py、启动脚本 
+un_gradio_streaming_asr_test.bat 和测试 	ests/test_aipython_gradio_streaming_asr_test.py。测试通过，API 与 7872 测试页已启动，浏览器已打开 7872。
+
+## 2026-06-10 20:23:37 +08:00 User
+
+显示不出设备，也没法选
+
+## 2026-06-10 20:27:50 +08:00 Assistant
+
+修复 7872 Gradio 流式测试页设备不可见/不可选：发现 gr.HTML 内联 script 不执行，改为 gr.HTML js_on_load 执行设备枚举与 getUserMedia shim。页面复查已显示设备下拉，含系统默认输入设备和麦克风 1，选择将在下一次启动 Gradio 麦克风时生效。
+
+## 2026-06-10 20:30:19 +08:00 User
+
+总算对了，你修改正式页面吧，流水识别改为全gradio实现，注意排版不要错乱
+
+## 2026-06-10 20:34:26 +08:00 Assistant
+
+已将正式流式识别页 Mic 区域改为全 Gradio 实现：恢复 Gradio Audio.stream 麦克风控件，加入设备枚举与 getUserMedia 设备注入，左右分栏保持左文件、右 Mic，Mic 状态/输出/下载独立。验证正式页 DOM 已显示设备下拉和麦克风 1；测试 45 passed。
+
+## 2026-06-10 20:47:47 +08:00 User
+
+设备选择下拉框不是gradio组件？不能跟着主题变色
+
+## 2026-06-10 21:15:12 +08:00 Assistant
+
+修复正式流式页设备选择主题问题：原生 select 改为自绘主题化 listbox，刷新设备/请求权限改为 Gradio Button 触发前端 JS，JS 改为 Gradio 事件函数格式，避免页面卡加载。浏览器复查：无原生 select，暗色主题下列表为暗底亮字，设备枚举正常。
+
+## 2026-06-11 05:45:52 +08:00 User
+
+很多错误，我已经回退代码，整个重新写这个模块，全部用gradio原生组件，你重新参考网上例子，不要自己胡乱写，要简单清晰的实现业务逻辑，你先出个计划吧
+
+## 2026-06-11 05:47:14 +08:00 Assistant
+
+已参考 Gradio 官方和 GitHub 示例，创建 todo.md，计划重写正式流式 Mic 模块为全 Gradio 原生组件：使用 gr.Audio microphone streaming + stream/start/stop 事件，去掉自定义设备选择和 /mic-stream 正式入口，短句结果不自动换行。尚未改业务代码。
+
+## 2026-06-11 05:50:18 +08:00 User
+
+执行
+
+## 2026-06-11 06:03:45 +08:00 Assistant
+
+执行 Gradio 流式 Mic 重写计划：正式流式页改回 Gradio 原生 `Audio(sources=["microphone"], streaming=True)`，移除正式页自定义设备 HTML/JS 和 `/mic-stream` 入口；Mic 状态、信号、输出、下载独立；修复 int16 双声道音频被错误放大的问题；流式预览改为不主动插入短句换行；Mic 开始录制前会检查/预加载模型。验证 `tests/test_pat_webui_diarization_exports.py` 通过，重启 7861 并用浏览器确认正式页为左右两栏且无旧设备注入。
+
+## 2026-06-11 11:24:21 +08:00 User
+
+测试一下，没问题就更新文档，commit and push
+
+## 2026-06-11 11:24:21 +08:00 Assistant
+
+开始执行发布前验证、文档更新、提交与推送流程；范围包括正式 Gradio 原生 Mic 流式识别改动、独立 Gradio Mic 测试页、相关测试与文档更新。

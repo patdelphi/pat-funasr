@@ -24,3 +24,12 @@
 - 收口文档入口：在根目录 "README.md" 与 "Docs/README.md" 中补充 "smoke_pat_webui.md"、"changelog.md" 等导航项
 - 重构 "FunASR_pat.bat" 启动链路：改由 "aipython/managed_single_window_launcher.py" 托管 API/UI 子进程，关闭启动窗口时自动结束子进程
 - 更新 "Docs/deployment.md" 与根目录 "README.md"：补充新的单窗口托管启动行为与日志说明
+
+## 2026-06-11
+
+- 重写 Pat WebUI “流式识别”页 Mic 区域：正式页回到 Gradio 原生 `Audio(sources=["microphone"], streaming=True)`，不再自绘设备下拉、不注入 `getUserMedia`、不跳转 `/mic-stream`
+- 文件流式识别与 Mic 实时识别保持左右两栏；Mic 状态、信号、输出、下载与文件流式输出互相独立
+- Mic 开始录制前增加模型 ready 门禁：先查 `/v1/models/{model}/status`，未 ready 时调用 `/v1/models/{model}/load`
+- 修复 Gradio numpy int16 双声道音频转换顺序，避免双声道均值后被误判为 float 并放大削波
+- 流式输出预览改为单段连续显示，避免短句被自动拆成多行；下载文本继续使用 UTF-8 BOM
+- 新增独立 Gradio Mic 流式识别测试页："aipython/gradio_streaming_asr_test.py" 与 "run_gradio_streaming_asr_test.bat"，用于隔离验证 Gradio `Audio.stream` 链路
