@@ -2872,6 +2872,8 @@ def build_app(default_base_url: str, default_timeout: float):
                             label="Gradio 麦克风",
                             sources=["microphone"],
                             type="numpy",
+                            streaming=True,
+                            recording=False,
                         )
                         mic_status = gr.Textbox(label="麦克风识别状态", interactive=False)
                         mic_signal_status = gr.Textbox(label="麦克风信号", interactive=False)
