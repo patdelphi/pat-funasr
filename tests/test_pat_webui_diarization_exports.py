@@ -587,7 +587,7 @@ class TestPatWebUiDiarizationExports(unittest.TestCase):
         self.assertIn("采样率：16000Hz", status)
         self.assertIn("样本数：3", status)
         self.assertIn("dtype：int16", status)
-        self.assertIn("峰值：0.0625", status)
+        self.assertIn("峰值：6.2%", status)
         self.assertIn("已收到有效声音信号", status)
 
     def test_describe_microphone_signal_treats_float_peak_one_as_loud(self):
@@ -596,7 +596,7 @@ class TestPatWebUiDiarizationExports(unittest.TestCase):
         )
         self.assertIn("采样率：48000Hz", status)
         self.assertIn("dtype：float32", status)
-        self.assertIn("峰值：1.0000", status)
+        self.assertIn("峰值：100.0%", status)
         self.assertIn("已收到有效声音信号", status)
         self.assertNotIn("信号接近静音", status)
 
@@ -621,7 +621,7 @@ class TestPatWebUiDiarizationExports(unittest.TestCase):
         status = gradio_app.describe_pcm_signal(pcm)
         self.assertIn("采样率：16000Hz", status)
         self.assertIn("样本数：3", status)
-        self.assertIn("峰值：600", status)
+        self.assertIn("峰值：1.8%", status)
 
     def test_convert_system_mic_pcm_to_funasr_pcm_resamples_and_downmixes(self):
         source = np.array([[0, 1000], [2000, -2000], [3000, 3000], [-4000, 4000]], dtype=np.int16)
@@ -774,7 +774,7 @@ class TestPatWebUiDiarizationExports(unittest.TestCase):
         self.assertFalse(session["active"])
         self.assertEqual(session["sent"], 1)
         self.assertIn("系统麦克风有声音。", session["full_text"])
-        self.assertIn("峰值：1000", session["signal"])
+        self.assertIn("峰值：3.1%", session["signal"])
         self.assertEqual(FakePyAudioApi.opened_kwargs["input_device_index"], 3)
 
     def test_stream_transcribe_microphone_returns_frontend_updates_synchronously(self):
@@ -807,7 +807,7 @@ class TestPatWebUiDiarizationExports(unittest.TestCase):
         self.assertIn("你好欢迎试驾。请往这边走。", transcript)
         self.assertIn("已发送分片：1", status)
         self.assertEqual(state["sent"], 1)
-        self.assertIn("峰值：0.0305", signal_status)
+        self.assertIn("峰值：3.1%", signal_status)
 
     def test_init_microphone_streaming_state_waits_for_model_ready(self):
         original_ensure = gradio_app.ensure_streaming_model_ready

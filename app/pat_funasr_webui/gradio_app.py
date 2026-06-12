@@ -752,6 +752,14 @@ def numpy_audio_to_pcm_bytes(audio) -> bytes:
     return np.clip(array, -32768, 32767).astype(np.int16).tobytes()
 
 
+def _build_signal_bar(peak: float, bar_width: int = 20) -> str:
+    """根据峰值构建简易 ASCII 音量条，峰值 0~1 映射到 bar_width 个字符。"""
+    filled = int(min(peak, 1.0) * bar_width)
+    empty = bar_width - filled
+    # 使用 █ 表示已填充，░ 表示空白
+    return f"[{'█' * filled}{'░' * empty}]"
+
+
 def describe_microphone_signal(audio) -> str:
     """返回麦克风输入的可读信号摘要，用于判断浏览器是否真正收音。"""
     if audio is None:
@@ -769,13 +777,16 @@ def describe_microphone_signal(audio) -> str:
             values = values / 32768.0
         peak = float(np.max(np.abs(values)))
         rms = float(np.sqrt(np.mean(values * values)))
+        peak_pct = peak * 100
+        rms_pct = rms * 100
+        bar = _build_signal_bar(peak)
         base = (
-            f"采样率：{int(sample_rate)}Hz；样本数：{array.shape[0]}；"
-            f"dtype：{array.dtype}；峰值：{peak:.4f}；RMS：{rms:.4f}。"
+            f"{bar} 峰值：{peak_pct:.1f}% | RMS：{rms_pct:.1f}%\n"
+            f"采样率：{int(sample_rate)}Hz | 样本数：{array.shape[0]} | dtype：{array.dtype}"
         )
         if peak < 0.01 and rms < 0.003:
-            return base + "信号接近静音。"
-        return base + "已收到有效声音信号。"
+            return base + "\n⚠ 信号接近静音"
+        return base + "\n✓ 已收到有效声音信号"
     except Exception as exc:
         return f"麦克风信号解析失败：{exc}"
 
@@ -807,9 +818,15 @@ def describe_pcm_signal(pcm_bytes: bytes, sample_rate: int = SYSTEM_MIC_SAMPLE_R
         if array.size == 0:
             return "收到空系统麦克风 PCM 音频帧。"
         peak = int(np.max(np.abs(array.astype(np.int32))))
+        peak_pct = peak / 32768.0 * 100
+        bar = _build_signal_bar(peak / 32768.0)
+        base = (
+            f"{bar} 峰值：{peak_pct:.1f}%\n"
+            f"采样率：{sample_rate}Hz | 样本数：{array.size}"
+        )
         if peak <= 1:
-            return f"采样率：{sample_rate}Hz；样本数：{array.size}；峰值：{peak}。信号接近静音。"
-        return f"采样率：{sample_rate}Hz；样本数：{array.size}；峰值：{peak}。"
+            return base + "\n⚠ 信号接近静音"
+        return base + "\n✓ 已收到有效声音信号"
     except Exception as exc:
         return f"系统麦克风 PCM 解析失败：{exc}"
 
