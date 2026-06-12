@@ -152,7 +152,6 @@ class TestPatWebUiDiarizationExports(unittest.TestCase):
             gradio_app.request_json = original_request_json
 
         self.assertGreater(len(choices), 1)
-        self.assertIn("当前为静态兜底模型列表", status_text)
         self.assertIn("已回退静态模型清单", status_text)
         self.assertIn("data", payload)
 
@@ -176,13 +175,13 @@ class TestPatWebUiDiarizationExports(unittest.TestCase):
         self.assertIn("后端实时", realtime_html)
         self.assertIn("#10B981", realtime_html)
 
+        # 静态兜底不再显示提示
         fallback_html = gradio_app.get_model_source_hint_html("当前为静态兜底模型列表")
-        self.assertIn("静态兜底", fallback_html)
-        self.assertIn("#F59E0B", fallback_html)
+        self.assertEqual(fallback_html, "")
 
         # 异常与空值保护
         none_html = gradio_app.get_model_source_hint_html(None)
-        self.assertIn("静态兜底", none_html)
+        self.assertEqual(none_html, "")
 
     def test_read_runtime_logs_reads_api_and_ui_logs(self):
         temp_root = Path(tempfile.mkdtemp(prefix="pat-funasr-log-test-"))

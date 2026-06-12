@@ -2582,7 +2582,7 @@ def get_model_source_hint_html(status_text: str) -> str:
             return "<div class='pat-model-source-hint' style='margin-top: 4px; font-size: 13px; color: #10B981; display: flex; align-items: center; gap: 4px;'><span style='font-size: 8px;'>●</span> 当前为后端实时模型列表</div>"
     except Exception:
         pass
-    return "<div class='pat-model-source-hint' style='margin-top: 4px; font-size: 13px; color: #F59E0B; display: flex; align-items: center; gap: 4px;'><span style='font-size: 8px;'>●</span> 当前为静态兜底模型列表</div>"
+    return ""
 
 
 def fetch_model_choices(base_url: str, timeout: float) -> tuple[list[tuple[str, str]], str, dict]:
@@ -2600,13 +2600,13 @@ def fetch_model_choices(base_url: str, timeout: float) -> tuple[list[tuple[str, 
             )
         return (
             fallback_choices,
-            "当前为静态兜底模型列表\n后端返回了空模型列表，已回退静态模型清单",
+            "后端返回了空模型列表，已回退静态模型清单",
             fallback_payload,
         )
     except Exception as error:
         return (
             fallback_choices,
-            f"当前为静态兜底模型列表\n模型列表加载失败，已回退静态模型清单：{error}",
+            f"模型列表加载失败，已回退静态模型清单：{error}",
             fallback_payload,
         )
 
@@ -3100,10 +3100,6 @@ def build_app(default_base_url: str, default_timeout: float):
                                 stream_chunk_size = gr.Textbox(label="分块大小(chunk_size)", value="0,30,15")
                                 stream_encoder_lb = gr.Number(label="编码器回看帧数(encoder_chunk_look_back)", value=4, precision=0)
                                 stream_decoder_lb = gr.Number(label="解码器回看帧数(decoder_chunk_look_back)", value=1, precision=0)
-                stream_media_status = gr.Markdown(
-                    "流式识别页当前启用 Paraformer Streaming 中文；其他候选需先下载和实测后再启用。",
-                    elem_classes=["pat-compact-markdown"],
-                )
                 with gr.Row(equal_height=False):
                     with gr.Column(scale=1, min_width=420):
                         gr.Markdown("### 文件流式识别", elem_classes=["pat-compact-markdown"])
@@ -3453,7 +3449,7 @@ def build_app(default_base_url: str, default_timeout: float):
         stream_media_file.change(
             fn=update_media_preview,
             inputs=[stream_media_file],
-            outputs=[stream_preview, stream_audio_preview, stream_media_status],
+            outputs=[stream_preview, stream_audio_preview],
         )
         emotion_media_file.change(
             fn=update_media_preview,
