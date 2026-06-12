@@ -3321,3 +3321,25 @@ damo/ 目录下只有 .mdl 元数据文件，不是完整模型。函数检查�
 
 - commit 754ef29 完成
 - 现在只有真正有模型文件的才显示为「已下载」
+
+## 2026-06-12 22:33:55
+
+### User Request
+
+模型下载状态不准确，改了 workspace/models 目录名后还是显示已下载
+
+### Root Cause
+
+函数检查了多个缓存目录（workspace/models、~/.cache/modelscope），导致即使 workspace/models 不存在，也能从 ~/.cache/modelscope 找到模型文件。
+
+### Agent Actions
+
+1. 修改 _is_model_downloaded 只检查 workspace/models 目录
+2. 移除对 ~/.cache/modelscope 和 MODELSCOPE_CACHE 环境变量的检查
+3. 修复 _PROJECT_ROOT 路径计算（从 _APP_DIR.parent 改为正确的项目根目录）
+4. 全量 162 项测试通过
+
+### Current Status
+
+- commit 44c137 完成
+- 现在只检查 workspace/models 目录，改名后正确显示未下载
