@@ -3230,3 +3230,24 @@ if "%DEVICE%"=="" set "DEVICE=cuda"
 
 - commit de659bc 完成
 - 需要重启 UI 验证效果
+
+## 2026-06-12 22:02:02
+
+### User Request
+
+服务与调试页面，模型列表，当前状态，请改为是否模型已经下载至本地
+
+### Agent Actions
+
+1. API /v1/models 新增 downloaded 字段，使用 snapshot_download(local_files_only=True) 检查模型是否已下载到本地缓存
+2. 状态标签从「已加载/按需加载」改为「已加载/已下载/未下载」
+3. 模型看板表头从「当前状态」改为「本地状态」
+4. 更新状态说明文本和摘要格式
+5. 更新 ormat_model_label 和 parse_model_choices 支持新状态
+6. 更新 5 个测试用例适配新状态标签
+7. 全量 162 项测试通过
+
+### Current Status
+
+- commit 8361fd4 完成
+- 需要重启 API 和 UI 验证效果
