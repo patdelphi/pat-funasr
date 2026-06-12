@@ -3299,3 +3299,25 @@ snapshot_download(local_files_only=True) 会检查 revision 信息，而本地�
 
 - commit  274733 完成
 - 所有 10 个模型现在都正确显示为「已下载」
+
+## 2026-06-12 22:24:11
+
+### User Request
+
+模型下载状态不准确，关掉进程改目录名后重开还是显示已下载，但实际跑识别时才实时下载
+
+### Root Cause
+
+damo/ 目录下只有 .mdl 元数据文件，不是完整模型。函数检查目录存在且有文件就返回 True，但 .mdl 不是实际模型文件。
+
+### Agent Actions
+
+1. 新增 _has_model_files 辅助函数检查目录是否包含实际模型文件
+2. 模型文件标识：config.yaml, configuration.json, model.pt, model.bin, pytorch_model.bin, 	okenizer.json
+3. 避免仅凭 .mdl 元数据文件误判为已下载
+4. 全量 162 项测试通过
+
+### Current Status
+
+- commit 754ef29 完成
+- 现在只有真正有模型文件的才显示为「已下载」
