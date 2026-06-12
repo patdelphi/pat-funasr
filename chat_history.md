@@ -3251,3 +3251,26 @@ if "%DEVICE%"=="" set "DEVICE=cuda"
 
 - commit 8361fd4 完成
 - 需要重启 API 和 UI 验证效果
+
+## 2026-06-12 22:11:16
+
+### User Request
+
+模型下载状态不准确，明明都下载了还显示未下载。tab 里模型下拉列表不要显示下载状态了。
+
+### Root Cause
+
+snapshot_download(local_files_only=True) 会检查 revision 信息，而本地缓存可能没有记录 revision，导致抛出异常返回 False。
+
+### Agent Actions
+
+1. 修复 _is_model_downloaded 改为直接检查本地缓存目录是否存在
+2. ormat_model_label 新增 show_status 参数，默认显示状态
+3. parse_model_choices 和 uild_known_model_choices 调用时设置 show_status=False
+4. 服务与调试页面模型列表仍显示「已加载/已下载/未下载」
+5. 更新对应测试用例
+6. 全量 162 项测试通过
+
+### Current Status
+
+- commit  1bb7f7 完成
