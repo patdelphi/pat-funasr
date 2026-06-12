@@ -3343,3 +3343,26 @@ damo/ 目录下只有 .mdl 元数据文件，不是完整模型。函数检查�
 
 - commit 44c137 完成
 - 现在只检查 workspace/models 目录，改名后正确显示未下载
+
+## 2026-06-12 22:58:20
+
+### User Request
+
+1. 离线识别页面，把单文件、批量文件相关组件分左右栏放置，类似流式识别里面两种功能的排版
+2. 模型列表，nllb 两个模型的能力补充：多语种文本翻译
+
+### Agent Actions
+
+1. 离线识别页面改为左右分栏布局：
+   - 左栏：单文件处理（上传、预览、结果、下载）
+   - 右栏：批量文件处理（上传、执行、结果、下载）
+2. 补充 NLLB 模型能力：
+   - server.py: MODEL_CAPABILITIES 新增 	ranslation: True 和多语种翻译说明
+   - app_utils.py: MODEL_CAPABILITY_MATRIX 新增 NLLB 模型条目
+   - _capability_text 新增「文本翻译」标签
+   - CAPABILITY_FILTER_LABELS 新增「文本翻译」筛选项
+3. 全量 162 项测试通过
+
+### Current Status
+
+- commit db178e 完成
