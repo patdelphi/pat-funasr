@@ -11,6 +11,7 @@ if "%TARGET%"=="status" goto :status
 if "%TARGET%"=="ms" goto :write
 if "%TARGET%"=="hf" goto :write
 
+:menu
 echo.
 echo 请选择默认模型来源：
 echo   1. ModelScope (ms)
@@ -18,13 +19,11 @@ echo   2. HuggingFace (hf)
 echo   3. 查看当前设置
 echo.
 set /p "CHOICE=输入 1/2/3 后回车: "
-if "%CHOICE%"=="1" set "TARGET=ms"
-if "%CHOICE%"=="2" set "TARGET=hf"
+if "%CHOICE%"=="1" set "TARGET=ms" & goto :write
+if "%CHOICE%"=="2" set "TARGET=hf" & goto :write
 if "%CHOICE%"=="3" goto :status
-if not defined TARGET (
-  echo 未选择有效来源。
-  exit /b 1
-)
+echo 未选择有效选项，请重新选择。
+goto :menu
 
 :write
 > ".env.local.bat" echo @echo off
@@ -33,6 +32,7 @@ if not defined TARGET (
 echo 已切换默认模型来源为 "%TARGET%"。
 echo 配置文件："%CD%\.env.local.bat"
 echo 重启 API / WebUI 后生效。
+pause
 exit /b 0
 
 :normalize_target
@@ -48,8 +48,8 @@ if exist ".env.local.bat" (
   call ".env.local.bat"
 )
 if not defined FUNASR_MODEL_HUB (
-  echo 当前默认模型来源：未设置（使用代码内默认配置）
+  echo 当前默认模型来源：未设置（代码默认为魔塔源 ModelScope）
 ) else (
   echo 当前默认模型来源："%FUNASR_MODEL_HUB%"
 )
-exit /b 0
+goto :menu

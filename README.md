@@ -1,6 +1,8 @@
 ﻿# Pat-FunASR
 
-基于 [FunASR](https://github.com/modelscope/FunASR) 的 Windows GPU 便携版语音识别工具包，提供 OpenAI 兼容 API 和 Gradio WebUI。
+基于 [FunASR](https://github.com/modelscope/FunASR) ，进行了大幅度实用化改造，覆盖ASR语音识别的各种场景，还加入了一个单独的跨语种翻译功能。
+
+无需API Key，全部为本地化模型应用，确保安全性和隐私性。按需实时下载，同时支持Huggingface与魔塔模型下载（可通过 switch_model_hub.bat 切换模型源）。
 
 ## 功能特性
 
@@ -16,7 +18,7 @@
 ### 环境要求
 
 - Windows 10/11
-- NVIDIA GPU（推荐，支持 CPU 回退）
+- NVIDIA GPU（默认为GPU模式，支持 CPU 模式）
 - CUDA 11.8+（PyTorch 已内置）
 
 ### 启动方式
@@ -24,6 +26,7 @@
 ```bash
 # 方式一：单窗口托管启动 API + WebUI（推荐）
 FunASR_pat.bat
+（调用CPU模式命令为：FunASR_pat.bat cpu）
 
 # 方式二：分别启动
 run_api.bat        # 启动 API 服务（默认端口 8000）
