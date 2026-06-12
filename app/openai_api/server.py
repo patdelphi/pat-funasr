@@ -1719,6 +1719,16 @@ def _is_model_downloaded(model_name: str) -> bool:
     cfg = MODEL_CONFIGS[model_name]
     model_id = cfg.get("model", "")
     hub_val = cfg.get("hub", "ms")
+    
+    def _has_model_files(path: str) -> bool:
+        """检查目录是否包含实际模型文件（不只是 .mdl 元数据）。"""
+        if not os.path.isdir(path):
+            return False
+        files = os.listdir(path)
+        # 检查是否有实际模型文件
+        model_indicators = {'config.yaml', 'configuration.json', 'model.pt', 'model.bin', 'pytorch_model.bin', 'tokenizer.json'}
+        return bool(model_indicators & set(files))
+    
     try:
         if hub_val in ("ms", "modelscope"):
             import os
@@ -1726,19 +1736,19 @@ def _is_model_downloaded(model_name: str) -> bool:
             
             # 处理模型 ID 中的斜杠，转换为目录路径
             model_path = os.path.join(cache_dir, model_id.replace('/', os.sep))
-            if os.path.isdir(model_path) and os.listdir(model_path):
+            if _has_model_files(model_path):
                 return True
             
             # 检查 damo/ 前缀路径（FunASR 别名模型）
             damo_path = os.path.join(cache_dir, 'damo', model_id)
-            if os.path.isdir(damo_path) and os.listdir(damo_path):
+            if _has_model_files(damo_path):
                 return True
             
             # 处理 Qwen 模型路径格式（点号替换为三个下划线）
             if '.' in model_id:
                 alt_model_id = model_id.replace('.', '___')
                 alt_path = os.path.join(cache_dir, alt_model_id.replace('/', os.sep))
-                if os.path.isdir(alt_path) and os.listdir(alt_path):
+                if _has_model_files(alt_path):
                     return True
             
             return False
