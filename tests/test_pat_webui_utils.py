@@ -37,13 +37,13 @@ class TestPatWebUiUtils(unittest.TestCase):
             choices,
             [
                 ("SenseVoice (sensevoice) [已加载]", "sensevoice"),
-                ("Fun-ASR-Nano (fun-asr-nano) [按需加载]", "fun-asr-nano"),
+                ("Fun-ASR-Nano (fun-asr-nano) [未下载]", "fun-asr-nano"),
             ],
         )
 
     def test_choose_default_model_prefers_sensevoice(self):
         choices = [
-            ("Fun-ASR-Nano (fun-asr-nano) [按需加载]", "fun-asr-nano"),
+            ("Fun-ASR-Nano (fun-asr-nano) [未下载]", "fun-asr-nano"),
             ("SenseVoice (sensevoice) [已加载]", "sensevoice"),
         ]
         self.assertEqual(app_utils.choose_default_model(choices), "sensevoice")
@@ -76,21 +76,21 @@ class TestPatWebUiUtils(unittest.TestCase):
         ensured = app_utils.ensure_dropdown_choices([], fallback="paraformer-zh-streaming")
         self.assertEqual(
             ensured,
-            [("Paraformer Streaming 中文 (paraformer-zh-streaming) [按需加载]", "paraformer-zh-streaming")],
+            [("Paraformer Streaming 中文 (paraformer-zh-streaming) [未下载]", "paraformer-zh-streaming")],
         )
 
     def test_filter_emotion_model_choices(self):
         choices = [
             ("SenseVoice (sensevoice) [已加载]", "sensevoice"),
-            ("Emotion2Vec Plus Large (emotion2vec-plus-large) [按需加载]", "emotion2vec-plus-large"),
-            ("Qwen3-ASR-0.6B (qwen3-asr-0.6b) [按需加载]", "qwen3-asr-0.6b"),
+            ("Emotion2Vec Plus Large (emotion2vec-plus-large) [未下载]", "emotion2vec-plus-large"),
+            ("Qwen3-ASR-0.6B (qwen3-asr-0.6b) [未下载]", "qwen3-asr-0.6b"),
         ]
         filtered = app_utils.filter_emotion_model_choices(choices)
         self.assertEqual(
             filtered,
             [
                 ("SenseVoice (sensevoice) [已加载]", "sensevoice"),
-                ("Emotion2Vec Plus Large (emotion2vec-plus-large) [按需加载]", "emotion2vec-plus-large"),
+                ("Emotion2Vec Plus Large (emotion2vec-plus-large) [未下载]", "emotion2vec-plus-large"),
             ],
         )
         self.assertEqual(
@@ -165,9 +165,9 @@ class TestPatWebUiUtils(unittest.TestCase):
         self.assertIn("SenseVoice (`sensevoice`)", markdown)
         self.assertIn("Paraformer Streaming 中文 (`paraformer-zh-streaming`)", markdown)
         self.assertIn("| 已加载 |", markdown)
-        self.assertIn("| 按需加载 |", markdown)
+        self.assertIn("| 未下载 |", markdown)
         self.assertIn("明确列出：普通话、粤语、英语、日语、韩语", markdown)
-        self.assertIn("状态说明：`已加载` 表示当前进程已缓存该模型；`按需加载` 表示服务启动时不预加载，首次请求时自动加载。", markdown)
+        self.assertIn("状态说明：`已加载` 表示当前进程已缓存该模型；`已下载` 表示模型已下载至本地；`未下载` 表示模型尚未下载。", markdown)
         self.assertIn("后端返回能力", markdown)
         self.assertIn("流式专用", markdown)
         self.assertIn("当前筛选：`全部模型`", markdown)
@@ -188,7 +188,7 @@ class TestPatWebUiUtils(unittest.TestCase):
         self.assertIn("API 地址：`http://localhost:8000`", markdown)
         self.assertIn("启动方式：后端启动时不预加载模型；首次调用对应能力时再按需加载。", markdown)
         self.assertIn("已加载模型：`sensevoice`", markdown)
-        self.assertIn("按需加载模型：`paraformer-zh-streaming`", markdown)
+        self.assertIn("未下载模型：`paraformer-zh-streaming`", markdown)
 
     def test_filter_model_capability_rows(self):
         rows = [

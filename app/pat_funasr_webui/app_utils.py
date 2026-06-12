@@ -281,11 +281,16 @@ def build_request_fields(**kwargs: Any) -> dict[str, str]:
     return fields
 
 
-def format_model_label(model_id: str, ready: bool) -> str:
+def format_model_label(model_id: str, ready: bool, downloaded: bool = False) -> str:
     """为模型下拉框生成更易读的展示文本。"""
     base_label = MODEL_LABELS.get(model_id, model_id)
-    ready_label = "已加载" if ready else "按需加载"
-    return f"{base_label} ({model_id}) [{ready_label}]"
+    if ready:
+        status_label = "已加载"
+    elif downloaded:
+        status_label = "已下载"
+    else:
+        status_label = "未下载"
+    return f"{base_label} ({model_id}) [{status_label}]"
 
 
 def parse_model_choices(payload: dict[str, Any]) -> list[tuple[str, str]]:
@@ -296,13 +301,14 @@ def parse_model_choices(payload: dict[str, Any]) -> list[tuple[str, str]]:
         if not model_id:
             continue
         ready = bool(item.get("ready", False))
-        choices.append((format_model_label(model_id, ready), model_id))
+        downloaded = bool(item.get("downloaded", False))
+        choices.append((format_model_label(model_id, ready, downloaded), model_id))
     return choices
 
 
 def build_known_model_choices() -> list[tuple[str, str]]:
     """构建静态已知模型下拉选项，供接口异常时兜底。"""
-    return [(format_model_label(model_id, ready=False), model_id) for model_id in MODEL_LABELS]
+    return [(format_model_label(model_id, ready=False, downloaded=False), model_id) for model_id in MODEL_LABELS]
 
 
 def choose_default_model(choices: list[tuple[str, str]], fallback: str = DEFAULT_MODEL) -> str | None:
@@ -367,8 +373,12 @@ def _capability_badge(enabled: bool) -> str:
     return "Y" if enabled else "-"
 
 
-def _status_label(ready: bool) -> str:
-    return "已加载" if ready else "按需加载"
+def _status_label(ready: bool, downloaded: bool = False) -> str:
+    if ready:
+        return "已加载"
+    if downloaded:
+        return "已下载"
+    return "未下载"
 
 
 def _capability_text(capability: dict[str, Any]) -> str:
@@ -394,13 +404,16 @@ def summarize_model_status(payload: dict[str, Any]) -> str:
     if not rows:
         return "未获取到模型列表"
     loaded = [f"`{row['model']}`" for row in rows if row.get("ready") == "已加载"]
-    pending = [f"`{row['model']}`" for row in rows if row.get("ready") != "已加载"]
+    downloaded = [f"`{row['model']}`" for row in rows if row.get("ready") == "已下载"]
+    not_downloaded = [f"`{row['model']}`" for row in rows if row.get("ready") == "未下载"]
     loaded_text = "、".join(loaded) if loaded else "无"
-    pending_text = "、".join(pending) if pending else "无"
+    downloaded_text = "、".join(downloaded) if downloaded else "无"
+    not_downloaded_text = "、".join(not_downloaded) if not_downloaded else "无"
     return (
         f"共 {len(rows)} 个模型；"
         f"已加载 {len(loaded)} 个：{loaded_text}；"
-        f"按需加载 {len(pending)} 个：{pending_text}"
+        f"已下载 {len(downloaded)} 个：{downloaded_text}；"
+        f"未下载 {len(not_downloaded)} 个：{not_downloaded_text}"
     )
 
 
@@ -412,6 +425,7 @@ def build_model_capability_rows(payload: dict[str, Any]) -> list[dict[str, str]]
         if not model_id:
             continue
         ready = bool(item.get("ready", False))
+        downloaded = bool(item.get("downloaded", False))
         capability = item.get("capabilities") or MODEL_CAPABILITY_MATRIX.get(model_id, {})
         languages = MODEL_LANGUAGE_MATRIX.get(model_id, "以模型文档为准")
         recommended_entry = MODEL_ENTRY_MATRIX.get(model_id, "服务与调试")
@@ -419,7 +433,7 @@ def build_model_capability_rows(payload: dict[str, Any]) -> list[dict[str, str]]
             {
                 "model": model_id,
                 "label": MODEL_LABELS.get(model_id, model_id),
-                "ready": _status_label(ready),
+                "ready": _status_label(ready, downloaded),
                 "offline_asr": _capability_badge(bool(capability.get("offline_asr", False))),
                 "streaming_asr": _capability_badge(bool(capability.get("streaming_asr", False))),
                 "diarization": _capability_badge(bool(capability.get("diarization", False))),
@@ -452,16 +466,16 @@ def render_model_capability_markdown(payload: dict[str, Any], capability_filter:
     rows = filter_model_capability_rows(rows, capability_filter)
     if not rows:
         filter_label = CAPABILITY_FILTER_LABELS.get(capability_filter, "当前筛选")
-        return f"### 模型能力看板\n\n当前筛选“{filter_label}”下暂无匹配模型。"
+        return f"### 模型能力看板\n\n当前筛选「{filter_label}」下暂无匹配模型。"
 
     filter_label = CAPABILITY_FILTER_LABELS.get(capability_filter, "全部模型")
     lines = [
         "### 模型能力看板",
         "",
         f"- 当前筛选：`{filter_label}`",
-        "- 状态说明：`已加载` 表示当前进程已缓存该模型；`按需加载` 表示服务启动时不预加载，首次请求时自动加载。",
+        "- 状态说明：`已加载` 表示当前进程已缓存该模型；`已下载` 表示模型已下载至本地；`未下载` 表示模型尚未下载。",
         "",
-        "| 模型 | 当前状态 | 支持语言 | 能力 | 推荐入口 | 说明 |",
+        "| 模型 | 本地状态 | 支持语言 | 能力 | 推荐入口 | 说明 |",
         "| --- | --- | --- | --- | --- | --- |",
     ]
     for row in rows:
@@ -481,20 +495,23 @@ def render_service_overview_markdown(
     rows = filter_model_capability_rows(build_model_capability_rows(payload), capability_filter)
     filter_label = CAPABILITY_FILTER_LABELS.get(capability_filter, "全部模型")
     loaded = [f"`{row['model']}`" for row in rows if row.get("ready") == "已加载"]
-    pending = [f"`{row['model']}`" for row in rows if row.get("ready") != "已加载"]
+    downloaded = [f"`{row['model']}`" for row in rows if row.get("ready") == "已下载"]
+    not_downloaded = [f"`{row['model']}`" for row in rows if row.get("ready") == "未下载"]
     loaded_text = "、".join(loaded) if loaded else "无"
-    pending_text = "、".join(pending) if pending else "无"
+    downloaded_text = "、".join(downloaded) if downloaded else "无"
+    not_downloaded_text = "、".join(not_downloaded) if not_downloaded else "无"
     return "\n".join(
         [
             "### 运行概览",
             "",
             f"- API 地址：`{base_url.rstrip('/')}`",
             "- 启动方式：后端启动时不预加载模型；首次调用对应能力时再按需加载。",
-            "- 状态说明：`已加载` = 当前进程已缓存；`按需加载` = 当前未载入，但请求时会自动加载。",
+            "- 状态说明：`已加载` = 当前进程已缓存；`已下载` = 模型已下载至本地；`未下载` = 模型尚未下载。",
             "- 模型语言：优先展示当前项目已整理的官方口径；细节以上游模型文档为准。",
             f"- 当前筛选：`{filter_label}`",
             f"- 已加载模型：{loaded_text}",
-            f"- 按需加载模型：{pending_text}",
+            f"- 已下载模型：{downloaded_text}",
+            f"- 未下载模型：{not_downloaded_text}",
         ]
     )
 

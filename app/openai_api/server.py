@@ -1712,6 +1712,27 @@ async def recognize_diarization(
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
+def _is_model_downloaded(model_name: str) -> bool:
+    """检查模型是否已下载到本地缓存。"""
+    if model_name not in MODEL_CONFIGS:
+        return False
+    cfg = MODEL_CONFIGS[model_name]
+    model_id = cfg.get("model", "")
+    hub_val = cfg.get("hub", "ms")
+    try:
+        if hub_val in ("ms", "modelscope"):
+            from modelscope.hub.snapshot_download import snapshot_download
+            snapshot_download(model_id, local_files_only=True)
+            return True
+        elif hub_val in ("hf", "huggingface"):
+            from huggingface_hub import snapshot_download
+            snapshot_download(model_id, local_files_only=True)
+            return True
+    except Exception:
+        return False
+    return False
+
+
 @app.get("/v1/models")
 async def list_models():
     """List available models (OpenAI-compatible)."""
@@ -1723,6 +1744,7 @@ async def list_models():
             "created": SERVER_START_EPOCH,
             "owned_by": "funasr",
             "ready": _is_model_ready(name),
+            "downloaded": _is_model_downloaded(name),
             "capabilities": MODEL_CAPABILITIES.get(
                 name,
                 {
