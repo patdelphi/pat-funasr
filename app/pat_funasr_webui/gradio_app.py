@@ -2970,8 +2970,8 @@ def build_app(default_base_url: str, default_timeout: float):
                         with gr.Accordion("流式参数", open=False):
                             with gr.Row():
                                 stream_chunk_size = gr.Textbox(label="分块大小(chunk_size)", value="0,30,15")
-                stream_encoder_lb = gr.Number(label="编码器回看帧数(encoder_chunk_look_back)", value=4, precision=0)
-                stream_decoder_lb = gr.Number(label="解码器回看帧数(decoder_chunk_look_back)", value=1, precision=0)
+                                stream_encoder_lb = gr.Number(label="编码器回看帧数(encoder_chunk_look_back)", value=4, precision=0)
+                                stream_decoder_lb = gr.Number(label="解码器回看帧数(decoder_chunk_look_back)", value=1, precision=0)
                 stream_media_status = gr.Markdown(
                     "流式识别页当前启用 Paraformer Streaming 中文；其他候选需先下载和实测后再启用。",
                     elem_classes=["pat-compact-markdown"],
@@ -3450,22 +3450,19 @@ def build_app(default_base_url: str, default_timeout: float):
             ],
             outputs=[stream_transcript, stream_status],
         )
+        def _mic_debug(audio, state):
+            if audio is None:
+                return "未收到音频", state
+            sr, data = audio
+            arr = np.asarray(data)
+            peak = float(np.max(np.abs(arr.astype(np.float32))))
+            rms = float(np.sqrt(np.mean(arr.astype(np.float32) ** 2)))
+            return f"sr={sr} n={arr.shape[0]} peak={peak:.6f} rms={rms:.6f}", state
         stream_mic_event = stream_microphone.stream(
-            fn=stream_transcribe_microphone,
-            inputs=[
-                stream_microphone,
-                stream_mic_session,
-                base_url,
-                stream_model,
-                timeout,
-                stream_chunk_size,
-                stream_encoder_lb,
-                stream_decoder_lb,
-            ],
-            outputs=[mic_transcript, mic_status, stream_mic_session, mic_signal_status],
-            show_progress="hidden",
-            trigger_mode="multiple",
-            stream_every=0.6,
+            fn=_mic_debug,
+            inputs=[stream_microphone, stream_mic_session],
+            outputs=[mic_signal_status, stream_mic_session],
+            stream_every=0.5,
         )
         stream_file_stop_button.click(
             fn=stop_streaming_status,
