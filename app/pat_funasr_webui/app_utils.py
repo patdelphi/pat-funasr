@@ -181,6 +181,26 @@ MODEL_CAPABILITY_MATRIX = {
         "punc": False,
         "notes": "独立情感识别模型；README 强调跨语种与跨场景鲁棒性，但未给出精确语种枚举",
     },
+    "nllb-200-distilled-600m": {
+        "offline_asr": False,
+        "streaming_asr": False,
+        "diarization": False,
+        "emotion": False,
+        "vad": False,
+        "punc": False,
+        "translation": True,
+        "notes": "多语种文本翻译；支持 200+ 语言互译；600M 参数轻量版",
+    },
+    "nllb-200-distilled-1.3b": {
+        "offline_asr": False,
+        "streaming_asr": False,
+        "diarization": False,
+        "emotion": False,
+        "vad": False,
+        "punc": False,
+        "translation": True,
+        "notes": "多语种文本翻译；支持 200+ 语言互译；1.3B 参数高精度版",
+    },
 }
 
 CAPABILITY_FILTER_LABELS = {
@@ -191,6 +211,7 @@ CAPABILITY_FILTER_LABELS = {
     "emotion": "情感识别",
     "vad": "VAD",
     "punc": "PUNC",
+    "translation": "文本翻译",
 }
 CAPABILITY_FILTER_CHOICES = [
     (label, key) for key, label in CAPABILITY_FILTER_LABELS.items()
@@ -396,6 +417,8 @@ def _capability_text(capability: dict[str, Any]) -> str:
         labels.append("VAD")
     if capability.get("punc"):
         labels.append("PUNC")
+    if capability.get("translation"):
+        labels.append("文本翻译")
     return " / ".join(labels) if labels else "-"
 
 

@@ -3030,9 +3030,9 @@ def build_app(default_base_url: str, default_timeout: float):
                                     value="true",
                                 )
                 transcript_payload_state = gr.State("{}")
-                gr.Markdown("### 单文件处理", elem_classes=["pat-compact-markdown"])
                 with gr.Row(equal_height=False):
                     with gr.Column(scale=1, min_width=420):
+                        gr.Markdown("### 单文件处理", elem_classes=["pat-compact-markdown"])
                         media_file = gr.File(
                             label="音频/视频文件",
                             type="filepath",
@@ -3051,13 +3051,12 @@ def build_app(default_base_url: str, default_timeout: float):
                             elem_classes=["pat-media-preview"],
                         )
                         media_audio_preview = gr.Audio(label="音频预览", visible=False)
-                    with gr.Column(scale=1, min_width=420):
                         transcript_preview_format = gr.Radio(
                             label="预览格式",
                             choices=PREVIEW_FORMAT_CHOICES,
                             value=DEFAULT_PREVIEW_FORMAT,
                         )
-                        transcript = gr.Textbox(label="结果预览", lines=12, max_lines=20, buttons=["copy"])
+                        transcript = gr.Textbox(label="结果预览", lines=8, max_lines=20, buttons=["copy"])
                         with gr.Accordion("下载文件", open=False):
                             with gr.Row():
                                 download_json = gr.File(label="下载 JSON", visible=True)
@@ -3067,9 +3066,8 @@ def build_app(default_base_url: str, default_timeout: float):
                                 download_vtt = gr.File(label="下载 VTT", visible=True)
                                 download_tsv = gr.File(label="下载 TSV", visible=True)
                                 download_zip = gr.File(label="下载 ZIP", visible=True)
-                gr.Markdown("### 批量文件处理", elem_classes=["pat-compact-markdown"])
-                with gr.Row(equal_height=False):
                     with gr.Column(scale=1, min_width=420):
+                        gr.Markdown("### 批量文件处理", elem_classes=["pat-compact-markdown"])
                         with gr.Row():
                             batch_button = gr.Button("批量执行", variant="primary")
                             retry_failed_button = gr.Button("重试失败项", variant="primary")
@@ -3080,7 +3078,6 @@ def build_app(default_base_url: str, default_timeout: float):
                             file_types=list(MEDIA_FILE_SUFFIXES),
                             height=176,
                         )
-                    with gr.Column(scale=1, min_width=420):
                         batch_status = gr.Textbox(label="批量结果", lines=5, max_lines=10)
                         batch_download = gr.File(label="批量下载结果", visible=False)
                 failed_batch_state = gr.State([])

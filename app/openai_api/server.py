@@ -279,7 +279,8 @@ MODEL_CAPABILITIES = {
         "emotion": False,
         "vad": False,
         "punc": False,
-        "notes": "专用机器翻译模型 (600M)",
+        "translation": True,
+        "notes": "多语种文本翻译；支持 200+ 语言互译；600M 参数轻量版",
     },
     "nllb-200-distilled-1.3b": {
         "offline_asr": False,
@@ -288,7 +289,8 @@ MODEL_CAPABILITIES = {
         "emotion": False,
         "vad": False,
         "punc": False,
-        "notes": "专用机器翻译模型 (1.3B)",
+        "translation": True,
+        "notes": "多语种文本翻译；支持 200+ 语言互译；1.3B 参数高精度版",
     },
 }
 
