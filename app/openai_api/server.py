@@ -1722,8 +1722,12 @@ def _is_model_downloaded(model_name: str) -> bool:
     try:
         if hub_val in ("ms", "modelscope"):
             from modelscope.hub.snapshot_download import snapshot_download
-            snapshot_download(model_id, local_files_only=True)
-            return True
+            # 直接检查本地缓存目录，不使用 local_files_only 避免 revision 检查失败
+            import os
+            cache_dir = os.path.expanduser(r'~\.cache\modelscope\hub\models')
+            # 处理模型 ID 中的斜杠，转换为目录路径
+            model_path = os.path.join(cache_dir, model_id.replace('/', os.sep))
+            return os.path.isdir(model_path)
         elif hub_val in ("hf", "huggingface"):
             from huggingface_hub import snapshot_download
             snapshot_download(model_id, local_files_only=True)

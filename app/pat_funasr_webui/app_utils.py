@@ -281,9 +281,11 @@ def build_request_fields(**kwargs: Any) -> dict[str, str]:
     return fields
 
 
-def format_model_label(model_id: str, ready: bool, downloaded: bool = False) -> str:
+def format_model_label(model_id: str, ready: bool = False, downloaded: bool = False, show_status: bool = True) -> str:
     """为模型下拉框生成更易读的展示文本。"""
     base_label = MODEL_LABELS.get(model_id, model_id)
+    if not show_status:
+        return f"{base_label} ({model_id})"
     if ready:
         status_label = "已加载"
     elif downloaded:
@@ -300,15 +302,14 @@ def parse_model_choices(payload: dict[str, Any]) -> list[tuple[str, str]]:
         model_id = str(item.get("id", "")).strip()
         if not model_id:
             continue
-        ready = bool(item.get("ready", False))
-        downloaded = bool(item.get("downloaded", False))
-        choices.append((format_model_label(model_id, ready, downloaded), model_id))
+        # 下拉列表不显示状态，保持简洁
+        choices.append((format_model_label(model_id, show_status=False), model_id))
     return choices
 
 
 def build_known_model_choices() -> list[tuple[str, str]]:
     """构建静态已知模型下拉选项，供接口异常时兜底。"""
-    return [(format_model_label(model_id, ready=False, downloaded=False), model_id) for model_id in MODEL_LABELS]
+    return [(format_model_label(model_id, show_status=False), model_id) for model_id in MODEL_LABELS]
 
 
 def choose_default_model(choices: list[tuple[str, str]], fallback: str = DEFAULT_MODEL) -> str | None:

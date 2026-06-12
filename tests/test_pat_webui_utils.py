@@ -36,15 +36,15 @@ class TestPatWebUiUtils(unittest.TestCase):
         self.assertEqual(
             choices,
             [
-                ("SenseVoice (sensevoice) [已加载]", "sensevoice"),
-                ("Fun-ASR-Nano (fun-asr-nano) [未下载]", "fun-asr-nano"),
+                ("SenseVoice (sensevoice)", "sensevoice"),
+                ("Fun-ASR-Nano (fun-asr-nano)", "fun-asr-nano"),
             ],
         )
 
     def test_choose_default_model_prefers_sensevoice(self):
         choices = [
-            ("Fun-ASR-Nano (fun-asr-nano) [未下载]", "fun-asr-nano"),
-            ("SenseVoice (sensevoice) [已加载]", "sensevoice"),
+            ("Fun-ASR-Nano (fun-asr-nano)", "fun-asr-nano"),
+            ("SenseVoice (sensevoice)", "sensevoice"),
         ]
         self.assertEqual(app_utils.choose_default_model(choices), "sensevoice")
 

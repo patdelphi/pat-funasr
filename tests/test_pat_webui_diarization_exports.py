@@ -136,7 +136,7 @@ class TestPatWebUiDiarizationExports(unittest.TestCase):
         finally:
             gradio_app.request_json = original_request_json
 
-        self.assertEqual(choices, [("SenseVoice (sensevoice) [已加载]", "sensevoice")])
+        self.assertEqual(choices, [("SenseVoice (sensevoice)", "sensevoice")])
         self.assertIn("当前为后端实时模型列表", status_text)
         self.assertEqual(payload["data"][0]["id"], "sensevoice")
 
