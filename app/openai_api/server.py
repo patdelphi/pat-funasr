@@ -21,6 +21,7 @@ if str(_THIS_DIR) not in sys.path:
 _APP_DIR = _THIS_DIR.parent
 if str(_APP_DIR) not in sys.path:
     sys.path.insert(0, str(_APP_DIR))
+_PROJECT_ROOT = _APP_DIR.parent  # 项目根目录
 
 # 绕过旧版 PyTorch 下 CVE-2025-32434 的安全警告限制，直接空置该检查函数
 try:
@@ -1713,52 +1714,47 @@ async def recognize_diarization(
 
 
 def _is_model_downloaded(model_name: str) -> bool:
-    """检查模型是否已下载到本地缓存。"""
+    """检查模型是否已下载到本地 workspace/models 缓存。"""
     if model_name not in MODEL_CONFIGS:
         return False
     cfg = MODEL_CONFIGS[model_name]
     model_id = cfg.get("model", "")
-    hub_val = cfg.get("hub", "ms")
     
     def _has_model_files(path: str) -> bool:
         """检查目录是否包含实际模型文件（不只是 .mdl 元数据）。"""
         if not os.path.isdir(path):
             return False
         files = os.listdir(path)
-        # 检查是否有实际模型文件
         model_indicators = {'config.yaml', 'configuration.json', 'model.pt', 'model.bin', 'pytorch_model.bin', 'tokenizer.json'}
         return bool(model_indicators & set(files))
     
     try:
-        if hub_val in ("ms", "modelscope"):
-            import os
-            cache_dir = os.path.expanduser(r'~\.cache\modelscope\hub\models')
-            
-            # 处理模型 ID 中的斜杠，转换为目录路径
-            model_path = os.path.join(cache_dir, model_id.replace('/', os.sep))
-            if _has_model_files(model_path):
-                return True
-            
-            # 检查 damo/ 前缀路径（FunASR 别名模型）
-            damo_path = os.path.join(cache_dir, 'damo', model_id)
-            if _has_model_files(damo_path):
-                return True
-            
-            # 处理 Qwen 模型路径格式（点号替换为三个下划线）
-            if '.' in model_id:
-                alt_model_id = model_id.replace('.', '___')
-                alt_path = os.path.join(cache_dir, alt_model_id.replace('/', os.sep))
-                if _has_model_files(alt_path):
-                    return True
-            
+        import os
+        # 只检查 workspace/models 目录
+        cache_dir = os.path.join(str(_PROJECT_ROOT), 'workspace', 'models')
+        if not os.path.isdir(cache_dir):
             return False
-        elif hub_val in ("hf", "huggingface"):
-            from huggingface_hub import snapshot_download
-            snapshot_download(model_id, local_files_only=True)
+        
+        # 处理模型 ID 中的斜杠，转换为目录路径
+        model_path = os.path.join(cache_dir, model_id.replace('/', os.sep))
+        if _has_model_files(model_path):
             return True
+        
+        # 检查 damo/ 前缀路径（FunASR 别名模型）
+        damo_path = os.path.join(cache_dir, 'damo', model_id)
+        if _has_model_files(damo_path):
+            return True
+        
+        # 处理 Qwen 模型路径格式（点号替换为三个下划线）
+        if '.' in model_id:
+            alt_model_id = model_id.replace('.', '___')
+            alt_path = os.path.join(cache_dir, alt_model_id.replace('/', os.sep))
+            if _has_model_files(alt_path):
+                return True
+        
+        return False
     except Exception:
         return False
-    return False
 
 
 @app.get("/v1/models")
