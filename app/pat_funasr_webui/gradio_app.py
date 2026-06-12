@@ -1101,6 +1101,7 @@ def stream_transcribe_microphone(
 ):
     """接收 Gradio 麦克风流式音频块，并转发到后端 streaming 端点。"""
     state = dict(state or {})
+
     if not state.get("session_id") or state.get("model") != model:
         state, _ = init_microphone_streaming_state(base_url, model, timeout)
     signal_status = describe_microphone_signal(audio)
@@ -2867,8 +2868,6 @@ def build_app(default_base_url: str, default_timeout: float):
                             label="Gradio 麦克风",
                             sources=["microphone"],
                             type="numpy",
-                            streaming=True,
-                            recording=False,
                         )
                         mic_status = gr.Textbox(label="麦克风识别状态", interactive=False)
                         mic_signal_status = gr.Textbox(label="麦克风信号", interactive=False)
@@ -3210,6 +3209,11 @@ def build_app(default_base_url: str, default_timeout: float):
                 stream_decoder_lb,
             ],
             outputs=[stream_transcript, stream_status],
+        )
+        stream_microphone.start_recording(
+            fn=init_microphone_streaming_state,
+            inputs=[base_url, stream_model, timeout],
+            outputs=[stream_mic_session, mic_status],
         )
         stream_mic_event = stream_microphone.stream(
             fn=stream_transcribe_microphone,
