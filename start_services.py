@@ -13,7 +13,6 @@ PYTHONPATH = os.path.join(ROOT_DIR, "runtime", "python") + os.pathsep + \
 env = os.environ.copy()
 env["MODELSCOPE_CACHE"] = MODELS
 env["HF_HOME"] = os.path.join(MODELS, "huggingface")
-env["TRANSFORMERS_CACHE"] = os.path.join(MODELS, "transformers")
 env["PYTHONPATH"] = PYTHONPATH
 
 print("=" * 50)

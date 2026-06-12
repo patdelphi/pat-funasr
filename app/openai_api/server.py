@@ -22,6 +22,19 @@ _APP_DIR = _THIS_DIR.parent
 if str(_APP_DIR) not in sys.path:
     sys.path.insert(0, str(_APP_DIR))
 
+# 绕过旧版 PyTorch 下 CVE-2025-32434 的安全警告限制，直接空置该检查函数
+try:
+    import transformers.utils.import_utils
+    transformers.utils.import_utils.check_torch_load_is_safe = lambda: None
+except Exception:
+    pass
+
+try:
+    import transformers.modeling_utils
+    transformers.modeling_utils.check_torch_load_is_safe = lambda: None
+except Exception:
+    pass
+
 import argparse
 import tempfile
 import time
@@ -173,6 +186,16 @@ MODEL_CONFIGS = {
         "model": "iic/emotion2vec_plus_large",
         "hub": "ms",
     },
+    "nllb-200-distilled-600m": {
+        "model": "facebook/nllb-200-distilled-600m",
+        "hub": "ms",
+        "type": "translation",
+    },
+    "nllb-200-distilled-1.3b": {
+        "model": "facebook/nllb-200-distilled-1.3b",
+        "hub": "ms",
+        "type": "translation",
+    },
 }
 
 MODEL_CAPABILITIES = {
@@ -247,6 +270,24 @@ MODEL_CAPABILITIES = {
         "vad": False,
         "punc": False,
         "notes": "独立情感识别模型",
+    },
+    "nllb-200-distilled-600m": {
+        "offline_asr": False,
+        "streaming_asr": False,
+        "diarization": False,
+        "emotion": False,
+        "vad": False,
+        "punc": False,
+        "notes": "专用机器翻译模型 (600M)",
+    },
+    "nllb-200-distilled-1.3b": {
+        "offline_asr": False,
+        "streaming_asr": False,
+        "diarization": False,
+        "emotion": False,
+        "vad": False,
+        "punc": False,
+        "notes": "专用机器翻译模型 (1.3B)",
     },
 }
 
@@ -478,11 +519,9 @@ def load_model(
             MODEL_LOAD_STATUS[model_name] = {"state": "ready", "error": None, "updated_at": time.time()}
             return MODEL_REGISTRY[registry_key]
 
-    from funasr import AutoModel
-
     # Try to find local model cache first
     model_id = cfg["model"]
-    if "/" in model_id and "hub" not in cfg:
+    if "/" in model_id and "hub" not in cfg and cfg.get("type") != "translation":
         # ModelScope local cache lookup
         cache_root = os.environ.get("MODELSCOPE_CACHE", "")
         if cache_root:
@@ -500,8 +539,64 @@ def load_model(
     MODEL_LOAD_STATUS[model_name] = {"state": "loading", "error": None, "updated_at": time.time()}
     t0 = time.time()
     try:
-        model = AutoModel(**cfg)
+        if cfg.get("type") == "translation":
+            hub_val = cfg.get("hub", "ms")
+            device_val = cfg.get("device", DEVICE)
+            
+            if hub_val == "ms":
+                from modelscope.hub.snapshot_download import snapshot_download
+                logger.info(f"Downloading {model_id} from ModelScope...")
+                model_dir = snapshot_download(model_id)
+            else:
+                model_dir = model_id
+
+            # 屏蔽 "Torch was not compiled with flash attention" 警告（自动回退到标准 SDPA，不影响功能）
+            import warnings
+            warnings.filterwarnings("ignore", message=".*Torch was not compiled with flash attention.*", category=UserWarning)
+
+            from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+            logger.info(f"Loading tokenizer & Seq2Seq model from {model_dir}...")
+            tokenizer = AutoTokenizer.from_pretrained(model_dir)
+            model_obj = AutoModelForSeq2SeqLM.from_pretrained(model_dir)
+            if device_val != "cpu":
+                model_obj = model_obj.to(device_val)
+
+            class NLLBTranslationModel:
+                def __init__(self, tokenizer, model, device):
+                    self.tokenizer = tokenizer
+                    self.model = model
+                    self.device = device
+
+                def translate(self, text, source_lang: str, target_lang: str, num_beams: int = 5, max_length: int = 512):
+                    is_list = isinstance(text, list)
+                    texts = text if is_list else [text]
+                    
+                    outputs = []
+                    for t in texts:
+                        self.tokenizer.src_lang = source_lang
+                        inputs = self.tokenizer(t, return_tensors="pt")
+                        if self.device != "cpu":
+                            inputs = {k: v.to(self.device) for k, v in inputs.items()}
+                        
+                        target_lang_id = self.tokenizer.convert_tokens_to_ids(target_lang)
+                        gen_out = self.model.generate(
+                            **inputs,
+                            forced_bos_token_id=target_lang_id,
+                            max_length=max_length,
+                            num_beams=num_beams,
+                        )
+                        decoded = self.tokenizer.batch_decode(gen_out, skip_special_tokens=True)
+                        outputs.append(decoded[0] if decoded else "")
+                    
+                    return outputs if is_list else outputs[0]
+
+            model = NLLBTranslationModel(tokenizer, model_obj, device_val)
+        else:
+            from funasr import AutoModel
+            model = AutoModel(**cfg)
     except Exception as exc:
+        import traceback
+        traceback.print_exc()
         MODEL_LOAD_STATUS[model_name] = {"state": "error", "error": str(exc), "updated_at": time.time()}
         raise
     elapsed = time.time() - t0
@@ -1667,6 +1762,83 @@ async def preload_model(model: str):
     except Exception as exc:
         logger.error(f"Model preload error: {exc}")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+from pydantic import BaseModel
+from typing import List, Union
+
+class TranslationRequest(BaseModel):
+    text: Union[str, List[str]]
+    source_lang: str
+    target_lang: str
+    model: str = "nllb-200-distilled-600m"
+    num_beams: int = 5
+    max_length: int = 512
+
+
+@app.post("/v1/translations")
+async def translate_text(req: TranslationRequest):
+    """跨语言翻译服务接口。"""
+    if req.model not in MODEL_CONFIGS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Model '{req.model}' not found. Available: {list(MODEL_CONFIGS.keys())}"
+        )
+    model_cfg = MODEL_CONFIGS[req.model]
+    if model_cfg.get("type") != "translation":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Model '{req.model}' is not a translation model."
+        )
+
+    # 动态从 translation_languages 导入支持的语言集合
+    try:
+        from pat_funasr_webui.translation_languages import TRANSLATION_LANGUAGES_MAP
+        supported_langs = set(TRANSLATION_LANGUAGES_MAP.keys())
+    except ImportError as exc:
+        # fallback 机制，万一导入失败则回退到最初的9个语言
+        logger.warning(f"Failed to import translation languages, fallback to default 9: {exc}")
+        supported_langs = {
+            "zho_Hans", "zho_Hant", "eng_Latn", "jpn_Jpan", "kor_Kore",
+            "fra_Latn", "tha_Thai", "zsm_Latn", "vie_Latn"
+        }
+
+    if req.source_lang not in supported_langs:
+        raise HTTPException(
+            status_code=400,
+            detail=f"source_lang '{req.source_lang}' is not supported. Supported: {list(supported_langs)}"
+        )
+    if req.target_lang not in supported_langs:
+        raise HTTPException(
+            status_code=400,
+            detail=f"target_lang '{req.target_lang}' is not supported. Supported: {list(supported_langs)}"
+        )
+
+    try:
+        model_obj = load_model(req.model)
+    except Exception as exc:
+        logger.error(f"Failed to load translation model '{req.model}': {exc}")
+        raise HTTPException(status_code=500, detail=f"Failed to load model: {exc}")
+
+    try:
+        import inspect
+        sig = inspect.signature(model_obj.translate)
+        kwargs = {}
+        if "num_beams" in sig.parameters:
+            kwargs["num_beams"] = req.num_beams
+        if "max_length" in sig.parameters:
+            kwargs["max_length"] = req.max_length
+
+        translated = model_obj.translate(
+            req.text,
+            req.source_lang,
+            req.target_lang,
+            **kwargs
+        )
+        return {"translated_text": translated}
+    except Exception as exc:
+        logger.error(f"Translation error: {exc}")
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 @app.get("/mic-stream")

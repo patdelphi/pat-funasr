@@ -68,7 +68,6 @@ def main() -> int:
     repo = Path(__file__).resolve().parents[1]
     os.environ.setdefault("MODELSCOPE_CACHE", str(repo / "workspace" / "models"))
     os.environ.setdefault("HF_HOME", str(repo / "workspace" / "models" / "huggingface"))
-    os.environ.setdefault("TRANSFORMERS_CACHE", str(repo / "workspace" / "models" / "transformers"))
 
     want = [m.strip() for m in args.models.split(",") if m.strip()]
     for alias in want:
@@ -79,7 +78,6 @@ def main() -> int:
 
     _print(f"MODELSCOPE_CACHE={os.environ.get('MODELSCOPE_CACHE','')}")
     _print(f"HF_HOME={os.environ.get('HF_HOME','')}")
-    _print(f"TRANSFORMERS_CACHE={os.environ.get('TRANSFORMERS_CACHE','')}")
     _print("")
 
     for alias in want:

@@ -11,6 +11,8 @@ Pat WebUI 前端入口。
 from __future__ import annotations
 
 import argparse
+import logging
+logger = logging.getLogger("funasr_ui")
 import importlib
 import io
 import json
@@ -2039,6 +2041,121 @@ def safe_recognize_diarization_with_exports(
         return "", message, message, None, None, None, None, None, None
 
 
+def safe_translate_with_exports(
+    base_url: str,
+    text: str | None,
+    file_path: str | None,
+    source_lang: str,
+    target_lang: str,
+    model: str,
+    timeout: float,
+    num_beams: int = 5,
+    max_length: int = 512,
+    auto_zh_punc: bool = False,
+):
+    """执行翻译，处理完毕后返回翻译结果文本以及生成的临时结果文件路径（保存在 gr.State 里）。"""
+    try:
+        import gradio as gr
+        from translation_utils import translate_file, translate_text_preserving_paragraphs, convert_to_chinese_punctuation
+        
+        # 1. 字幕或文本文件翻译
+        if file_path:
+            p = Path(file_path)
+            file_ext = p.suffix
+            logger.info(f"Translating file: {file_path} from {source_lang} to {target_lang}")
+            
+            out_path = translate_file(
+                base_url=base_url,
+                file_path=file_path,
+                file_ext=file_ext,
+                source_lang=source_lang,
+                target_lang=target_lang,
+                model=model,
+                timeout=timeout,
+                num_beams=num_beams,
+                max_length=max_length,
+            )
+            
+            # 若勾选自动替换为中文全角标点，对翻译好的结果文件内容执行转换
+            if auto_zh_punc:
+                out_p = Path(out_path)
+                translated_content = out_p.read_text(encoding="utf-8", errors="replace")
+                converted_content = convert_to_chinese_punctuation(translated_content)
+                out_p.write_text(converted_content, encoding="utf-8-sig")
+            
+            out_p = Path(out_path)
+            preview_text = out_p.read_text(encoding="utf-8", errors="replace")
+            if len(preview_text) > 8000:
+                preview_text = preview_text[:8000] + "\n\n...(内容较长，已截断预览，请点击下方[生成并导出文件]按钮进行完整下载)..."
+            
+            return preview_text, out_path, gr.update(value=None, visible=False)
+            
+        # 2. 长文本输入框翻译
+        if text and text.strip():
+            logger.info(f"Translating raw text from {source_lang} to {target_lang}")
+            translated_result = translate_text_preserving_paragraphs(
+                base_url=base_url,
+                text=text,
+                source_lang=source_lang,
+                target_lang=target_lang,
+                model=model,
+                timeout=timeout,
+                num_beams=num_beams,
+                max_length=max_length,
+            )
+            
+            # 若勾选自动替换为中文全角标点，执行文本转换
+            if auto_zh_punc:
+                translated_result = convert_to_chinese_punctuation(translated_result)
+                
+            return translated_result, None, gr.update(value=None, visible=False)
+            
+        raise ValueError("请输入需要翻译的文本内容，或者上传待翻译的文本/字幕文件")
+    except Exception as e:
+        logger.error(f"翻译执行失败: {e}")
+        import gradio as gr
+        return f"翻译失败，错误信息：\n{e}", None, gr.update(value=None, visible=False)
+
+
+def safe_export_translation_file(
+    translated_text: str | None,
+    result_file_path: str | None,
+    original_file_path: str | None,
+    source_lang: str = "",
+    target_lang: str = "",
+):
+    """点击“生成并导出文件”时触发。若有文件翻译路径则直接返回，若是文本框翻译则将最新文本保存为临时文件。"""
+    try:
+        import gradio as gr
+        # 1. 针对文件翻译场景，直接返回已处理完毕的翻译文件路径
+        if result_file_path and Path(result_file_path).exists():
+            return gr.update(value=result_file_path, visible=True)
+            
+        # 2. 针对文本框输入翻译，将最新的翻译结果渲染为临时 txt 文件返回
+        if translated_text and translated_text.strip():
+            from datetime import datetime
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            src_short = source_lang.split("_")[0] if "_" in source_lang else source_lang
+            tgt_short = target_lang.split("_")[0] if "_" in target_lang else target_lang
+            
+            temp_dir = Path(tempfile.mkdtemp(prefix="pat-funasr-trans-"))
+            if original_file_path:
+                orig_p = Path(original_file_path)
+                out_name = f"{orig_p.stem}_{src_short}_{tgt_short}_{timestamp}.txt"
+            else:
+                out_name = f"translated_{src_short}_{tgt_short}_{timestamp}.txt"
+                
+            out_file = temp_dir / out_name
+            out_file.write_text(translated_text, encoding="utf-8-sig")
+            return gr.update(value=str(out_file), visible=True)
+            
+        raise ValueError("无可导出的翻译结果。请先输入文本或上传文件，并点击“开始翻译”")
+    except Exception as e:
+        logger.error(f"导出翻译文件失败: {e}")
+        import gradio as gr
+        raise gr.Error(f"导出文件失败: {e}")
+
+
 def safe_check(base_url: str, timeout: float) -> str:
     try:
         return check_service(base_url, timeout)
@@ -2596,6 +2713,7 @@ def refresh_model_dropdown(base_url: str, timeout: float):
         hint_html,
         hint_html,
         hint_html,
+        hint_html,
     )
 
 
@@ -3006,6 +3124,87 @@ def build_app(default_base_url: str, default_timeout: float):
                 emotion_summary = gr.Textbox(label="情感结果", lines=4, max_lines=8)
                 emotion_raw_json = gr.Textbox(label="情感原始 JSON", lines=10, max_lines=20)
 
+            with gr.Tab("跨语言翻译") as translation_tab:
+                # 顶部：参数与上传控制区（左右排布）
+                with gr.Row():
+                    with gr.Column(scale=1, min_width=320):
+                        trans_model = gr.Dropdown(
+                            label="翻译模型",
+                            choices=[
+                                ("NLLB-200-Distilled 600M", "nllb-200-distilled-600m"),
+                                ("NLLB-200-Distilled 1.3B", "nllb-200-distilled-1.3b"),
+                            ],
+                            value="nllb-200-distilled-600m",
+                        )
+                        trans_model_source_hint = gr.HTML(
+                            value=get_model_source_hint_html(model_status_text),
+                            show_label=False
+                        )
+                        from translation_languages import TRANSLATION_LANGUAGES_UI
+                        with gr.Row():
+                            trans_source_lang = gr.Dropdown(
+                                label="源语言",
+                                choices=TRANSLATION_LANGUAGES_UI,
+                                value="eng_Latn",
+                                scale=1,
+                            )
+                            trans_swap_btn = gr.Button("⇄", scale=0, min_width=44, size="sm")
+                            trans_target_lang = gr.Dropdown(
+                                label="目标语言",
+                                choices=TRANSLATION_LANGUAGES_UI,
+                                value="zho_Hans",
+                                scale=1,
+                            )
+                        trans_auto_zh_punc = gr.Checkbox(label="自动替换为中文全角标点", value=False)
+                        
+                        with gr.Accordion("高级生成参数", open=False):
+                            trans_num_beams = gr.Slider(
+                                label="Beam Search 束搜索宽度 (num_beams)",
+                                minimum=1,
+                                maximum=5,
+                                step=1,
+                                value=5,
+                                info="1为Greedy模式（最快）；5为默认Beam模式；越大质量越高但越慢"
+                            )
+                            trans_max_length = gr.Slider(
+                                label="最大翻译长度限制 (max_length)",
+                                minimum=128,
+                                maximum=1024,
+                                step=32,
+                                value=512,
+                            )
+                    
+                    with gr.Column(scale=1, min_width=320):
+                        trans_input_file = gr.File(
+                            label="上传文本或字幕文件 (可选，支持 .txt, .md, .srt, .vtt, .tsv, .json)",
+                            file_types=[".txt", ".md", ".srt", ".vtt", ".tsv", ".json"],
+                        )
+                        trans_button = gr.Button("开始翻译", variant="primary")
+
+                # 中部：原文与译文窗口（左右对齐、等高）
+                with gr.Row():
+                    trans_input_text = gr.Textbox(
+                        label="长文本输入 (原文)",
+                        placeholder="请输入或粘贴需要翻译的文本内容...",
+                        lines=20,
+                        max_lines=20,
+                    )
+                    trans_output_text = gr.Textbox(
+                        label="翻译结果 (译文)",
+                        lines=20,
+                        max_lines=20,
+                        buttons=["copy"],
+                    )
+
+                # 底部：结果下载
+                trans_result_file_state = gr.State(value=None)
+                with gr.Row():
+                    trans_download_btn = gr.Button("📊 生成并导出文件", variant="secondary")
+                    trans_download_file = gr.File(
+                        label="下载翻译后的文件",
+                        visible=False,
+                    )
+
             with gr.Tab("服务与调试") as service_tab:
                 gr.Markdown("用于查看服务运行状态、模型加载方式、语言覆盖、能力分布、调试返回与运行日志。建议需要时再开启日志自动刷新。")
                 with gr.Row():
@@ -3081,6 +3280,7 @@ def build_app(default_base_url: str, default_timeout: float):
                 stream_model_source_hint,
                 emotion_model_source_hint,
                 diarization_model_source_hint,
+                trans_model_source_hint,
             ],
         )
         refresh_logs_button.click(
@@ -3110,6 +3310,10 @@ def build_app(default_base_url: str, default_timeout: float):
             outputs=[service_tab_active],
         )
         emotion_tab.select(
+            fn=lambda: set_service_tab_auto_refresh_active(False),
+            outputs=[service_tab_active],
+        )
+        translation_tab.select(
             fn=lambda: set_service_tab_auto_refresh_active(False),
             outputs=[service_tab_active],
         )
@@ -3342,6 +3546,39 @@ def build_app(default_base_url: str, default_timeout: float):
             fn=update_diarization_preview,
             inputs=[diarization_preview_format, diarization_payload_state],
             outputs=[diarization_preview_text],
+        )
+        # 绑定交换源与目标语言按钮
+        trans_swap_btn.click(
+            fn=lambda src, tgt: (tgt, src),
+            inputs=[trans_source_lang, trans_target_lang],
+            outputs=[trans_source_lang, trans_target_lang],
+        )
+        trans_button.click(
+            fn=safe_translate_with_exports,
+            inputs=[
+                base_url,
+                trans_input_text,
+                trans_input_file,
+                trans_source_lang,
+                trans_target_lang,
+                trans_model,
+                timeout,
+                trans_num_beams,
+                trans_max_length,
+                trans_auto_zh_punc,
+            ],
+            outputs=[trans_output_text, trans_result_file_state, trans_download_file],
+        )
+        trans_download_btn.click(
+            fn=safe_export_translation_file,
+            inputs=[
+                trans_output_text,
+                trans_result_file_state,
+                trans_input_file,
+                trans_source_lang,
+                trans_target_lang,
+            ],
+            outputs=[trans_download_file],
         )
 
     return demo

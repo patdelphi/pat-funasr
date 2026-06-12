@@ -9,7 +9,6 @@ cd /d "%~dp0app\openai_api"
 if exist "%~dp0.env.local.bat" call "%~dp0.env.local.bat"
 set "MODELSCOPE_CACHE=%~dp0workspace\models"
 set "HF_HOME=%~dp0workspace\models\huggingface"
-set "TRANSFORMERS_CACHE=%~dp0workspace\models\transformers"
 set "PYTHONPATH=%~dp0runtime\python;%~dp0runtime\python\Lib\site-packages;%~dp0app"
 REM Add torch CUDA DLL path
 set "PATH=%~dp0runtime\python\Lib\site-packages\torch\lib;%PATH%"

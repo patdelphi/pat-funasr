@@ -123,7 +123,6 @@ def main() -> int:
     repo = Path(__file__).resolve().parents[1]
     os.environ.setdefault("MODELSCOPE_CACHE", str(repo / "workspace" / "models"))
     os.environ.setdefault("HF_HOME", str(repo / "workspace" / "models" / "huggingface"))
-    os.environ.setdefault("TRANSFORMERS_CACHE", str(repo / "workspace" / "models" / "transformers"))
     segmentation = _load_module_from_path("segmentation_mod", repo / "app" / "openai_api" / "segmentation.py")
     renderers = _load_module_from_path("renderers_mod", repo / "app" / "openai_api" / "renderers.py")
 
@@ -140,7 +139,6 @@ def main() -> int:
         log_line(log_path, f"[{now()}] cwd={os.getcwd()}")
         log_line(log_path, f"[{now()}] MODELSCOPE_CACHE={os.environ.get('MODELSCOPE_CACHE','')}")
         log_line(log_path, f"[{now()}] HF_HOME={os.environ.get('HF_HOME','')}")
-        log_line(log_path, f"[{now()}] TRANSFORMERS_CACHE={os.environ.get('TRANSFORMERS_CACHE','')}")
 
         if args.model_alias not in MODEL_CONFIGS:
             raise SystemExit(f"Unknown model_alias: {args.model_alias}, allowed={list(MODEL_CONFIGS.keys())}")
