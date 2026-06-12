@@ -98,6 +98,109 @@ SYSTEM_MIC_DEFAULT_DEVICE_VALUE = "__default__"
 BATCH_RUNNING_STATUS_UPDATE_EVERY_ITEMS = 3
 
 
+MIC_DEVICE_BRIDGE_JS = r"""
+(function installPatMicDeviceBridge() {
+  if (window.__patMicDeviceBridgeInstalled) return;
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return;
+  window.__patMicDeviceBridgeInstalled = true;
+  document.documentElement.setAttribute("data-pat-mic-device-bridge", "installed");
+
+  const mediaDevices = navigator.mediaDevices;
+  const originalGetUserMedia = mediaDevices.getUserMedia.bind(mediaDevices);
+  mediaDevices.__patOriginalGetUserMedia = originalGetUserMedia;
+  let selectedDeviceId = "";
+  let boundSelect = null;
+
+  function findNativeDeviceSelect() {
+    return document.querySelector(
+      '#pat-stream-microphone select[aria-label="Select input device"]'
+    );
+  }
+
+  function bindNativeDeviceSelect() {
+    const select = findNativeDeviceSelect();
+    if (!select) return;
+    if (boundSelect !== select) {
+      boundSelect = select;
+      select.addEventListener("change", function () {
+        selectedDeviceId = select.value || "";
+      });
+    }
+    selectedDeviceId = select.value || selectedDeviceId;
+  }
+
+  async function preferSystemDefaultDevice() {
+    bindNativeDeviceSelect();
+    if (selectedDeviceId || !mediaDevices.enumerateDevices) return;
+    try {
+      const devices = await mediaDevices.enumerateDevices();
+      const inputs = devices.filter(function (device) {
+        return device.kind === "audioinput";
+      });
+      const defaultInput = inputs.find(function (device) {
+        return device.deviceId === "default";
+      });
+      selectedDeviceId = defaultInput ? defaultInput.deviceId : (inputs[0]?.deviceId || "");
+    } catch (_error) {
+      selectedDeviceId = "";
+    }
+  }
+
+  mediaDevices.getUserMedia = function patchedGetUserMedia(constraints) {
+    bindNativeDeviceSelect();
+    const nextConstraints = constraints ? { ...constraints } : {};
+    if (!nextConstraints.audio) return originalGetUserMedia(nextConstraints);
+
+    const existingAudio = typeof nextConstraints.audio === "object"
+      ? { ...nextConstraints.audio }
+      : {};
+    const deviceId = selectedDeviceId || "default";
+    if (!existingAudio.deviceId && deviceId !== "default") {
+      existingAudio.deviceId = { exact: deviceId };
+    }
+    if (existingAudio.echoCancellation === undefined) {
+      existingAudio.echoCancellation = false;
+    }
+    if (existingAudio.noiseSuppression === undefined) {
+      existingAudio.noiseSuppression = false;
+    }
+    if (existingAudio.autoGainControl === undefined) {
+      existingAudio.autoGainControl = false;
+    }
+    if (existingAudio.channelCount === undefined) {
+      existingAudio.channelCount = { ideal: 1 };
+    }
+    nextConstraints.audio = existingAudio;
+    return originalGetUserMedia(nextConstraints).then(function (stream) {
+      const track = stream.getAudioTracks()[0];
+      if (track) {
+        console.info("[Pat Mic] capture started", track.label, track.getSettings());
+        track.addEventListener("mute", function () {
+          console.warn("[Pat Mic] capture track muted", track.label, track.getSettings());
+        });
+        track.addEventListener("unmute", function () {
+          console.info("[Pat Mic] capture track unmuted", track.label, track.getSettings());
+        });
+        track.addEventListener("ended", function () {
+          console.warn("[Pat Mic] capture track ended", track.label, track.getSettings());
+        });
+      }
+      return stream;
+    });
+  };
+
+  const observer = new MutationObserver(function () {
+    bindNativeDeviceSelect();
+  });
+  observer.observe(document.documentElement, { childList: true, subtree: true });
+  if (mediaDevices.addEventListener) {
+    mediaDevices.addEventListener("devicechange", preferSystemDefaultDevice);
+  }
+  preferSystemDefaultDevice();
+})();
+"""
+
+
 def get_default_model_hub_for_ui() -> str:
     """读取 WebUI 默认模型来源；空字符串表示沿用后端/模型默认。"""
     raw = os.environ.get("FUNASR_MODEL_HUB", "").strip().lower()
@@ -1102,6 +1205,7 @@ def stream_transcribe_microphone(
     decoder_chunk_look_back: int,
 ):
     """接收 Gradio 麦克风流式音频块，并转发到后端 streaming 端点。"""
+    # Gradio 的流式音频输入要求每个分片同步返回；改成 yield 会被注册为生成式输出事件。
     state = dict(state or {})
     if not state.get("session_id") or state.get("model") != model:
         state, _ = init_microphone_streaming_state(base_url, model, timeout)
@@ -1110,15 +1214,13 @@ def stream_transcribe_microphone(
         status = str(state.get("status") or "模型未就绪")
         if "失败" in status or "error" in status.lower():
             status += "。请检查后端 API 是否运行，或在服务页刷新模型列表。"
-        yield format_streaming_preview_text(state.get("full_text", ""), final_flag=False), f"{status} | {signal_status}", state, signal_status
-        return
+        return format_streaming_preview_text(state.get("full_text", ""), final_flag=False), f"{status} | {signal_status}", state, signal_status
 
     try:
         parse_chunk_size_text(chunk_size)
         chunk_bytes = numpy_audio_to_pcm_bytes(audio)
         if not chunk_bytes:
-            yield format_streaming_preview_text(state.get("full_text", ""), final_flag=False), "等待麦克风音频...", state, signal_status
-            return
+            return format_streaming_preview_text(state.get("full_text", ""), final_flag=False), "等待麦克风音频...", state, signal_status
 
         payload = post_streaming_chunk(
             base_url=base_url,
@@ -1136,17 +1238,14 @@ def stream_transcribe_microphone(
         state["last_chunk_bytes"] = chunk_bytes
         state["full_text"] = str(payload.get("full_text", state.get("full_text", "")) or "")
         preview = format_streaming_preview_text(str(state.get("full_text", "")), final_flag=False)
-        yield preview, f"麦克风实时识别中，已发送分片：{state['sent']}", state, signal_status
-        return
+        return preview, f"麦克风实时识别中，已发送分片：{state['sent']}", state, signal_status
     except urllib.error.HTTPError as error:
         detail = error.read().decode("utf-8", errors="replace")
         preview = format_streaming_preview_text(state.get("full_text", ""), final_flag=False)
-        yield preview, f"HTTP {error.code} from {error.url}: {detail}", state, signal_status
-        return
+        return preview, f"HTTP {error.code} from {error.url}: {detail}", state, signal_status
     except Exception as error:
         preview = format_streaming_preview_text(state.get("full_text", ""), final_flag=False)
-        yield preview, f"麦克风流式识别失败：{error}", state, signal_status
-        return
+        return preview, f"麦克风流式识别失败：{error}", state, signal_status
 
 
 def stop_streaming_status() -> str:
@@ -2819,6 +2918,13 @@ def build_app(default_base_url: str, default_timeout: float):
     with gr.Blocks(title="Pat-FunASR 语音识别") as demo:
         gr.Markdown("# Pat-FunASR WebUI")
 
+        gr.HTML(
+            value="",
+            visible="hidden",
+            elem_id="pat-mic-device-bridge",
+            js_on_load=MIC_DEVICE_BRIDGE_JS,
+        )
+
         base_url = gr.Textbox(label="API 地址", value=default_base_url, visible=False)
         timeout = gr.Number(label="超时时间(秒)", value=default_timeout, precision=0, visible=False)
         service_tab_active = gr.State(False)
@@ -3004,9 +3110,13 @@ def build_app(default_base_url: str, default_timeout: float):
                         stream_download = gr.File(label="下载结果", visible=True)
                     with gr.Column(scale=1, min_width=420):
                         gr.Markdown("### Mic 实时识别", elem_classes=["pat-compact-markdown"])
-                        stream_microphone = gr.Microphone(
+                        stream_microphone = gr.Audio(
                             label="Gradio 麦克风",
+                            sources=["microphone"],
                             type="numpy",
+                            streaming=True,
+                            recording=False,
+                            elem_id="pat-stream-microphone",
                         )
                         mic_status = gr.Textbox(label="麦克风识别状态", interactive=False)
                         mic_signal_status = gr.Textbox(label="麦克风信号", interactive=False)

@@ -1,4 +1,4 @@
-#
+﻿#
 Chat History
 
 ## 2026-06-08 08:21:21
@@ -3026,3 +3026,119 @@ if "%DEVICE%"=="" set "DEVICE=cuda"
 
 ### Current Status
 - 所有针对翻译模块的优化和报错已修复，功能稳定，待提交代码。
+
+## 2026-06-12 20:09:42
+
+### User Request
+
+项目已有新的推进，但 Mic 流式识别持续出现收音信号接近静音。要求参考官方文档及开源例程重新开发该功能，保持 UI 不变，并在充分分析后再修改代码。
+
+### Agent Analysis
+
+1. 检查了当前 Mic 实现和相关 Git 提交。现版本使用 `gr.Microphone`、`.stream()` 和单次 `yield` 的生成器回调；历史可用提交与当前版本之间同时变更过组件类型、回调形式和停止事件，过去未能隔离变量。
+2. 对照 Gradio 官方流式输入、实时语音识别及官方仓库示例，官方稳定模式均为 `gr.Audio(sources=["microphone"], streaming=True)` 配合同步返回函数和 `gr.State`。
+3. 对照 FunASR 官方教程和麦克风 WebSocket 客户端，确认 FunASR 接收 16 kHz PCM/字节流的既有转换方向合理；当前“输入峰值与 RMS 接近零”发生在模型推理之前，应先修复浏览器到 Gradio 回调的音频采集链路。
+4. 暂未修改业务代码。建议先补测试，再以单变量方式恢复官方 Gradio 原生流式模式，保持现有 UI 布局、文字和样式不变。
+
+## 2026-06-12 20:23:32
+
+### User Request
+
+确认执行 Mic 流式收音修复方案。
+
+### Agent Actions
+
+1. 对比 `dc82d1a` 和 `58fd599` 后确认：可用版本采用同步返回，后续仅恢复 `yield` 生成器回调后静音问题重新出现；当前 Gradio 将该事件注册为 `types_generator=True`。
+2. 先修改测试，使其要求 `stream_transcribe_microphone` 同步返回，并要求 Gradio 注册结果为非生成器；确认测试在生产代码修改前按预期失败。
+3. 将 `stream_transcribe_microphone` 从单次 `yield` 生成器恢复为普通同步返回函数。未修改 Mic 组件、页面布局、文字或样式，也未恢复曾引发事件冲突的额外录音事件。
+4. 在项目运行时 Gradio 6.15.2 下确认组件仍为麦克风输入、`streaming=True`，回调注册结果为 `types_generator=False`。
+5. 项目运行时完成 45 项 WebUI 测试和 161 项全量测试，全部通过；API `/health` 返回正常。
+6. 启动 UI `http://127.0.0.1:7861/` 和 API `http://127.0.0.1:8000/`。自动化浏览器没有物理麦克风设备，因此只完成页面与事件配置验证，未宣称完成真实硬件收音验证。
+
+### Current Status
+
+- Mic 流式回调已恢复为官方示例采用的同步处理方式，并增加防回归测试。
+- 未执行 Git commit、push 或依赖安装。
+
+## 2026-06-12 20:49:30
+
+### User Request
+
+停止由 Agent 启动的服务，由用户自行启动并查看控制台信息。
+
+### Agent Actions
+
+1. 终止监听 `7861` 的 Pat WebUI Python 进程。
+2. 终止监听 `8000` 的 FunASR API Python 进程。
+3. 复查两个端口，均已无监听进程；未重新启动任何服务。
+
+## 2026-06-12 20:56:20
+
+### User Feedback
+
+设备绑定修复后能够收到声音并产生识别结果，但运行一段时间后再次失去声音，收音不稳定。
+
+### Root Cause Analysis
+
+1. 运行日志显示 Gradio/Python 一直持续收到 48000Hz、28800 样本的完整分片，API 也持续返回 200，因此不是录音事件停止、队列阻塞或模型推理中断。
+2. 首个有效分片峰值约为 575，随后分片峰值长期降至 1～2，故问题位于浏览器持有的音频轨道或浏览器音频处理。
+3. 现有桥接对系统默认设备使用 `{exact: "default"}`，并沿用浏览器默认的回声消除、降噪和自动增益；这些约束可能使 USB 无线接收器在启动后被切换或压制为近静音。
+
+### Agent Actions
+
+1. 系统默认设备改回浏览器原生默认选择，不再对 `default` 伪设备使用精确约束；只有用户明确选择物理设备时才设置精确 `deviceId`。
+2. 对 Mic 录音关闭 `echoCancellation`、`noiseSuppression` 和 `autoGainControl`，并请求单声道输入，避免浏览器语音处理干扰无线麦克风原始信号。
+3. 增加音频轨道启动、mute、unmute 和 ended 的浏览器控制台诊断，便于区分轨道静音与后端问题。
+4. WebUI 测试 46 项、全量测试 162 项全部通过。
+5. 按用户要求未启动 UI 或 API 服务。
+
+### Current Status
+
+- 浏览器采集稳定性修复已写入代码，等待用户手动启动后实机验证。
+- 未执行 Git commit、push 或依赖安装。
+
+## 2026-06-12 20:41:20
+
+### User Feedback
+
+恢复 `gr.Audio` 后真实麦克风仍返回峰值 0.0001、RMS 0.0000。
+
+### Root Cause
+
+检查项目运行时 Gradio 6.15.2 的已安装前端代码后确认：Audio 组件虽然渲染了 `Select input device` 下拉框，但没有给该下拉框绑定设备切换逻辑；录音启动仍固定调用 `getUserMedia({audio:true})`，未传入用户选择的 `deviceId`。因此界面能够选择设备，但实际录音仍可能持续使用静音的虚拟或错误输入设备。
+
+### Agent Actions
+
+1. 对照曾被确认可用的 7872 测试页，确认其关键差异是拦截 `getUserMedia` 并显式注入设备 ID。
+2. 在正式页增加隐藏设备桥接，不新增任何可见下拉框或按钮。
+3. 桥接默认优先系统 `default` 输入设备；用户在现有 Gradio 下拉框选择设备后，下一次录音使用该设备；已有调用方约束不会被覆盖。
+4. 为 Mic 组件增加仅用于 DOM 定位的 `elem_id`，未修改布局、文字和样式。
+5. 运行态验证桥接安装标记为 `installed`，页面只有一个原生设备下拉框，没有额外设备面板，控制台无警告或错误。
+6. WebUI 测试 46 项、全量测试 162 项全部通过，UI 已重启在 `http://127.0.0.1:7861/`。
+
+### Current Status
+
+- 已修复 Gradio 原生设备下拉框“可选择但不生效”的问题。
+- 真实硬件收音结果仍需从当前重启后的页面反馈确认。
+- 未执行 Git commit、push 或依赖安装。
+
+## 2026-06-12 20:30:30
+
+### User Feedback
+
+真实麦克风仍返回：采样率 48000Hz、样本数 28800、dtype int16、峰值 0.0001、RMS 0.0000，信号接近静音。
+
+### Agent Actions
+
+1. 立即否定“仅将回调改为同步返回即可修复”的假设。音频块长度正常但振幅约为 3/32768，说明静音数据在进入 Python 推理前已经形成。
+2. 重新对比历史可用提交。`4496919`、`c202313` 及 Gradio 官方示例均使用 `gr.Audio(sources=["microphone"])`；当前版本后来改用了 `gr.Microphone` 模板组件。
+3. 在 Gradio 6.15.2 中验证两者并非完全等价：组件类标识不同，`gr.Microphone` 强制 `format="wav"`，而原生 `gr.Audio` 流式输入不强制该格式。
+4. 先增加失败测试，再将 Mic 组件恢复为 `gr.Audio(sources=["microphone"], type="numpy", streaming=True, recording=False)`。未修改页面布局、文字或样式。
+5. 重启 UI 后检查 `/config`，确认实际下发组件为 `audio`、来源为 `microphone`、`streaming=true`，且不再包含 `format=wav`。
+6. 项目运行时 45 项 WebUI 测试和 161 项全量测试均通过。UI 已重启在 `http://127.0.0.1:7861/`。
+
+### Current Status
+
+- 已恢复历史可用版本对应的浏览器采集组件路径。
+- 真实硬件收音结果仍需从当前重启后的页面反馈确认，尚未标记任务完成。
+- 未执行 Git commit、push 或依赖安装。

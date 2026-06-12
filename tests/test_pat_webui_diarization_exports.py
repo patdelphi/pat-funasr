@@ -9,6 +9,7 @@
 
 import importlib.util
 import asyncio
+import inspect
 import io
 import json
 import numpy as np
@@ -776,35 +777,33 @@ class TestPatWebUiDiarizationExports(unittest.TestCase):
         self.assertIn("峰值：1000", session["signal"])
         self.assertEqual(FakePyAudioApi.opened_kwargs["input_device_index"], 3)
 
-    def test_stream_transcribe_microphone_yields_frontend_updates(self):
+    def test_stream_transcribe_microphone_returns_frontend_updates_synchronously(self):
         original_post_streaming_chunk = gradio_app.post_streaming_chunk
         try:
             gradio_app.post_streaming_chunk = lambda **_kwargs: {"full_text": "你好欢迎试驾。请往这边走。"}
-            updates = list(
-                gradio_app.stream_transcribe_microphone(
-                    audio=(16000, np.array([0, 1000, -1000], dtype=np.int16)),
-                    state={
-                        "session_id": "test-session",
-                        "model": "paraformer-zh-streaming",
-                        "full_text": "",
-                        "last_chunk_bytes": b"",
-                        "sent": 0,
-                        "started": True,
-                        "model_ready": True,
-                    },
-                    base_url="http://127.0.0.1:8000",
-                    model="paraformer-zh-streaming",
-                    timeout=1,
-                    chunk_size="0,10,5",
-                    encoder_chunk_look_back=0,
-                    decoder_chunk_look_back=0,
-                )
+            update = gradio_app.stream_transcribe_microphone(
+                audio=(16000, np.array([0, 1000, -1000], dtype=np.int16)),
+                state={
+                    "session_id": "test-session",
+                    "model": "paraformer-zh-streaming",
+                    "full_text": "",
+                    "last_chunk_bytes": b"",
+                    "sent": 0,
+                    "started": True,
+                    "model_ready": True,
+                },
+                base_url="http://127.0.0.1:8000",
+                model="paraformer-zh-streaming",
+                timeout=1,
+                chunk_size="0,10,5",
+                encoder_chunk_look_back=0,
+                decoder_chunk_look_back=0,
             )
         finally:
             gradio_app.post_streaming_chunk = original_post_streaming_chunk
 
-        self.assertEqual(len(updates), 1)
-        transcript, status, state, signal_status = updates[0]
+        self.assertFalse(inspect.isgeneratorfunction(gradio_app.stream_transcribe_microphone))
+        transcript, status, state, signal_status = update
         self.assertIn("你好欢迎试驾。请往这边走。", transcript)
         self.assertIn("已发送分片：1", status)
         self.assertEqual(state["sent"], 1)
@@ -831,32 +830,84 @@ class TestPatWebUiDiarizationExports(unittest.TestCase):
         calls = []
         try:
             gradio_app.post_streaming_chunk = lambda **kwargs: calls.append(kwargs) or {"full_text": "不应出现"}
-            updates = list(
-                gradio_app.stream_transcribe_microphone(
-                    audio=(16000, np.array([0, 1000, -1000], dtype=np.int16)),
-                    state={
-                        "session_id": "test-session",
-                        "model": "paraformer-zh-streaming",
-                        "full_text": "",
-                        "sent": 0,
-                        "started": False,
-                        "model_ready": False,
-                        "status": "模型加载失败",
-                    },
-                    base_url="http://127.0.0.1:8000",
-                    model="paraformer-zh-streaming",
-                    timeout=1,
-                    chunk_size="0,10,5",
-                    encoder_chunk_look_back=0,
-                    decoder_chunk_look_back=0,
-                )
+            update = gradio_app.stream_transcribe_microphone(
+                audio=(16000, np.array([0, 1000, -1000], dtype=np.int16)),
+                state={
+                    "session_id": "test-session",
+                    "model": "paraformer-zh-streaming",
+                    "full_text": "",
+                    "sent": 0,
+                    "started": False,
+                    "model_ready": False,
+                    "status": "模型加载失败",
+                },
+                base_url="http://127.0.0.1:8000",
+                model="paraformer-zh-streaming",
+                timeout=1,
+                chunk_size="0,10,5",
+                encoder_chunk_look_back=0,
+                decoder_chunk_look_back=0,
             )
         finally:
             gradio_app.post_streaming_chunk = original_post_streaming_chunk
 
         self.assertEqual(calls, [])
-        self.assertEqual(len(updates), 1)
-        self.assertIn("模型加载失败", updates[0][1])
+        self.assertIn("模型加载失败", update[1])
+
+    def test_build_app_registers_microphone_stream_as_non_generator(self):
+        demo, created_loops = build_demo_with_tracked_loops("http://127.0.0.1:8000", 1)
+        try:
+            microphone_component = next(
+                component
+                for component in demo.config.get("components", [])
+                if component.get("props", {}).get("label") == "Gradio 麦克风"
+            )
+            microphone_id = microphone_component["id"]
+            stream_dependency = next(
+                dependency
+                for dependency in demo.config.get("dependencies", [])
+                if (microphone_id, "stream") in dependency.get("targets", [])
+            )
+            stream_function = demo.fns[stream_dependency["id"]]
+
+            self.assertEqual(microphone_component["props"]["sources"], ["microphone"])
+            self.assertTrue(microphone_component["props"]["streaming"])
+            self.assertNotIn("format", microphone_component["props"])
+            self.assertFalse(stream_function.types_generator)
+        finally:
+            if hasattr(demo, "close"):
+                demo.close()
+            close_created_loops(created_loops)
+
+    def test_build_app_installs_hidden_native_microphone_device_bridge(self):
+        demo, created_loops = build_demo_with_tracked_loops("http://127.0.0.1:8000", 1)
+        try:
+            bridge = next(
+                component
+                for component in demo.config.get("components", [])
+                if component.get("props", {}).get("elem_id") == "pat-mic-device-bridge"
+            )
+            bridge_js = bridge["props"]["js_on_load"]
+
+            self.assertEqual(bridge["type"], "html")
+            self.assertEqual(bridge["props"]["visible"], "hidden")
+            self.assertIn('select[aria-label="Select input device"]', bridge_js)
+            self.assertIn('addEventListener("change"', bridge_js)
+            self.assertIn("__patOriginalGetUserMedia", bridge_js)
+            self.assertIn("existingAudio.deviceId", bridge_js)
+            self.assertIn('deviceId === "default"', bridge_js)
+            self.assertIn('data-pat-mic-device-bridge', bridge_js)
+            self.assertIn("echoCancellation", bridge_js)
+            self.assertIn("noiseSuppression", bridge_js)
+            self.assertIn("autoGainControl", bridge_js)
+            self.assertIn("channelCount", bridge_js)
+            self.assertIn('deviceId !== "default"', bridge_js)
+            self.assertIn('track.addEventListener("mute"', bridge_js)
+            self.assertIn('track.addEventListener("ended"', bridge_js)
+        finally:
+            if hasattr(demo, "close"):
+                demo.close()
+            close_created_loops(created_loops)
 
     def test_build_app_contains_service_controls(self):
         demo, created_loops = build_demo_with_tracked_loops("http://127.0.0.1:8000", 1)
