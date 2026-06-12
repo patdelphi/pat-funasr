@@ -3164,3 +3164,24 @@ if "%DEVICE%"=="" set "DEVICE=cuda"
 
 - 两次 commit 完成：mic 修复 + 信号显示优化
 - 等待用户验证新格式的信号显示效果
+
+## 2026-06-12 21:37:51
+
+### User Request
+
+删除全部 tab 里面这两行：
+- 当前为静态兜底模型列表
+- 流式识别页当前启用 Paraformer Streaming 中文；其他候选需先下载和实测后再启用。
+
+### Agent Actions
+
+1. 移除 get_model_source_hint_html 中的静态兜底提示（返回空字符串）
+2. 移除 etch_model_choices 状态文本中的"当前为静态兜底模型列表"前缀
+3. 移除流式识别页的 stream_media_status Markdown 元素
+4. 更新 stream_media_file.change 的 outputs 列表
+5. 更新 3 个测试用例适配新逻辑
+6. 全量 162 项测试通过
+
+### Current Status
+
+- commit c7a4f25 完成
