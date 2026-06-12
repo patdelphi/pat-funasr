@@ -1721,13 +1721,27 @@ def _is_model_downloaded(model_name: str) -> bool:
     hub_val = cfg.get("hub", "ms")
     try:
         if hub_val in ("ms", "modelscope"):
-            from modelscope.hub.snapshot_download import snapshot_download
-            # 直接检查本地缓存目录，不使用 local_files_only 避免 revision 检查失败
             import os
             cache_dir = os.path.expanduser(r'~\.cache\modelscope\hub\models')
+            
             # 处理模型 ID 中的斜杠，转换为目录路径
             model_path = os.path.join(cache_dir, model_id.replace('/', os.sep))
-            return os.path.isdir(model_path)
+            if os.path.isdir(model_path) and os.listdir(model_path):
+                return True
+            
+            # 检查 damo/ 前缀路径（FunASR 别名模型）
+            damo_path = os.path.join(cache_dir, 'damo', model_id)
+            if os.path.isdir(damo_path) and os.listdir(damo_path):
+                return True
+            
+            # 处理 Qwen 模型路径格式（点号替换为三个下划线）
+            if '.' in model_id:
+                alt_model_id = model_id.replace('.', '___')
+                alt_path = os.path.join(cache_dir, alt_model_id.replace('/', os.sep))
+                if os.path.isdir(alt_path) and os.listdir(alt_path):
+                    return True
+            
+            return False
         elif hub_val in ("hf", "huggingface"):
             from huggingface_hub import snapshot_download
             snapshot_download(model_id, local_files_only=True)
