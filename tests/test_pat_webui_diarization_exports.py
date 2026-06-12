@@ -587,7 +587,7 @@ class TestPatWebUiDiarizationExports(unittest.TestCase):
         self.assertIn("样本数：3", status)
         self.assertIn("dtype：int16", status)
         self.assertIn("峰值：6.2%", status)
-        self.assertIn("已收到有效声音信号", status)
+        self.assertIn("✓", status)
 
     def test_describe_microphone_signal_treats_float_peak_one_as_loud(self):
         status = gradio_app.describe_microphone_signal(
@@ -596,8 +596,8 @@ class TestPatWebUiDiarizationExports(unittest.TestCase):
         self.assertIn("采样率：48000Hz", status)
         self.assertIn("dtype：float32", status)
         self.assertIn("峰值：100.0%", status)
-        self.assertIn("已收到有效声音信号", status)
-        self.assertNotIn("信号接近静音", status)
+        self.assertIn("✓", status)
+        self.assertNotIn("⚠静音", status)
 
     def test_describe_microphone_signal_warns_when_empty(self):
         self.assertIn("没有收到麦克风音频", gradio_app.describe_microphone_signal(None))

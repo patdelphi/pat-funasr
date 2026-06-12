@@ -415,7 +415,7 @@ APP_CSS = """
 /* 放大麦克风波形显示幅度 */
 #pat-stream-microphone .waveform-container,
 #pat-stream-microphone canvas {
-  transform: scaleY(2.5);
+  transform: scaleY(3);
   transform-origin: center center;
 }
 """
@@ -786,13 +786,11 @@ def describe_microphone_signal(audio) -> str:
         peak_pct = peak * 100
         rms_pct = rms * 100
         bar = _build_signal_bar(peak)
-        base = (
-            f"{bar} 峰值：{peak_pct:.1f}% | RMS：{rms_pct:.1f}%\n"
+        signal_tag = "✓" if peak >= 0.01 or rms >= 0.003 else "⚠静音"
+        return (
+            f"{bar} 峰值：{peak_pct:.1f}% | RMS：{rms_pct:.1f}% {signal_tag}\n"
             f"采样率：{int(sample_rate)}Hz | 样本数：{array.shape[0]} | dtype：{array.dtype}"
         )
-        if peak < 0.01 and rms < 0.003:
-            return base + "\n⚠ 信号接近静音"
-        return base + "\n✓ 已收到有效声音信号"
     except Exception as exc:
         return f"麦克风信号解析失败：{exc}"
 
@@ -826,13 +824,11 @@ def describe_pcm_signal(pcm_bytes: bytes, sample_rate: int = SYSTEM_MIC_SAMPLE_R
         peak = int(np.max(np.abs(array.astype(np.int32))))
         peak_pct = peak / 32768.0 * 100
         bar = _build_signal_bar(peak / 32768.0)
-        base = (
-            f"{bar} 峰值：{peak_pct:.1f}%\n"
+        signal_tag = "✓" if peak > 1 else "⚠静音"
+        return (
+            f"{bar} 峰值：{peak_pct:.1f}% {signal_tag}\n"
             f"采样率：{sample_rate}Hz | 样本数：{array.size}"
         )
-        if peak <= 1:
-            return base + "\n⚠ 信号接近静音"
-        return base + "\n✓ 已收到有效声音信号"
     except Exception as exc:
         return f"系统麦克风 PCM 解析失败：{exc}"
 
