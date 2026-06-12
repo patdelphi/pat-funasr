@@ -780,8 +780,7 @@ class TestPatWebUiDiarizationExports(unittest.TestCase):
         original_post_streaming_chunk = gradio_app.post_streaming_chunk
         try:
             gradio_app.post_streaming_chunk = lambda **_kwargs: {"full_text": "你好欢迎试驾。请往这边走。"}
-            updates = list(
-                gradio_app.stream_transcribe_microphone(
+            result = gradio_app.stream_transcribe_microphone(
                     audio=(16000, np.array([0, 1000, -1000], dtype=np.int16)),
                     state={
                         "session_id": "test-session",
@@ -799,12 +798,10 @@ class TestPatWebUiDiarizationExports(unittest.TestCase):
                     encoder_chunk_look_back=0,
                     decoder_chunk_look_back=0,
                 )
-            )
         finally:
             gradio_app.post_streaming_chunk = original_post_streaming_chunk
 
-        self.assertEqual(len(updates), 1)
-        transcript, status, state, signal_status = updates[0]
+        transcript, status, state, signal_status = result
         self.assertIn("你好欢迎试驾。请往这边走。", transcript)
         self.assertIn("已发送分片：1", status)
         self.assertEqual(state["sent"], 1)
@@ -831,8 +828,7 @@ class TestPatWebUiDiarizationExports(unittest.TestCase):
         calls = []
         try:
             gradio_app.post_streaming_chunk = lambda **kwargs: calls.append(kwargs) or {"full_text": "不应出现"}
-            updates = list(
-                gradio_app.stream_transcribe_microphone(
+            result = gradio_app.stream_transcribe_microphone(
                     audio=(16000, np.array([0, 1000, -1000], dtype=np.int16)),
                     state={
                         "session_id": "test-session",
@@ -850,13 +846,11 @@ class TestPatWebUiDiarizationExports(unittest.TestCase):
                     encoder_chunk_look_back=0,
                     decoder_chunk_look_back=0,
                 )
-            )
         finally:
             gradio_app.post_streaming_chunk = original_post_streaming_chunk
 
         self.assertEqual(calls, [])
-        self.assertEqual(len(updates), 1)
-        self.assertIn("模型加载失败", updates[0][1])
+        self.assertIn("模型加载失败", result[1])
 
     def test_build_app_contains_service_controls(self):
         demo, created_loops = build_demo_with_tracked_loops("http://127.0.0.1:8000", 1)

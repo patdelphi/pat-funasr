@@ -1102,18 +1102,7 @@ def stream_transcribe_microphone(
     decoder_chunk_look_back: int,
 ):
     """接收 Gradio 麦克风流式音频块，并转发到后端 streaming 端点。"""
-    import sys as _sys
     state = dict(state or {})
-    audio_info = "None" if audio is None else f"type={type(audio).__name__}"
-    if audio is not None:
-        try:
-            sr, data = audio
-            arr = np.asarray(data)
-            audio_info = f"sr={sr} shape={arr.shape} dtype={arr.dtype} peak={float(np.max(np.abs(arr.astype(np.float32)))):.4f}"
-        except Exception as e:
-            audio_info = f"parse_error={e}"
-    print(f"[MIC] audio={audio_info}", file=_sys.stderr, flush=True)
-
     if not state.get("session_id") or state.get("model") != model:
         state, _ = init_microphone_streaming_state(base_url, model, timeout)
     signal_status = describe_microphone_signal(audio)
@@ -1121,15 +1110,13 @@ def stream_transcribe_microphone(
         status = str(state.get("status") or "模型未就绪")
         if "失败" in status or "error" in status.lower():
             status += "。请检查后端 API 是否运行，或在服务页刷新模型列表。"
-        yield format_streaming_preview_text(state.get("full_text", ""), final_flag=False), f"{status} | {signal_status}", state, signal_status
-        return
+        return format_streaming_preview_text(state.get("full_text", ""), final_flag=False), f"{status} | {signal_status}", state, signal_status
 
     try:
         parse_chunk_size_text(chunk_size)
         chunk_bytes = numpy_audio_to_pcm_bytes(audio)
         if not chunk_bytes:
-            yield format_streaming_preview_text(state.get("full_text", ""), final_flag=False), "等待麦克风音频...", state, signal_status
-            return
+            return format_streaming_preview_text(state.get("full_text", ""), final_flag=False), "等待麦克风音频...", state, signal_status
 
         payload = post_streaming_chunk(
             base_url=base_url,
@@ -1147,17 +1134,14 @@ def stream_transcribe_microphone(
         state["last_chunk_bytes"] = chunk_bytes
         state["full_text"] = str(payload.get("full_text", state.get("full_text", "")) or "")
         preview = format_streaming_preview_text(str(state.get("full_text", "")), final_flag=False)
-        yield preview, f"麦克风实时识别中，已发送分片：{state['sent']}", state, signal_status
-        return
+        return preview, f"麦克风实时识别中，已发送分片：{state['sent']}", state, signal_status
     except urllib.error.HTTPError as error:
         detail = error.read().decode("utf-8", errors="replace")
         preview = format_streaming_preview_text(state.get("full_text", ""), final_flag=False)
-        yield preview, f"HTTP {error.code} from {error.url}: {detail}", state, signal_status
-        return
+        return preview, f"HTTP {error.code} from {error.url}: {detail}", state, signal_status
     except Exception as error:
         preview = format_streaming_preview_text(state.get("full_text", ""), final_flag=False)
-        yield preview, f"麦克风流式识别失败：{error}", state, signal_status
-        return
+        return preview, f"麦克风流式识别失败：{error}", state, signal_status
 
 
 def stop_streaming_status() -> str:
@@ -3015,9 +2999,8 @@ def build_app(default_base_url: str, default_timeout: float):
                         stream_download = gr.File(label="下载结果", visible=True)
                     with gr.Column(scale=1, min_width=420):
                         gr.Markdown("### Mic 实时识别", elem_classes=["pat-compact-markdown"])
-                        stream_microphone = gr.Audio(
+                        stream_microphone = gr.Microphone(
                             label="Gradio 麦克风",
-                            sources=["microphone"],
                             type="numpy",
                         )
                         mic_status = gr.Textbox(label="麦克风识别状态", interactive=False)
@@ -3483,20 +3466,6 @@ def build_app(default_base_url: str, default_timeout: float):
             show_progress="hidden",
             trigger_mode="multiple",
             stream_every=0.6,
-        )
-        stream_microphone.stop_recording(
-            fn=finish_microphone_streaming_state,
-            inputs=[
-                stream_mic_session,
-                base_url,
-                stream_model,
-                timeout,
-                stream_chunk_size,
-                stream_encoder_lb,
-                stream_decoder_lb,
-            ],
-            outputs=[stream_mic_session, mic_status, mic_transcript],
-            cancels=[stream_mic_event],
         )
         stream_file_stop_button.click(
             fn=stop_streaming_status,
