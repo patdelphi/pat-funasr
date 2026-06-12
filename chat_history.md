@@ -3185,3 +3185,25 @@ if "%DEVICE%"=="" set "DEVICE=cuda"
 ### Current Status
 
 - commit c7a4f25 完成
+
+## 2026-06-12 21:43:17
+
+### User Request
+
+1. 把麦克风识别状态与麦克风信号这两部分整合为一个组件，压缩在 2 行显示
+2. 调大 Gradio 麦克风设备组件里的波形显示幅度
+
+### Agent Actions
+
+1. 合并 mic_status 和 mic_signal_status 为单个 Textbox (lines=2)
+2. 识别状态和信号信息用换行符分隔显示
+3. 更新 stream_transcribe_microphone 返回值为 3 元组
+4. 添加 CSS 对 #pat-stream-microphone 的波形 canvas 添加 scaleY(2.5) 放大显示
+5. 更新对应测试用例
+6. 全量 162 项测试通过
+
+### Current Status
+
+- commit 87f94c1 合并状态组件
+- commit c618330 波形放大 CSS
+- 需要重启 UI 验证波形显示效果

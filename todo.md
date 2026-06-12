@@ -582,3 +582,8 @@ Pat WebUI 开发 Todo
 - [x] 关闭浏览器 AEC、降噪和自动增益，固定单声道，并增加轨道 mute/unmute/ended 诊断。
 - [x] 优化音频信号显示：峰值/RMS 改为百分比 + ASCII 音量条可视化。
 - [ ] 在具有真实麦克风设备的浏览器中验证首次及重复录音的峰值、RMS 和识别结果。
+
+## 合并麦克风状态显示 + 波形幅度优化
+
+- [x] 合并 mic_status 和 mic_signal_status 为一个组件，2行显示
+- [x] 优化 Gradio 麦克风波形显示幅度（CSS/JS 放大）
