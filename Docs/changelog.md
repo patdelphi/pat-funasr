@@ -1,4 +1,4 @@
-﻿#
+#
 变更记录（Changelog）
 
 ## 2026-06-08
@@ -35,3 +35,39 @@
 - 流式输出预览改为单段连续显示，避免短句被自动拆成多行；下载文本继续使用 UTF-8 BOM
 - 修复 FunASR `sentence_info` 毫秒时间戳转换错误，`1500ms` 现在正确输出为 `1.5s`
 - 新增独立 Gradio Mic 流式识别测试页："aipython/gradio_streaming_asr_test.py" 与 "run_gradio_streaming_asr_test.bat"，用于隔离验证 Gradio `Audio.stream` 链路
+
+## 2026-06-12
+
+### Mic 流式收音修复
+
+- 修复流式 Mic 收音问题：恢复 `gr.Audio(sources=["microphone"], streaming=True)` 替代 `gr.Microphone`
+- `stream_transcribe_microphone` 从 `yield` 生成器改为同步 `return`，避免被 Gradio 注册为生成式输出事件
+- 增加隐藏设备桥接 JS（`MIC_DEVICE_BRIDGE_JS`），拦截 `getUserMedia` 注入设备 ID，修复 Gradio 原生设备下拉框不生效问题
+- 关闭浏览器 AEC、降噪和自动增益，固定单声道输入，增加音频轨道 mute/unmute/ended 诊断日志
+
+### 信号显示优化
+
+- 合并「麦克风识别状态」和「麦克风信号」为单个 Textbox（2 行显示）
+- 峰值/RMS 从原始小数改为百分比显示（如 `0.0625` → `6.2%`）
+- 添加 ASCII 音量条 `[████░░░░]` 直观显示信号强度
+- 添加 CSS 放大麦克风波形显示幅度（scaleY: 3）
+- 降低静音判断阈值：peak 1% → 0.1%，rms 0.3% → 0.03%
+
+### 模型下载状态
+
+- 服务与调试页面模型列表「当前状态」改为「本地状态」，显示模型是否已下载至本地
+- 下拉列表不再显示下载状态，保持简洁
+- 检测逻辑：检查 `workspace/models/models` 目录下的实际模型文件（config.yaml、model.pt 等）
+- 支持 FunASR 别名映射（paraformer-zh → iic/speech_paraformer-...）和 Qwen 路径格式（点号替换为三个下划线）
+
+### NLLB 翻译能力
+
+- 补充 NLLB 模型（nllb-200-distilled-600m、nllb-200-distilled-1.3b）的 translation 能力标识
+- 说明：「多语种文本翻译；支持 200+ 语言互译」
+- 能力筛选器新增「文本翻译」选项
+
+### UI 布局调整
+
+- 移除各 tab 的静态兜底模型列表提示和流式识别页 Paraformer Streaming 提示文本
+- 离线识别页面「单文件处理」和「批量文件处理」改为左右分栏布局（类似流式识别页面）
+- 批量文件处理的按钮移到上传组件下方

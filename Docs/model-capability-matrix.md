@@ -6,7 +6,7 @@ ASR 模型能力矩阵与 API 参数说明
 范围：
 
 - 当前项目已接入的 OpenAI 兼容 API（FastAPI）："app/openai_api/server.py"
-- 当前 API 已内置的模型别名（model 参数）：sensevoice / paraformer / paraformer-en / paraformer-zh-streaming / fun-asr-nano / qwen3-asr / qwen3-asr-0.6b / emotion2vec-plus-large
+- 当前 API 已内置的模型别名（model 参数）：sensevoice / paraformer / paraformer-en / paraformer-zh-streaming / fun-asr-nano / qwen3-asr / qwen3-asr-0.6b / emotion2vec-plus-large / nllb-200-distilled-600m / nllb-200-distilled-1.3b
 - 输出格式：json / verbose_json / txt / srt / vtt / tsv / all(zip)
 
 ## 命名说明（重要）
@@ -55,6 +55,7 @@ API 实现：[server.py](../app/openai_api/server.py)
 - batch_size_s：动态批总时长（可选）
 - batch_size_threshold_s：长音频动态批阈值（可选）
 - punc_mode：auto / disabled（可选）
+- hub：模型来源（可选，ms/modelscope/hf/huggingface）
 
 ### 3) 输出字段（已实现）
 
@@ -80,6 +81,8 @@ API 实现：[server.py](../app/openai_api/server.py)
 | qwen3-asr | Qwen/Qwen3-ASR-1.7B | Qwen/Qwen3-ASR-1.7B | ms | 30 种语言：中文、英语、粤语、阿拉伯语、德语、法语、西班牙语、葡萄牙语、印尼语、意大利语、韩语、俄语、泰语、越南语、日语、土耳其语、印地语、马来语、荷兰语、瑞典语、丹麦语、芬兰语、波兰语、捷克语、菲律宾语、波斯语、希腊语、匈牙利语、马其顿语、罗马尼亚语；22 种中文方言/口音：安徽、东北、福建、甘肃、贵州、河北、河南、湖北、湖南、江西、宁夏、山东、陕西、山西、四川、天津、云南、浙江、粤语（香港口音）、粤语（广东口音）、吴语、闽南语 | ⚠️ | ⚠️ | ⚠️ | ⚠️ | 最高质量离线识别（当前项目未接其原生 streaming/vLLM 链路） |
 | qwen3-asr-0.6b | Qwen/Qwen3-ASR-0.6B | Qwen/Qwen3-ASR-0.6B | ms | 与 `qwen3-asr` 相同：30 种语言 + 上述 22 种中文方言/口音 | ⚠️ | ⚠️ | ⚠️ | ⚠️ | 更轻量的 Qwen3-ASR（当前项目未接其原生 streaming/vLLM 链路） |
 | emotion2vec-plus-large | iic/emotion2vec_plus_large | iic/emotion2vec_plus_large | ms | 官方 README 强调跨语种/跨场景鲁棒性，但未公开逐项语言与中文方言名单 | ❌ | ❌ | ❌ | ❌ | 独立情感识别 |
+| nllb-200-distilled-600m | facebook/nllb-200-distilled-600m | facebook/nllb-200-distilled-600m | ms | 多语种翻译：支持 200+ 语言互译（NLLB-200 覆盖语种清单） | ❌ | ❌ | ❌ | ❌ | 多语种文本翻译（600M 轻量版） |
+| nllb-200-distilled-1.3b | facebook/nllb-200-distilled-1.3b | facebook/nllb-200-distilled-1.3b | ms | 多语种翻译：支持 200+ 语言互译（NLLB-200 覆盖语种清单） | ❌ | ❌ | ❌ | ❌ | 多语种文本翻译（1.3B 高精度版） |
 
 流式模型候选说明：
 
