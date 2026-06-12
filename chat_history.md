@@ -3274,3 +3274,28 @@ snapshot_download(local_files_only=True) 会检查 revision 信息，而本地�
 ### Current Status
 
 - commit  1bb7f7 完成
+
+## 2026-06-12 22:18:21
+
+### User Request
+
+模型下载状态还不对，好几个是未下载
+
+### Root Cause
+
+1. FunASR 别名模型（如 paraformer-zh）实际缓存在 damo/ 前缀目录下
+2. Qwen 模型路径中点号被替换为三个下划线（如 Qwen3-ASR-1.7B -> Qwen3-ASR-1___7B）
+
+### Agent Actions
+
+1. 更新 _is_model_downloaded 检查三个路径：
+   - 直接路径 {cache_dir}/{model_id}
+   - damo 前缀路径 {cache_dir}/damo/{model_id}
+   - Qwen 格式路径（点号替换为三个下划线）
+2. 确保目录存在且有内容才返回 True
+3. 全量 162 项测试通过
+
+### Current Status
+
+- commit  274733 完成
+- 所有 10 个模型现在都正确显示为「已下载」
