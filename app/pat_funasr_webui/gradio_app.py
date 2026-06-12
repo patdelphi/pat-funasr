@@ -1231,13 +1231,13 @@ def stream_transcribe_microphone(
         status = str(state.get("status") or "模型未就绪")
         if "失败" in status or "error" in status.lower():
             status += "。请检查后端 API 是否运行，或在服务页刷新模型列表。"
-        return format_streaming_preview_text(state.get("full_text", ""), final_flag=False), f"{status} | {signal_status}", state, signal_status
+        return format_streaming_preview_text(state.get("full_text", ""), final_flag=False), f"{status}\n{signal_status}", state
 
     try:
         parse_chunk_size_text(chunk_size)
         chunk_bytes = numpy_audio_to_pcm_bytes(audio)
         if not chunk_bytes:
-            return format_streaming_preview_text(state.get("full_text", ""), final_flag=False), "等待麦克风音频...", state, signal_status
+            return format_streaming_preview_text(state.get("full_text", ""), final_flag=False), f"等待麦克风音频...\n{signal_status}", state
 
         payload = post_streaming_chunk(
             base_url=base_url,
@@ -1255,14 +1255,14 @@ def stream_transcribe_microphone(
         state["last_chunk_bytes"] = chunk_bytes
         state["full_text"] = str(payload.get("full_text", state.get("full_text", "")) or "")
         preview = format_streaming_preview_text(str(state.get("full_text", "")), final_flag=False)
-        return preview, f"麦克风实时识别中，已发送分片：{state['sent']}", state, signal_status
+        return preview, f"麦克风实时识别中，已发送分片：{state['sent']}\n{signal_status}", state
     except urllib.error.HTTPError as error:
         detail = error.read().decode("utf-8", errors="replace")
         preview = format_streaming_preview_text(state.get("full_text", ""), final_flag=False)
-        return preview, f"HTTP {error.code} from {error.url}: {detail}", state, signal_status
+        return preview, f"HTTP {error.code} from {error.url}: {detail}\n{signal_status}", state
     except Exception as error:
         preview = format_streaming_preview_text(state.get("full_text", ""), final_flag=False)
-        return preview, f"麦克风流式识别失败：{error}", state, signal_status
+        return preview, f"麦克风流式识别失败：{error}\n{signal_status}", state
 
 
 def stop_streaming_status() -> str:
@@ -3131,8 +3131,7 @@ def build_app(default_base_url: str, default_timeout: float):
                             recording=False,
                             elem_id="pat-stream-microphone",
                         )
-                        mic_status = gr.Textbox(label="麦克风识别状态", interactive=False)
-                        mic_signal_status = gr.Textbox(label="麦克风信号", interactive=False)
+                        mic_status = gr.Textbox(label="麦克风识别状态", interactive=False, lines=2)
                         mic_transcript = gr.Textbox(label="Mic 流式输出", lines=8, max_lines=18, buttons=["copy"])
                         mic_download_button = gr.Button("生成 Mic 结果下载", variant="secondary")
                         mic_download = gr.File(label="Mic 下载结果", visible=True)
@@ -3590,7 +3589,7 @@ def build_app(default_base_url: str, default_timeout: float):
                 stream_encoder_lb,
                 stream_decoder_lb,
             ],
-            outputs=[mic_transcript, mic_status, stream_mic_session, mic_signal_status],
+            outputs=[mic_transcript, mic_status, stream_mic_session],
             show_progress="hidden",
             trigger_mode="multiple",
             stream_every=0.6,

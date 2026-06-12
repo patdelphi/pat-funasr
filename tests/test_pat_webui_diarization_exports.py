@@ -802,11 +802,11 @@ class TestPatWebUiDiarizationExports(unittest.TestCase):
             gradio_app.post_streaming_chunk = original_post_streaming_chunk
 
         self.assertFalse(inspect.isgeneratorfunction(gradio_app.stream_transcribe_microphone))
-        transcript, status, state, signal_status = update
+        transcript, status, state = update
         self.assertIn("你好欢迎试驾。请往这边走。", transcript)
         self.assertIn("已发送分片：1", status)
         self.assertEqual(state["sent"], 1)
-        self.assertIn("峰值：3.1%", signal_status)
+        self.assertIn("峰值：3.1%", status)
 
     def test_init_microphone_streaming_state_waits_for_model_ready(self):
         original_ensure = gradio_app.ensure_streaming_model_ready
@@ -1016,7 +1016,6 @@ class TestPatWebUiDiarizationExports(unittest.TestCase):
             self.assertIn("解码器回看帧数(decoder_chunk_look_back)", labels)
             self.assertIn("Gradio 麦克风", labels)
             self.assertIn("麦克风识别状态", labels)
-            self.assertIn("麦克风信号", labels)
             self.assertIn("Mic 流式输出", labels)
             self.assertNotIn("麦克风设备", labels)
             html_values = [
