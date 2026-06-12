@@ -1720,6 +1720,15 @@ def _is_model_downloaded(model_name: str) -> bool:
     cfg = MODEL_CONFIGS[model_name]
     model_id = cfg.get("model", "")
     
+    # FunASR 别名到 ModelScope 实际模型 ID 的映射
+    ALIAS_MAP = {
+        'paraformer-zh': 'iic/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-online',
+        'paraformer-en': 'iic/speech_paraformer-large-vad-punc_asr_nat-en-16k-common-vocab10020',
+        'paraformer-zh-streaming': 'iic/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-online',
+        'fsmn-vad': 'iic/speech_fsmn_vad_zh-cn-16k-common-pytorch',
+        'ct-punc': 'iic/punc_ct-transformer_cn-en-common-vocab471067-large',
+    }
+    
     def _has_model_files(path: str) -> bool:
         """检查目录是否包含实际模型文件（不只是 .mdl 元数据）。"""
         if not os.path.isdir(path):
@@ -1728,29 +1737,45 @@ def _is_model_downloaded(model_name: str) -> bool:
         model_indicators = {'config.yaml', 'configuration.json', 'model.pt', 'model.bin', 'pytorch_model.bin', 'tokenizer.json'}
         return bool(model_indicators & set(files))
     
-    try:
-        import os
-        # 只检查 workspace/models 目录
-        cache_dir = os.path.join(str(_PROJECT_ROOT), 'workspace', 'models')
-        if not os.path.isdir(cache_dir):
-            return False
-        
-        # 处理模型 ID 中的斜杠，转换为目录路径
+    def _check_model_in_cache(cache_dir: str, model_id: str) -> bool:
+        """在指定缓存目录中检查模型。"""
+        # 1. 直接路径
         model_path = os.path.join(cache_dir, model_id.replace('/', os.sep))
         if _has_model_files(model_path):
             return True
         
-        # 检查 damo/ 前缀路径（FunASR 别名模型）
+        # 2. damo/ 前缀路径
         damo_path = os.path.join(cache_dir, 'damo', model_id)
         if _has_model_files(damo_path):
             return True
         
-        # 处理 Qwen 模型路径格式（点号替换为三个下划线）
+        # 3. 别名映射路径
+        alias_id = ALIAS_MAP.get(model_id)
+        if alias_id:
+            alias_path = os.path.join(cache_dir, alias_id.replace('/', os.sep))
+            if _has_model_files(alias_path):
+                return True
+        
+        # 4. Qwen 模型路径格式（点号替换为三个下划线）
         if '.' in model_id:
             alt_model_id = model_id.replace('.', '___')
             alt_path = os.path.join(cache_dir, alt_model_id.replace('/', os.sep))
             if _has_model_files(alt_path):
                 return True
+        
+        return False
+    
+    try:
+        import os
+        # 检查 workspace/models/models 目录（ModelScope 缓存结构）
+        cache_dir = os.path.join(str(_PROJECT_ROOT), 'workspace', 'models', 'models')
+        if os.path.isdir(cache_dir) and _check_model_in_cache(cache_dir, model_id):
+            return True
+        
+        # 回退到 workspace/models 目录
+        cache_dir = os.path.join(str(_PROJECT_ROOT), 'workspace', 'models')
+        if os.path.isdir(cache_dir) and _check_model_in_cache(cache_dir, model_id):
+            return True
         
         return False
     except Exception:
