@@ -786,7 +786,8 @@ def describe_microphone_signal(audio) -> str:
         peak_pct = peak * 100
         rms_pct = rms * 100
         bar = _build_signal_bar(peak)
-        signal_tag = "✓" if peak >= 0.01 or rms >= 0.003 else "⚠静音"
+        # 降低阈值：peak >= 0.001 或 rms >= 0.0003 即视为有信号
+        signal_tag = "✓" if peak >= 0.001 or rms >= 0.0003 else "⚠静音"
         return (
             f"{bar} 峰值：{peak_pct:.1f}% | RMS：{rms_pct:.1f}% {signal_tag}\n"
             f"采样率：{int(sample_rate)}Hz | 样本数：{array.shape[0]} | dtype：{array.dtype}"
