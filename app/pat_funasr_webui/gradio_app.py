@@ -412,6 +412,12 @@ APP_CSS = """
   padding: 12px 14px;
   background: #fafbfc;
 }
+/* 放大麦克风波形显示幅度 */
+#pat-stream-microphone .waveform-container,
+#pat-stream-microphone canvas {
+  transform: scaleY(2.5);
+  transform-origin: center center;
+}
 """
 
 
