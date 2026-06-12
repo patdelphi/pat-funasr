@@ -42,14 +42,16 @@ class TestSegmentation(unittest.TestCase):
         clean = lambda s: s.strip()
         sentence_info = [
             {"start": 0, "end": 1000, "text": "A", "spk": 0},
-            {"start": 1000, "end": 2000, "text": "B", "spk": 1},
+            {"start": 1500, "end": 2800, "text": "B", "spk": 1},
         ]
         segs = self.seg.build_segments_from_sentence_info(sentence_info, clean_text=clean)
         self.assertEqual(len(segs), 2)
+        self.assertAlmostEqual(segs[0]["end"], 1.0, places=3)
+        self.assertAlmostEqual(segs[1]["start"], 1.5, places=3)
+        self.assertAlmostEqual(segs[1]["end"], 2.8, places=3)
         self.assertEqual(segs[0]["speaker"], 0)
         self.assertEqual(segs[1]["speaker"], 1)
 
 
 if __name__ == "__main__":
     unittest.main()
-

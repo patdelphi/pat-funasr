@@ -29,7 +29,9 @@
 
 - 重写 Pat WebUI “流式识别”页 Mic 区域：正式页回到 Gradio 原生 `Audio(sources=["microphone"], streaming=True)`，不再自绘设备下拉、不注入 `getUserMedia`、不跳转 `/mic-stream`
 - 文件流式识别与 Mic 实时识别保持左右两栏；Mic 状态、信号、输出、下载与文件流式输出互相独立
-- Mic 开始录制前增加模型 ready 门禁：先查 `/v1/models/{model}/status`，未 ready 时调用 `/v1/models/{model}/load`
+- 对照已知可用提交 `4496919` 恢复 Mic 原生生命周期：组件首次渲染即参与权限与设备枚举，不再通过回调切换 `interactive` 或重建 Audio 组件
+- 恢复 `start_recording` 初始化会话并检查模型 ready 的原有流程，移除额外的“加载流式模型”按钮
 - 修复 Gradio numpy int16 双声道音频转换顺序，避免双声道均值后被误判为 float 并放大削波
 - 流式输出预览改为单段连续显示，避免短句被自动拆成多行；下载文本继续使用 UTF-8 BOM
+- 修复 FunASR `sentence_info` 毫秒时间戳转换错误，`1500ms` 现在正确输出为 `1.5s`
 - 新增独立 Gradio Mic 流式识别测试页："aipython/gradio_streaming_asr_test.py" 与 "run_gradio_streaming_asr_test.bat"，用于隔离验证 Gradio `Audio.stream` 链路

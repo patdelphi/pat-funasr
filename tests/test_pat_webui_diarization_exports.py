@@ -170,6 +170,19 @@ class TestPatWebUiDiarizationExports(unittest.TestCase):
         self.assertIn("静态模型清单", status_text)
         self.assertGreater(len(payload["data"]), 3)
 
+    def test_get_model_source_hint_html(self):
+        realtime_html = gradio_app.get_model_source_hint_html("当前为后端实时模型列表")
+        self.assertIn("后端实时", realtime_html)
+        self.assertIn("#10B981", realtime_html)
+
+        fallback_html = gradio_app.get_model_source_hint_html("当前为静态兜底模型列表")
+        self.assertIn("静态兜底", fallback_html)
+        self.assertIn("#F59E0B", fallback_html)
+
+        # 异常与空值保护
+        none_html = gradio_app.get_model_source_hint_html(None)
+        self.assertIn("静态兜底", none_html)
+
     def test_read_runtime_logs_reads_api_and_ui_logs(self):
         temp_root = Path(tempfile.mkdtemp(prefix="pat-funasr-log-test-"))
         api_log = temp_root / "funasr-api.log"

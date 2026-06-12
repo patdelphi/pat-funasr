@@ -1100,7 +1100,17 @@ def stream_transcribe_microphone(
     decoder_chunk_look_back: int,
 ):
     """接收 Gradio 麦克风流式音频块，并转发到后端 streaming 端点。"""
+    import sys as _sys
     state = dict(state or {})
+    audio_info = "None" if audio is None else f"type={type(audio).__name__}"
+    if audio is not None:
+        try:
+            sr, data = audio
+            arr = np.asarray(data)
+            audio_info = f"sr={sr} shape={arr.shape} dtype={arr.dtype} peak={float(np.max(np.abs(arr.astype(np.float32)))):.4f}"
+        except Exception as e:
+            audio_info = f"parse_error={e}"
+    print(f"[MIC] audio={audio_info}", file=_sys.stderr, flush=True)
 
     if not state.get("session_id") or state.get("model") != model:
         state, _ = init_microphone_streaming_state(base_url, model, timeout)
@@ -2343,6 +2353,16 @@ def retry_failed_batch(
     )
 
 
+def get_model_source_hint_html(status_text: str) -> str:
+    """生成模型来源的状态指示 HTML 字符串（带主题适配）。"""
+    try:
+        if status_text and "后端实时" in str(status_text):
+            return "<div class='pat-model-source-hint' style='margin-top: 4px; font-size: 13px; color: #10B981; display: flex; align-items: center; gap: 4px;'><span style='font-size: 8px;'>●</span> 当前为后端实时模型列表</div>"
+    except Exception:
+        pass
+    return "<div class='pat-model-source-hint' style='margin-top: 4px; font-size: 13px; color: #F59E0B; display: flex; align-items: center; gap: 4px;'><span style='font-size: 8px;'>●</span> 当前为静态兜底模型列表</div>"
+
+
 def fetch_model_choices(base_url: str, timeout: float) -> tuple[list[tuple[str, str]], str, dict]:
     """从后端读取模型列表，失败时返回静态兜底选项。"""
     fallback_choices = build_known_model_choices()
@@ -2556,6 +2576,7 @@ def refresh_model_dropdown(base_url: str, timeout: float):
         filter_diarization_model_choices(choices),
         fallback=DEFAULT_DIARIZATION_MODEL,
     )
+    hint_html = get_model_source_hint_html(status_text)
     return (
         gr.update(choices=choices, value=choose_default_model(choices) or DEFAULT_MODEL),
         gr.update(
@@ -2571,6 +2592,10 @@ def refresh_model_dropdown(base_url: str, timeout: float):
             value=choose_default_diarization_model(diarization_choices) or DEFAULT_DIARIZATION_MODEL,
         ),
         status_text,
+        hint_html,
+        hint_html,
+        hint_html,
+        hint_html,
     )
 
 
@@ -2701,29 +2726,33 @@ def build_app(default_base_url: str, default_timeout: float):
                             choices=model_choices,
                             value=default_model_value,
                         )
+                        offline_model_source_hint = gr.HTML(
+                            value=get_model_source_hint_html(model_status_text),
+                            show_label=False
+                        )
                     with gr.Column(scale=1, min_width=520):
                         with gr.Accordion("高级参数", open=False):
                             with gr.Row():
-                                language = gr.Textbox(label="语言提示", placeholder="如：zh / en / auto")
-                                hotword = gr.Textbox(label="热词", placeholder="多个热词可用逗号分隔")
+                                language = gr.Textbox(label="语言提示(language)", placeholder="如：zh / en / auto")
+                                hotword = gr.Textbox(label="热词(hotword)", placeholder="多个热词可用逗号分隔")
                                 vad_preset = gr.Dropdown(
-                                    label="VAD 预设",
+                                    label="VAD 预设(vad_preset)",
                                     choices=[("自动", ""), ("default", "default"), ("anti_hallucination", "anti_hallucination")],
                                     value="",
                                 )
                             with gr.Row():
                                 merge_vad = gr.Dropdown(
-                                    label="合并 VAD 片段",
+                                    label="合并 VAD 片段(merge_vad)",
                                     choices=[("自动", ""), ("启用", "true"), ("禁用", "false")],
                                     value="",
                                 )
                                 use_itn = gr.Dropdown(
-                                    label="逆文本正规化",
+                                    label="逆文本正规化(use_itn)",
                                     choices=[("自动", ""), ("启用", "true"), ("禁用", "false")],
                                     value="",
                                 )
-                                merge_length_s = gr.Number(label="合并段长度(秒)", value=15, precision=0)
-                                max_line_width = gr.Number(label="字幕单行最大长度", value=40, precision=0)
+                                merge_length_s = gr.Number(label="合并段长度(merge_length_s)", value=15, precision=0)
+                                max_line_width = gr.Number(label="字幕单行最大长度(max_line_width)", value=40, precision=0)
                             with gr.Row():
                                 batch_size_s = gr.Number(label="批处理时长(batch_size_s)", value=0, precision=0)
                                 batch_size_threshold_s = gr.Number(
@@ -2737,7 +2766,7 @@ def build_app(default_base_url: str, default_timeout: float):
                                     precision=0,
                                 )
                                 punc_mode = gr.Dropdown(
-                                    label="PUNC 策略",
+                                    label="PUNC 策略(punc_mode)",
                                     choices=[("自动", "auto"), ("关闭外置 PUNC", "disabled")],
                                     value="auto",
                                 )
@@ -2831,6 +2860,10 @@ def build_app(default_base_url: str, default_timeout: float):
                             choices=streaming_model_choices,
                             value=default_streaming_model_value,
                         )
+                        stream_model_source_hint = gr.HTML(
+                            value=get_model_source_hint_html(model_status_text),
+                            show_label=False
+                        )
                     with gr.Column(scale=1, min_width=520):
                         with gr.Accordion("流式参数", open=False):
                             with gr.Row():
@@ -2884,11 +2917,16 @@ def build_app(default_base_url: str, default_timeout: float):
                         type="filepath",
                         file_types=list(MEDIA_FILE_SUFFIXES),
                     )
-                    diarization_model = gr.Dropdown(
-                        label="说话人分离模型",
-                        choices=diarization_model_choices,
-                        value=default_diarization_model_value,
-                    )
+                    with gr.Column():
+                        diarization_model = gr.Dropdown(
+                            label="说话人分离模型",
+                            choices=diarization_model_choices,
+                            value=default_diarization_model_value,
+                        )
+                        diarization_model_source_hint = gr.HTML(
+                            value=get_model_source_hint_html(model_status_text),
+                            show_label=False
+                        )
                 with gr.Row():
                     diarization_preview = gr.Video(
                         label="视频预览",
@@ -2939,11 +2977,16 @@ def build_app(default_base_url: str, default_timeout: float):
                         type="filepath",
                         file_types=list(MEDIA_FILE_SUFFIXES),
                     )
-                    emotion_model = gr.Dropdown(
-                        label="情感识别模型",
-                        choices=emotion_model_choices,
-                        value=default_emotion_model_value,
-                    )
+                    with gr.Column():
+                        emotion_model = gr.Dropdown(
+                            label="情感识别模型",
+                            choices=emotion_model_choices,
+                            value=default_emotion_model_value,
+                        )
+                        emotion_model_source_hint = gr.HTML(
+                            value=get_model_source_hint_html(model_status_text),
+                            show_label=False
+                        )
                 with gr.Row():
                     emotion_preview = gr.Video(
                         label="视频预览",
@@ -3028,7 +3071,17 @@ def build_app(default_base_url: str, default_timeout: float):
         refresh_models_button.click(
             fn=refresh_model_dropdown,
             inputs=[base_url, timeout],
-            outputs=[model, stream_model, emotion_model, diarization_model, model_status],
+            outputs=[
+                model,
+                stream_model,
+                emotion_model,
+                diarization_model,
+                model_status,
+                offline_model_source_hint,
+                stream_model_source_hint,
+                emotion_model_source_hint,
+                diarization_model_source_hint,
+            ],
         )
         refresh_logs_button.click(
             fn=read_runtime_logs_ui,
@@ -3209,11 +3262,6 @@ def build_app(default_base_url: str, default_timeout: float):
                 stream_decoder_lb,
             ],
             outputs=[stream_transcript, stream_status],
-        )
-        stream_microphone.start_recording(
-            fn=init_microphone_streaming_state,
-            inputs=[base_url, stream_model, timeout],
-            outputs=[stream_mic_session, mic_status],
         )
         stream_mic_event = stream_microphone.stream(
             fn=stream_transcribe_microphone,

@@ -2698,31 +2698,171 @@ un_gradio_streaming_asr_test.bat 和测试 	ests/test_aipython_gradio_streaming_
 **测试补充：**
 - 新增 `tests/test_server_health_and_models.py`：13个测试覆盖 `/health`(5)、`/v1/models`(4)、`/v1/models/{model}/status` 和 `/load`(4)
 
-**验证：** 全量 147 测试通过（134原 + 13新）
+**验证：** 全量 147 测试通过
 
 ## 2026-06-11 +08:00 User
 
-按计划完成全部修复
+忽略这个问题。离线识别，单文件开始识别按钮，放到媒体播放控件下面。批量执行与重试失败项按钮，放到文件上传组件下面。
 
 ## 2026-06-11 +08:00 Assistant
 
-完成最后一项技术债 G-M1 及剩余低优先级改进：
+调整离线识别页布局：单文件处理区按钮移到播放器下方，批量处理区按钮移到文件上传下方。
 
-**G-M1: gr.update() → 新式组件写法（30处全部迁移）：**
-- `gr.update()` 无操作 → `gr.Textbox()` 等对应组件
-- `gr.update(value=..., variant=...)` 按钮 → `gr.Button(value=..., variant=...)`
-- `gr.update(choices=..., value=...)` 下拉 → `gr.Dropdown(choices=..., value=...)`
-- `gr.update(value=..., visible=...)` 文件 → `gr.File(value=..., visible=...)`
-- `gr.update(value=..., visible=...)` 视频/音频 → `gr.Video(value=..., visible=...)` / `gr.Audio(value=..., visible=...)`
-- 同步更新 4 个测试用例适配新式组件属性访问
+## 2026-06-11 +08:00 User
 
-**其余低优先级改进（7项）：**
-- L1: STREAMING_SESSION_TTL_S 支持环境变量配置
-- L2: /v1/models created 改为服务器启动时间戳
-- L4: segmentation chunk_size 提取为模块常量
-- L7: renderers._clamp_seconds 加 100 小时上限截断
-- L8: merge_streaming_text 重叠检测限制最多 500 字符
-- G-L1: asyncio 初始化加 debug 日志
-- G-L2: finally 块清理异常加 debug 日志
+音频播放器首次激活状态有问题（running状态），应该直接显示音频频谱
 
-**验证：** 全量 147 测试通过
+## 2026-06-11 +08:00 Assistant
+
+音频预览组件加 recording=False 抑制首次激活录音状态。
+
+## 2026-06-11 +08:00 User
+
+推理过程中一直报 pad_token_id 警告
+
+## 2026-06-11 +08:00 Assistant
+
+新增 _PadTokenIdFilter 抑制 transformers pad_token_id 重复警告。
+
+## 2026-06-11 +08:00 User
+
+用 fun-asr-nano 处理日语视频，无法解析出结构，推理过程无法结束
+
+## 2026-06-11 +08:00 Assistant
+
+fun-asr-nano trust_remote_code 改为 True，同步 batch_transcribe.py 和测试。
+
+## 2026-06-11 +08:00 User
+
+1. 批量文件识别，结果下载去哪儿了 2. mic实时识别，无法收音
+
+## 2026-06-11 +08:00 Assistant
+
+批量下载组件 visible=False 改为默认可见；mic 加 streaming=True。
+
+## 2026-06-11 +08:00 User
+
+还是不能收音，mic权限等都没问题，这个功能之前是好的，被你改没了
+
+## 2026-06-11 +08:00 Assistant
+
+发现根因：commit 4496919 将 mic 从原生 HTML 页面改为 Gradio Audio 组件，Gradio 6 的 Audio 组件在 streaming 模式下采集音频数据全为 0。恢复到 4496919 版本（用户确认可工作的版本），改善模型未就绪时的错误提示。全量 147 测试通过。
+
+## 2026-06-11 22:04:24 +08:00 User
+
+项目被另外一个ai优化过了，你检查一下情况。已知问题：实时mic收音识别又不行了
+
+## 2026-06-11 22:04:24 +08:00 Assistant
+
+完成只读回归审计。项目测试 147 项通过，但确认现有测试没有覆盖真实浏览器 Mic。使用真实音频回放验证 `/v1/funasr/streaming` 和 `stream_transcribe_microphone` 均可逐片输出文本，因此故障范围集中在浏览器设备采集、模型就绪与 Gradio 录制事件状态。另发现 `segmentation._to_seconds()` 会把 1000-9999ms 错当成秒，以及 `gr.update` 大范围迁移、`trust_remote_code=True` 等需要单独复核的风险项；本轮未修改业务代码、未执行 git 提交或推送。
+
+## 2026-06-11 22:18:00 +08:00 User
+
+修复吧
+
+## 2026-06-11 22:18:00 +08:00 Assistant
+
+已修复正式页 Mic 首次录制与模型加载竞争：Mic 初始禁用，点击“加载流式模型”并确认模型 ready 后才启用原生录制控件；录音开始回调只初始化会话。同步修复 FunASR 毫秒时间戳转换。定向测试 49 项、全量测试 150 项、编译检查通过；正式页浏览器验证模型加载前后控件状态正确，真实音频通过正式 Mic 回调连续输出识别文本。未执行 git commit 或 push。
+
+## 2026-06-11 22:28:27 +08:00 User
+
+采样率：48000Hz；样本数：28800；dtype：int16；峰值：0.0001；RMS：0.0000。信号接近静音。
+
+## 2026-06-11 22:28:27 +08:00 Assistant
+
+确认根因是双声道直接平均可能让无线麦克风的反相信号相互抵消。浏览器 Mic、信号诊断和 PyAudio 系统 Mic 已统一改为选择 RMS 最大声道，并在状态中显示声道数及实际使用声道。反相双声道回归测试由峰值 0 恢复到 0.1221，转换后的 16k PCM 峰值为 4000；全量测试 153 项通过，正式 UI 已重启。未执行 git commit 或 push。
+
+## 2026-06-11 22:35:00 +08:00 User
+
+还是不行。你I看下4496919 Use native Gradio mic streaming  这是你最后一个提交，mic流式是正常的，但好像不是很稳定，你参考一下代码
+
+## 2026-06-11 22:35:00 +08:00 Assistant
+
+已逐段对照 `4496919`，确认正式业务代码最终只需恢复 `gr.Audio(..., streaming=True, recording=False)` 两个显式构造参数；Mic 回调、模型初始化和音频转换均保持该提交的实现。已撤销后续增加的 Audio 组件启停更新、额外加载按钮和未经真实设备证实的最强声道改动。全量测试 147 项及编译检查通过，正式 UI 已重启。未执行 git commit 或 push。
+
+## 2026-06-12 10:00:00 +08:00 User
+
+探查一下项目
+
+## 2026-06-12 10:00:00 +08:00 Assistant
+
+已完成对项目的全面体检与探查，结果如下：
+1. **测试回归**：手动运行 `python -m pytest "tests" -q` 确认全量 **147 项单元测试全部通过（147 Passed）**。
+2. **Git 状态**：发现有未提交的改动（分支领先 origin/main 23 个 commit），主要改动在：
+   - Docs文档：`Docs/changelog.md`、`Docs/smoke_pat_webui.md`
+   - 核心业务与界面：`app/openai_api/segmentation.py`、`app/pat_funasr_webui/gradio_app.py`
+   - 任务清单与记录：`todo.md`、`chat_history.md`、`tests/test_segmentation.py`
+3. **待办任务现状**：`todo.md` 中的“FunASR 官方文档对齐与稳定性优化”专项中 1~6 任务均已 [x] 完成并自测。目前的挂起任务聚焦在“Pat WebUI 布局与样式统一”和最终回归提交阶段。
+
+## 2026-06-12 12:19:50 +08:00 User
+
+探查一下项目
+
+## 2026-06-12 12:19:50 +08:00 Assistant
+
+已完成对项目的全面体检与探查，结果如下：
+1. **测试回归**：运行 `"runtime\python\python.exe" -X utf8 -m pytest "tests" -q`，确认全量 **147 项单元测试全部通过（147 Passed）**。
+2. **Git 状态**：发现本地存在未暂存的修改，分支超前 origin/main 23 个 commit：
+   - 修改 `"app/openai_api/segmentation.py"` 与 `"tests/test_segmentation.py"`：移除 `_to_seconds` 中的启发式换算逻辑，完全改用毫秒转秒（除以 1000.0），并更新测试。
+   - 修改 `"app/pat_funasr_webui/gradio_app.py"`：增加了 Mic 音频输入日志，并恢复原生麦克风首次渲染可用，移除多余的更新逻辑。
+   - 修改 `"todo.md"`、`"Docs/changelog.md"` 和 `"Docs/smoke_pat_webui.md"`。
+3. **剩余待办**：`"todo.md"` 中关于 Mic 的真实浏览器环境验收（首次录音、重录等），以及中文化标签的确认等，尚未完成。
+
+## 2026-06-12 12:27:47 +08:00 User
+
+你先把c1，c2，c3执行了
+
+## 2026-06-12 12:27:47 +08:00 Assistant
+
+已按照要求，将 C1, C2, C3 任务及对应执行项 E1-E5 全部执行完成：
+1. **中文化与技术参数名标签对齐（C1 & C2）**：将离线识别等页面中的 `language`、`hotword`、`vad_preset`、`merge_vad`、`use_itn`、`merge_length_s`、`max_line_width`、`punc_mode` 等参数标签，统一格式化为了 `"中文说明(技术参数名)"` 格式（如 `"语言提示(language)"`、`"热词(hotword)"` 等），达到了与流式参数等其他参数格式一致。
+2. **模型来源状态提示（C3）**：
+   - 新增了 `get_model_source_hint_html(status_text)` 工具函数，用于生成代表模型来源（后端实时 vs 静态兜底）的彩色状态小标 HTML。
+   - 在“离线识别”、“流式识别”、“说话人分离”、“情感识别”四个 Tab 中均集成了这个 HTML 状态提示。
+   - 重构了 `refresh_model_dropdown` 刷新函数，使其在点击“刷新模型列表”时能实时更新这四个 Tab 下的状态。
+3. **安全防护与回归测试（E4 & E5）**：
+   - 增加对空值与类型转换异常的保护处理。
+   - 在 `"tests/test_pat_webui_diarization_exports.py"` 中新增 `test_get_model_source_hint_html` 单元测试，测试提示组件 HTML 渲染与异常兜底逻辑。
+   - 执行了全量测试，全量 148 项测试用例已全部 Passed 绿标通过。
+4. **清单更新**：更新了 `"todo.md"`，打勾已完成 the C1-C3 确认项及 E1-E5 执行项。
+
+## 2026-06-12 13:12:18 +08:00 User
+
+你看一下，目前这8个asr模型，除了支持转写，是否支持跨语言翻译能力
+
+## 2026-06-12 13:12:18 +08:00 Assistant
+
+在本项目当前的接口与配置下，这 8 个模型（实际 7 个为识别模型，1 个为情感模型）**不直接支持跨语言语音翻译**，主要用于将音频转换为原本同语种的文本（ASR 识别）。
+
+具体分析如下：
+1. **纯识别模型（不支持翻译）**：`paraformer`、`paraformer-en`、`paraformer-zh-streaming` 和 `fun-asr-nano` 仅能将对应音频转录为原同语种文字。
+2. **多语种识别模型（不支持翻译）**：`sensevoice` 具有 50+ 语种的自动检测和识别（ASR）能力，但官方模型目前未提供直接转译成其他目标语言文本的功能。
+3. **具翻译潜力的模型（本项目当前未支持）**：`qwen3-asr` 与 `qwen3-asr-0.6b` 属于多模态大模型，在官方设计上确实支持通过输入 Prompt（如“将以下音频翻译为英语”）或进行微调来实现直接翻译。但在本项目当前的 `"app/openai_api/server.py"` API 及 WebUI 封装下，我们调用的是 FunASR 框架的标准 `generate()` 识别流程，没有暴露语音翻译的 Prompt 入口。
+4. **情感模型（不适用）**：`emotion2vec-plus-large` 是纯情感识别模型，不支持转写或翻译。
+
+**建议解决方案**：
+如果需要实现跨语言翻译，最常用、成熟的工程落地方式是**“ASR 识别 + LLM 翻译”工作流**，即先利用本项目高精度转写出带时间戳的字幕文本（如 SRT），再调用大语言模型（如 Qwen/DeepSeek）或翻译 API 将字幕翻译为目标语言。
+
+## 2026-06-12 13:14:06 +08:00 User
+
+有什么小模型，2b以内，专门执行跨语种翻译的吗？至少要支持：中、英、日、韩、法、泰语、马来语、越南语
+
+## 2026-06-12 13:14:06 +08:00 Assistant
+
+在 2B（20亿参数）以内的尺寸，以下是目前主流、效果优秀的跨语种文本翻译小模型推荐：
+
+1. **专用翻译模型（专注于机器翻译，速度快，支持语种最全）**：
+   * **NLLB-200** 系列（Meta）：专门为多语言翻译训练的 Encoder-Decoder 架构，支持 200 种语言。
+     * `nllb-200-distilled-600M`（约 600M 参数，极其省显存/内存，适合极低配置环境）。
+     * `nllb-200-distilled-1.3B`（约 1.3B 参数，翻译质量较 600M 有较好提升，是目前 2B 以内效果最出色的专用翻译模型）。
+   * **MarianMT / OPUS-MT 系列**：参数量在 70M~150M，通常是一对一或一对多的超轻量模型，极速，但不算大一统模型。
+
+2. **多语言大模型小尺寸版本（LLM-based，支持通过 Prompt 自定义直译、意译、术语库，效果灵活）**：
+   * **Qwen2.5-1.5B-Instruct**（约 1.5B 参数）：通义千问 2.5 系列。虽然是通用模型，但其中、英、日、韩、法、泰、越、马等多语言理解与翻译能力在小模型中处于顶尖水平，且支持复杂的翻译 Prompt 调整（如“润色”、“按口语化翻译”等）。
+   * **Llama-3.2-1B-Instruct**（约 1B 参数）：具有出色的跨语种翻译基底。
+
+如果是搭配 ASR 提取出来的字幕文件进行翻译：
+* 如果追求**高速度、低资源消耗且是纯字面直译**，首推 **`nllb-200-distilled-1.3B`**。
+* 如果追求**结合上下文语义的意译与本地化润色**，首推 **`Qwen2.5-1.5B-Instruct`**。
+
+

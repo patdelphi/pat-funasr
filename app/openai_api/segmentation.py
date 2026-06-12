@@ -59,11 +59,7 @@ def _split_text(text: str) -> List[str]:
 
 
 def _to_seconds(value: Any) -> Optional[float]:
-    """把毫秒或秒级时间戳安全转换为秒。
-
-    启发式：整数值 >= 10000 视为毫秒（对应 >= 10s 音频），其余视为秒。
-    原 >= 1000 阈值会导致 1000~9999 秒的音频时间戳被错误除以 1000。
-    """
+    """把 FunASR 返回的毫秒时间戳安全转换为秒。"""
     if value is None:
         return None
     try:
@@ -72,9 +68,7 @@ def _to_seconds(value: Any) -> Optional[float]:
         return None
     if numeric < 0:
         return None
-    if numeric >= 10000 and numeric == int(numeric):
-        return numeric / 1000.0
-    return numeric
+    return numeric / 1000.0
 
 
 def _extract_seconds_from_timestamp_items(items: Any) -> tuple[Optional[float], Optional[float]]:

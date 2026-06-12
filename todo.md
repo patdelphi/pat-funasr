@@ -164,24 +164,24 @@ Pat WebUI 开发 Todo
 
 ### 待你一次性确认
 
-- [ ] C1. 是否继续把运行时控制区参数标签中文化
-- [ ] 拟改为：`"device"` → `"运行设备"`、`"hub"` → `"模型来源"`、`"disable_update"` → `"禁用更新检查"`、`"ncpu"` → `"CPU 线程数"`、`"log_level"` → `"日志级别"`、`"disable_pbar"` → `"禁用进度条"`
+- [x] C1. 是否继续把运行时控制区参数标签中文化
+- [x] 拟改为：`"device"` → `"运行设备"`、`"hub"` → `"模型来源"`、`"disable_update"` → `"禁用更新检查"`、`"ncpu"` → `"CPU 线程数"`、`"log_level"` → `"日志级别"`、`"disable_pbar"` → `"禁用进度条"`
 
-- [ ] C2. 是否继续把功能参数改成“中文说明 + 技术参数名”
-- [ ] 拟改为：`"chunk_size"` → `"分块大小(chunk_size)"`、`"encoder_chunk_look_back"` → `"编码器回看帧数(encoder_chunk_look_back)"`、`"decoder_chunk_look_back"` → `"解码器回看帧数(decoder_chunk_look_back)"`
-- [ ] 拟改为：`"spk_model"` → `"说话人模型(spk_model)"`、`"spk_mode"` → `"说话人模式(spk_mode)"`、`"preset_spk_num"` → `"预设说话人数(preset_spk_num)"`、`"granularity"` → `"情感粒度(granularity)"`
+- [x] C2. 是否继续把功能参数改成“中文说明 + 技术参数名”
+- [x] 拟改为：`"chunk_size"` → `"分块大小(chunk_size)"`、`"encoder_chunk_look_back"` → `"编码器回看帧数(encoder_chunk_look_back)"`、`"decoder_chunk_look_back"` → `"解码器回看帧数(decoder_chunk_look_back)"`
+- [x] 拟改为：`"spk_model"` → `"说话人模型(spk_model)"`、`"spk_mode"` → `"说话人模式(spk_mode)"`、`"preset_spk_num"` → `"预设说话人数(preset_spk_num)"`、`"granularity"` → `"情感粒度(granularity)"`
 
-- [ ] C3. 是否增加“模型来源状态提示”
-- [ ] 当 `/v1/models` 可用时显示“当前为后端实时模型列表”
-- [ ] 当 `/v1/models` 不可用时显示“当前为静态兜底模型列表”
+- [x] C3. 是否增加“模型来源状态提示”
+- [x] 当 `/v1/models` 可用时显示“当前为后端实时模型列表”
+- [x] 当 `/v1/models` 不可用时显示“当前为静态兜底模型列表”
 
 ### 你确认后立即执行
 
-- [ ] E1. 统一运行时控制区标签
-- [ ] E2. 统一流式识别 / 说话人分离 / 情感识别 参数标签格式
-- [ ] E3. 增加模型列表来源状态提示
-- [ ] E4. 同步更新 `"tests/test_pat_webui_diarization_exports.py"`、`"tests/test_pat_webui_utils.py"`
-- [ ] E5. 运行回归：`python -m pytest "tests/test_pat_webui_utils.py" "tests/test_pat_webui_diarization_exports.py" -q`
+- [x] E1. 统一运行时控制区标签
+- [x] E2. 统一流式识别 / 说话人分离 / 情感识别 参数标签格式
+- [x] E3. 增加模型列表来源状态提示
+- [x] E4. 同步更新 `"tests/test_pat_webui_diarization_exports.py"`、`"tests/test_pat_webui_utils.py"`
+- [x] E5. 运行回归：`python -m pytest "tests/test_pat_webui_utils.py" "tests/test_pat_webui_diarization_exports.py" -q`
 
 ### 执行顺序
 
@@ -458,3 +458,40 @@ Pat WebUI 开发 Todo
 
 - [x] `python -m pytest "tests\test_pat_webui_diarization_exports.py" -q`
 - [x] 浏览器打开 `http://127.0.0.1:7861/`，进入“流式识别”，确认 Mic 区为 Gradio 原生控件，且无 `patFormalMicDeviceSelect` / `patchedFormalGetUserMedia` / `/mic-stream`
+
+## 2026-06-11 回归审计：实时 Mic 与时间戳
+
+### 已确认
+
+- [x] 当前分支相对 `origin/main` 超前 20 个提交；存在 3 个未跟踪项，审计期间不修改
+- [x] 项目测试 `runtime\python\python.exe -X utf8 -m pytest "tests" -q`：147 passed
+- [x] 使用真实音频按 Mic PCM 分片调用 `/v1/funasr/streaming`，后端逐片返回识别文本
+- [x] 直接调用 `stream_transcribe_microphone`，信号、状态与累计识别文本均正常
+- [x] 当前运行时 Gradio Mic 配置包含 `sources=["microphone"]`、`type="numpy"`、`streaming=true`
+- [x] 自动化浏览器环境没有可用麦克风设备，无法代替真实设备完成端到端录音验收
+
+### 发现的问题
+
+- [x] P0：`segmentation._to_seconds()` 把 1000-9999ms 当成秒，已通过失败测试复现并恢复 FunASR 毫秒转换
+- [x] P1：对照 `4496919` 恢复首次渲染即启用的 Gradio 原生 Mic，移除运行时 `interactive` 更新与 Audio 组件重建
+- [x] P1：恢复 `start_recording` 中的模型 ready 检查与会话初始化
+- [ ] P1：现有测试只覆盖 Python 回调和静态配置，未覆盖浏览器设备枚举、首次录制、停止后再次录制
+- [ ] P2：多处 `gr.update(...)` 被替换为新组件实例，改动面较大，需要按实际交互逐项回归，避免组件状态被重建
+- [ ] P2：`trust_remote_code=True` 的适用模型和安全边界需要重新核对
+- [ ] P3：裸跑 `pytest -q` 会收集便携 Python 的第三方包测试，建议增加项目级 `pytest.ini` 限定 `testpaths=tests`
+
+### 建议执行顺序
+
+- [x] 先为时间戳回归和 Mic 模型就绪状态补失败测试
+- [x] 恢复 `4496919` 的 Mic 录制事件与模型初始化顺序
+- [x] 以已验证可用的 `aipython/gradio_streaming_asr_test.py` 为基线，保持正式页全 Gradio 原生组件
+- [ ] 补首次录制、停止后重录、有效信号、累计文本的浏览器验收记录
+- [ ] 再审查 `gr.update` 迁移与 `trust_remote_code`，避免与 Mic 修复混在同一改动中
+
+### 完成标准
+
+- [x] 运行时配置与 `4496919` 对齐：Mic 初始可交互，且没有回调更新 Audio 组件
+- [ ] 首次点击录制即可收到有效信号并持续显示识别结果
+- [ ] 停止后再次录制可正常创建新会话并识别
+- [x] 1500ms 正确转换为 1.5s，相关测试通过
+- [x] 全量测试 147 项、编译检查与正式页运行时配置检查通过
