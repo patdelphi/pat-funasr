@@ -1110,13 +1110,15 @@ def stream_transcribe_microphone(
         status = str(state.get("status") or "模型未就绪")
         if "失败" in status or "error" in status.lower():
             status += "。请检查后端 API 是否运行，或在服务页刷新模型列表。"
-        return format_streaming_preview_text(state.get("full_text", ""), final_flag=False), f"{status} | {signal_status}", state, signal_status
+        yield format_streaming_preview_text(state.get("full_text", ""), final_flag=False), f"{status} | {signal_status}", state, signal_status
+        return
 
     try:
         parse_chunk_size_text(chunk_size)
         chunk_bytes = numpy_audio_to_pcm_bytes(audio)
         if not chunk_bytes:
-            return format_streaming_preview_text(state.get("full_text", ""), final_flag=False), "等待麦克风音频...", state, signal_status
+            yield format_streaming_preview_text(state.get("full_text", ""), final_flag=False), "等待麦克风音频...", state, signal_status
+            return
 
         payload = post_streaming_chunk(
             base_url=base_url,
@@ -1134,14 +1136,17 @@ def stream_transcribe_microphone(
         state["last_chunk_bytes"] = chunk_bytes
         state["full_text"] = str(payload.get("full_text", state.get("full_text", "")) or "")
         preview = format_streaming_preview_text(str(state.get("full_text", "")), final_flag=False)
-        return preview, f"麦克风实时识别中，已发送分片：{state['sent']}", state, signal_status
+        yield preview, f"麦克风实时识别中，已发送分片：{state['sent']}", state, signal_status
+        return
     except urllib.error.HTTPError as error:
         detail = error.read().decode("utf-8", errors="replace")
         preview = format_streaming_preview_text(state.get("full_text", ""), final_flag=False)
-        return preview, f"HTTP {error.code} from {error.url}: {detail}", state, signal_status
+        yield preview, f"HTTP {error.code} from {error.url}: {detail}", state, signal_status
+        return
     except Exception as error:
         preview = format_streaming_preview_text(state.get("full_text", ""), final_flag=False)
-        return preview, f"麦克风流式识别失败：{error}", state, signal_status
+        yield preview, f"麦克风流式识别失败：{error}", state, signal_status
+        return
 
 
 def stop_streaming_status() -> str:
@@ -3450,19 +3455,22 @@ def build_app(default_base_url: str, default_timeout: float):
             ],
             outputs=[stream_transcript, stream_status],
         )
-        def _mic_debug(audio, state):
-            if audio is None:
-                return "未收到音频", state
-            sr, data = audio
-            arr = np.asarray(data)
-            peak = float(np.max(np.abs(arr.astype(np.float32))))
-            rms = float(np.sqrt(np.mean(arr.astype(np.float32) ** 2)))
-            return f"sr={sr} n={arr.shape[0]} peak={peak:.6f} rms={rms:.6f}", state
         stream_mic_event = stream_microphone.stream(
-            fn=_mic_debug,
-            inputs=[stream_microphone, stream_mic_session],
-            outputs=[mic_signal_status, stream_mic_session],
-            stream_every=0.5,
+            fn=stream_transcribe_microphone,
+            inputs=[
+                stream_microphone,
+                stream_mic_session,
+                base_url,
+                stream_model,
+                timeout,
+                stream_chunk_size,
+                stream_encoder_lb,
+                stream_decoder_lb,
+            ],
+            outputs=[mic_transcript, mic_status, stream_mic_session, mic_signal_status],
+            show_progress="hidden",
+            trigger_mode="multiple",
+            stream_every=0.6,
         )
         stream_file_stop_button.click(
             fn=stop_streaming_status,
