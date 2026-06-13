@@ -2162,8 +2162,8 @@ def safe_translate_with_exports(
     auto_zh_punc: bool = False,
 ):
     """执行翻译，处理完毕后返回翻译结果文本以及生成的临时结果文件路径（保存在 gr.State 里）。"""
+    import gradio as gr
     try:
-        import gradio as gr
         from translation_utils import translate_file, translate_text_preserving_paragraphs, convert_to_chinese_punctuation
         
         # 1. 字幕或文本文件翻译
@@ -2221,7 +2221,6 @@ def safe_translate_with_exports(
         raise ValueError("请输入需要翻译的文本内容，或者上传待翻译的文本/字幕文件")
     except Exception as e:
         logger.error(f"翻译执行失败: {e}")
-        import gradio as gr
         return f"翻译失败，错误信息：\n{e}", None, gr.update(value=None, visible=False)
 
 
@@ -2229,12 +2228,14 @@ def safe_export_translation_file(
     translated_text: str | None,
     result_file_path: str | None,
     original_file_path: str | None,
-    source_lang: str = "",
-    target_lang: str = "",
+    source_lang: str = "",
+
+    target_lang: str = "",
+
 ):
     """点击“生成并导出文件”时触发。若有文件翻译路径则直接返回，若是文本框翻译则将最新文本保存为临时文件。"""
+    import gradio as gr
     try:
-        import gradio as gr
         # 1. 针对文件翻译场景，直接返回已处理完毕的翻译文件路径
         if result_file_path and Path(result_file_path).exists():
             return gr.update(value=result_file_path, visible=True)
@@ -2260,7 +2261,6 @@ def safe_export_translation_file(
         raise ValueError("无可导出的翻译结果。请先输入文本或上传文件，并点击“开始翻译”")
     except Exception as e:
         logger.error(f"导出翻译文件失败: {e}")
-        import gradio as gr
         raise gr.Error(f"导出文件失败: {e}")
 
 

@@ -131,9 +131,15 @@ def translate_srt(
         base_url, text_list, source_lang, target_lang, model, timeout, **kwargs
     )
     
+    # 确保返回结果是列表
+    if isinstance(translated_texts, str):
+        translated_texts = [translated_texts]
+    
     # 将翻译回填
     translated_map = {}
     for i, t in enumerate(translated_texts):
+        if i >= len(block_indices):
+            break
         block_idx = block_indices[i][0]
         translated_map[block_idx] = t
         
@@ -178,6 +184,19 @@ def translate_vtt(
     return vtt_header + translated_body
 
 
+def _looks_like_tsv_data(line: str) -> bool:
+    """判断 TSV 首行是否为无表头的数据行（前两列为数字）。"""
+    parts = line.split("\t")
+    if len(parts) < 3:
+        return False
+    try:
+        float(parts[0])
+        float(parts[1])
+        return True
+    except ValueError:
+        return False
+
+
 def translate_tsv(
     base_url: str,
     content: str,
@@ -187,23 +206,28 @@ def translate_tsv(
     timeout: float = 60.0,
     **kwargs
 ) -> str:
-    """翻译 TSV 字幕内容，只翻译 text 列。"""
+    """翻译 TSV 字幕内容，只翻译 text 列。支持有表头和无表头两种格式。"""
     lines = content.strip().splitlines()
     if not lines:
         return content
         
     headers = lines[0].split("\t")
-    if "text" not in headers:
-        # 如果没有 text 列，直接返回原文本
+    if "text" in headers:
+        text_idx = headers.index("text")
+        translated_lines = [lines[0]]
+        data_start = 1
+    elif len(headers) >= 3 and _looks_like_tsv_data(lines[0]):
+        # 无表头的 FunASR TSV：start\tend\ttext
+        text_idx = 2
+        translated_lines = []
+        data_start = 0
+    else:
         return content
-        
-    text_idx = headers.index("text")
-    translated_lines = [lines[0]]
     
     text_list = []
     line_indices = []
     
-    for idx in range(1, len(lines)):
+    for idx in range(data_start, len(lines)):
         parts = lines[idx].split("\t")
         if len(parts) > text_idx:
             val = parts[text_idx]
@@ -219,12 +243,19 @@ def translate_tsv(
         base_url, text_list, source_lang, target_lang, model, timeout, **kwargs
     )
     
+    # 确保返回结果是列表（API 有时可能返回单个字符串）
+    if isinstance(translated_texts, str):
+        translated_texts = [translated_texts]
+    
     translated_map = {}
     for i, t in enumerate(translated_texts):
+        if i >= len(line_indices):
+            break
         line_idx = line_indices[i]
-        translated_map[line_idx] = t
+        # 去除翻译文本中可能夹带的换行符，保持 TSV 单行格式
+        translated_map[line_idx] = t.replace("\r", "").replace("\n", " ").strip()
         
-    for idx in range(1, len(lines)):
+    for idx in range(data_start, len(lines)):
         parts = lines[idx].split("\t")
         if idx in translated_map and len(parts) > text_idx:
             parts[text_idx] = translated_map[idx]
@@ -270,7 +301,13 @@ def translate_json(
         base_url, text_list, source_lang, target_lang, model, timeout, **kwargs
     )
     
+    # 确保返回结果是列表
+    if isinstance(translated_texts, str):
+        translated_texts = [translated_texts]
+    
     for i, t in enumerate(translated_texts):
+        if i >= len(paths):
+            break
         field, idx = paths[i]
         if field == "text":
             data["text"] = t
@@ -442,7 +479,7 @@ def convert_to_chinese_punctuation(text: str) -> str:
                 new_parts.append("”")
     text = "".join(new_parts)
     
-    # 5. 去除全角标点后面紧跟的多余英文空格，优化中文排版
-    text = re.sub(r"([，。？！：；])\s+", r"\1", text)
+    # 5. 去除全角标点后面紧跟的多余英文空格，优化中文排版（保留换行符）
+    text = re.sub(r"([，。？！：；])[ \t]+", r"\1", text)
     
     return text
