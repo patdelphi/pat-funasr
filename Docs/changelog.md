@@ -1,6 +1,12 @@
 #
 变更记录（Changelog）
 
+## 2026-06-13
+
+- 修复跨语言翻译三个 bug：Python 3.13 作用域问题（`import gradio as gr` 移到 `try` 块前）、`translate_tsv` 支持无表头 TSV、`convert_to_chinese_punctuation` 正则不再吃掉换行符
+- `translate_srt`/`translate_tsv`/`translate_json` 增加 API 返回单字符串的兜底处理
+- 新增 `aipython/tsv_to_srt.py` 转换工具
+
 ## 2026-06-08
 
 - 初始化 "Docs/" 目录，补充项目分析文档：requirements/design/api/deployment/optimization-plan/tasks
