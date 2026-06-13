@@ -204,8 +204,9 @@ class Qwen3ASR(nn.Module):
             if r.language:
                 result_dict["language"] = r.language
             if return_time_stamps and r.time_stamps is not None:
+                # qwen_asr 返回秒，转为毫秒以兼容 _to_seconds(/1000)
                 result_dict["timestamp"] = [
-                    [int(ts.start_time), int(ts.end_time)]
+                    [round(ts.start_time * 1000), round(ts.end_time * 1000)]
                     for ts in r.time_stamps.items
                 ]
             output.append(result_dict)
