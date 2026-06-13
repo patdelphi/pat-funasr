@@ -129,6 +129,7 @@ def build_segments_from_text(
     duration_s: float,
     clean_text: Callable[[str], str],
     max_segments: int = 200,
+    start_offset: float = 0.0,
 ) -> List[Dict[str, Any]]:
     t = clean_text(text or "")
     parts = _split_text(t)
@@ -145,8 +146,8 @@ def build_segments_from_text(
     step = dur / float(n)
     segments: List[Dict[str, Any]] = []
     for i, p in enumerate(parts):
-        start = step * i
-        end = dur if i == n - 1 else (step * (i + 1))
+        start = start_offset + step * i
+        end = start_offset + dur if i == n - 1 else (start_offset + step * (i + 1))
         segments.append({"start": round(start, 3), "end": round(end, 3), "text": p, "speaker": None})
     return segments
 
@@ -160,4 +161,16 @@ def build_segments(
     segments = build_segments_from_sentence_info(result0.get("sentence_info"), clean_text=clean_text)
     if segments:
         return segments
+    # qwen3-asr 返回词级 timestamp 而非 sentence_info，用它推算实际语音时长
+    timestamps = result0.get("timestamp")
+    if isinstance(timestamps, list) and len(timestamps) >= 2:
+        first, last = timestamps[0], timestamps[-1]
+        if isinstance(first, (list, tuple)) and len(first) >= 2 and isinstance(last, (list, tuple)) and len(last) >= 2:
+            ts_start = _to_seconds(first[0])
+            ts_end = _to_seconds(last[1])
+            if ts_start is not None and ts_end is not None and ts_end > ts_start:
+                return build_segments_from_text(
+                    result0.get("text", ""), duration_s=ts_end - ts_start, clean_text=clean_text,
+                    start_offset=round(ts_start, 3),
+                )
     return build_segments_from_text(result0.get("text", ""), duration_s=duration_s, clean_text=clean_text)
