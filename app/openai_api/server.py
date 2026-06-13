@@ -1181,6 +1181,8 @@ def build_generate_kwargs(
         generate_kwargs["batch_size_threshold_s"] = int(batch_size_threshold_s)
     if model in {"paraformer", "fun-asr-nano"}:
         generate_kwargs["sentence_timestamp"] = True
+    if model in {"qwen3-asr", "qwen3-asr-0.6b"}:
+        generate_kwargs["output_timestamp"] = True
     return vad_presets.apply_vad_controls(
         generate_kwargs=generate_kwargs,
         vad_preset=vad_preset,
