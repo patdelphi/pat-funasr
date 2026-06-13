@@ -1,8 +1,10 @@
-#
+﻿#
 变更记录（Changelog）
 
 ## 2026-06-13
 
+- 修复 Qwen3-ASR 离线字幕时间轴：保留强制对齐器的结构化字词时间戳，并按模型原生标点聚合真实句级边界
+- 保留原有 `timestamp` 毫秒字段兼容性；结构化字词匹配失败时继续使用原有分段兜底
 - 修复跨语言翻译三个 bug：Python 3.13 作用域问题（`import gradio as gr` 移到 `try` 块前）、`translate_tsv` 支持无表头 TSV、`convert_to_chinese_punctuation` 正则不再吃掉换行符
 - `translate_srt`/`translate_tsv`/`translate_json` 增加 API 返回单字符串的兜底处理
 - 新增 `aipython/tsv_to_srt.py` 转换工具

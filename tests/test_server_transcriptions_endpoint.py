@@ -150,6 +150,40 @@ class TestServerTranscriptionsEndpoint(unittest.TestCase):
 
         self.assertEqual(cfg["hub"], "hf")
 
+    def test_qwen_structured_timestamps_drive_verbose_json_segments(self):
+        class QwenDummyModel:
+            def generate(_self, **kwargs):
+                self._capture_generate_kwargs(kwargs)
+                return [
+                    {
+                        "text": "你好。欢迎！",
+                        "timestamp": [[100, 300], [1200, 1500], [1520, 1800], [1820, 2100]],
+                        "timestamps": [
+                            {"text": "你", "start_time": 0.1, "end_time": 0.3},
+                            {"text": "好", "start_time": 1.2, "end_time": 1.5},
+                            {"text": "欢", "start_time": 1.52, "end_time": 1.8},
+                            {"text": "迎", "start_time": 1.82, "end_time": 2.1},
+                        ],
+                    }
+                ]
+
+        self.server.load_model = lambda _model_name, **_kwargs: QwenDummyModel()
+
+        resp = self.client.post(
+            "/v1/audio/transcriptions",
+            data={"model": "qwen3-asr", "response_format": "verbose_json"},
+            files={"file": ("demo.wav", b"\x00\x00" * 100, "audio/wav")},
+        )
+
+        self.assertEqual(resp.status_code, 200)
+        payload = resp.json()
+        self.assertEqual([seg["text"] for seg in payload["segments"]], ["你好。", "欢迎！"])
+        self.assertEqual(
+            [(seg["start"], seg["end"]) for seg in payload["segments"]],
+            [(0.1, 1.5), (1.52, 2.1)],
+        )
+        self.assertTrue(self._captured_generate_kwargs["output_timestamp"])
+
 
 if __name__ == "__main__":
     unittest.main()

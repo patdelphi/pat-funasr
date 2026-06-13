@@ -145,6 +145,7 @@ class Qwen3ASR(nn.Module):
                 - "text" (str): Recognized text (with punctuation)
                 - "language" (str): Detected language (if available)
                 - "timestamp" (list): [[start_ms, end_ms], ...] (if timestamps enabled)
+                - "timestamps" (list): [{text, start_time, end_time}, ...] in seconds
         """
         meta_data = {}
         time1 = time.perf_counter()
@@ -204,7 +205,15 @@ class Qwen3ASR(nn.Module):
             if r.language:
                 result_dict["language"] = r.language
             if return_time_stamps and r.time_stamps is not None:
-                # qwen_asr 返回秒，转为毫秒以兼容 _to_seconds(/1000)
+                # 同时保留结构化字词，供字幕按真实边界聚合；旧字段继续兼容现有消费者。
+                result_dict["timestamps"] = [
+                    {
+                        "text": str(ts.text),
+                        "start_time": float(ts.start_time),
+                        "end_time": float(ts.end_time),
+                    }
+                    for ts in r.time_stamps.items
+                ]
                 result_dict["timestamp"] = [
                     [round(ts.start_time * 1000), round(ts.end_time * 1000)]
                     for ts in r.time_stamps.items

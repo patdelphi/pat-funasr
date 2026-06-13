@@ -1,4 +1,4 @@
-#
+﻿#
 Pat WebUI 开发 Todo
 
 说明：本文件是当前唯一执行清单，只跟踪下一阶段的 "Pat WebUI" 开发工作；已完成的旧事项仅保留归档摘要，不再作为当前待办继续维护。
@@ -587,3 +587,12 @@ Pat WebUI 开发 Todo
 
 - [x] 合并 mic_status 和 mic_signal_status 为一个组件，2行显示
 - [x] 优化 Gradio 麦克风波形显示幅度（CSS/JS 放大）
+
+## 2026-06-13 Qwen3-ASR 离线字幕时间轴修复
+
+- [x] 核对 Qwen3-ASR 官方强制对齐输出与 FunASR 适配链路
+- [x] 先补适配层结构化时间戳测试并验证失败
+- [x] 先补中英文句级时间轴与异常回退测试并验证失败
+- [x] 在 `"app/funasr/models/qwen3_asr/model.py"` 保留字词文本及秒级时间戳
+- [x] 在 `"app/openai_api/segmentation.py"` 按原生标点与字词顺序生成句级时间轴
+- [x] 运行定向测试、API 回归测试与全量测试（167 项通过）

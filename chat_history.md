@@ -3060,6 +3060,19 @@ if "%DEVICE%"=="" set "DEVICE=cuda"
 - Mic 流式回调已恢复为官方示例采用的同步处理方式，并增加防回归测试。
 - 未执行 Git commit、push 或依赖安装。
 
+## 2026-06-13
+
+### User Question
+
+询问 `app/openai_api` 与 `app/pat_funasr_webui` 两个目录的职责，以及为何需要同时存在。
+
+### Agent Analysis
+
+1. `openai_api` 是 FastAPI 后端服务，负责模型加载、FunASR 推理、会话状态及 OpenAI 兼容 HTTP 接口，默认监听 8000。
+2. `pat_funasr_webui` 是当前正式 Gradio 前端，负责页面交互、文件上传、Mic 采集、结果展示和下载，默认监听 7861，并通过 HTTP 调用后端。
+3. 两目录分离属于前后端架构，使 API 可被 SDK、Dify、n8n 等独立调用，也允许 WebUI 连接远程 API。
+4. `openai_api/gradio_app.py` 是早期简易示例 UI；当前正式 UI 入口是 `pat_funasr_webui/gradio_app.py`。
+
 ## 2026-06-12 20:49:30
 
 ### User Request
@@ -3366,3 +3379,41 @@ damo/ 目录下只有 .mdl 元数据文件，不是完整模型。函数检查�
 ### Current Status
 
 - commit db178e 完成
+
+## 2026-06-13 22:10:00
+
+### User
+
+- 请核对 Qwen3-ASR 离线识别时间轴不准的原因：是否因为 Qwen3-ASR 只返回词级 timestamp、未接 punc_model 和 sentence_info。
+
+### Assistant
+
+- 已核对本地 Qwen3-ASR 官方源码、项目内 FunASR AutoModel、Qwen3-ASR 适配层及服务端分段逻辑。
+- 判断：缺少 sentence_info 属实，但缺少外置 punc_model 不是时间轴不准的直接根因；Qwen3-ASR 原生文本已带标点。
+- 直接根因：适配层丢弃强制对齐结果中的 token 文本，只保留时间区间；服务端随后仅取首尾时间并按句数平均分配，导致字幕时间漂移。
+- 建议：保留官方对齐器的结构化字/词时间戳，在服务层按原生标点聚合为句级时间轴；不优先修改 Qwen3-ASR 上游 inference，也不直接套用 Paraformer 的 timestamp_sentence 路径。
+
+## 2026-06-13 21:37:18
+
+### User
+
+- 确认 `Qwen3-ASR` 目录只用于参考，要求仅修改 `app` 正式代码并一次性完成修复。
+
+### Assistant
+
+- 修改 `app/funasr/models/qwen3_asr/model.py`：保留兼容的毫秒 `timestamp`，新增带字词文本的秒级 `timestamps`。
+- 修改 `app/openai_api/segmentation.py`：严格按原生标点和结构化字词顺序匹配，使用每句首尾字词的真实时间生成句级时间轴；匹配失败继续走原有兜底。
+- 新增中英文、异常回退、适配层字段和 API 端到端回归测试。
+- 未修改临时 `Qwen3-ASR` 目录，未启动服务，未执行 Git commit/push。
+- 全量测试结果：167 passed。
+
+## 2026-06-13 21:42:00
+
+### User
+
+- 提交本次修改。
+
+### Assistant
+
+- 已确认提交范围仅包含 Qwen3-ASR 离线字幕时间轴修复、相关测试及文档记录。
+- 不包含 `Qwen3-ASR` 临时参考目录，不执行 Git push。
