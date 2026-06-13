@@ -64,3 +64,4 @@ trae-debug-log-*.txt
 .idea/
 Thumbs.db
 .DS_Store
+Qwen3-ASR/
