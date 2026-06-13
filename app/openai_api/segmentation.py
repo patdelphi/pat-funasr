@@ -89,58 +89,6 @@ def _extract_seconds_from_timestamp_items(items: Any) -> tuple[Optional[float], 
     return None, None
 
 
-def _build_segments_from_word_timestamps(
-    timestamps: List[Any],
-    full_text: str,
-) -> List[Dict[str, Any]]:
-    """用词级时间戳精确对齐分句。timestamps 为 [[start_ms, end_ms], ...]。"""
-    # 转为秒
-    words: List[Dict[str, Any]] = []
-    for ts in timestamps:
-        if isinstance(ts, (list, tuple)) and len(ts) >= 2:
-            s = _to_seconds(ts[0])
-            e = _to_seconds(ts[1])
-            if s is not None and e is not None:
-                words.append({"start": s, "end": e})
-    if len(words) < 2:
-        return []
-
-    # 按标点切句
-    parts = re.split(r"(?<=[。！？!?；;])\s*", full_text)
-    parts = [p.strip() for p in parts if p and p.strip()]
-    if len(parts) < 2:
-        return []
-
-    # 均匀分配词到各句（按字符数比例）
-    total_chars = sum(len(p) for p in parts)
-    if total_chars <= 0:
-        return []
-
-    segments: List[Dict[str, Any]] = []
-    word_idx = 0
-    for part in parts:
-        ratio = len(part) / total_chars
-        n_words = max(1, round(len(words) * ratio))
-        chunk = words[word_idx:word_idx + n_words]
-        if not chunk:
-            break
-        seg_start = chunk[0]["start"]
-        seg_end = chunk[-1]["end"]
-        segments.append({
-            "start": round(seg_start, 3),
-            "end": round(seg_end, 3),
-            "text": part,
-            "speaker": None,
-        })
-        word_idx += n_words
-
-    # 修正最后一句的结束时间
-    if segments:
-        segments[-1]["end"] = round(words[-1]["end"], 3)
-
-    return segments
-
-
 def build_segments_from_sentence_info(
     sentence_info: Any,
     *,
@@ -213,11 +161,14 @@ def build_segments(
     segments = build_segments_from_sentence_info(result0.get("sentence_info"), clean_text=clean_text)
     if segments:
         return segments
-    # qwen3-asr 返回词级 timestamp 而非 sentence_info，用词级时间戳精确对齐分句
+    # qwen3-asr 返回词级 timestamp 而非 sentence_info，用首尾词推算实际语音范围
     timestamps = result0.get("timestamp")
-    full_text = clean_text(result0.get("text", ""))
-    if isinstance(timestamps, list) and len(timestamps) >= 2 and full_text:
-        segs = _build_segments_from_word_timestamps(timestamps, full_text)
-        if segs:
-            return segs
-    return build_segments_from_text(full_text, duration_s=duration_s, clean_text=clean_text)
+    if isinstance(timestamps, list) and len(timestamps) >= 2:
+        ts_start = _to_seconds(timestamps[0][0])
+        ts_end = _to_seconds(timestamps[-1][1])
+        if ts_start is not None and ts_end is not None and ts_end > ts_start:
+            return build_segments_from_text(
+                result0.get("text", ""), duration_s=ts_end - ts_start, clean_text=clean_text,
+                start_offset=round(ts_start, 3),
+            )
+    return build_segments_from_text(result0.get("text", ""), duration_s=duration_s, clean_text=clean_text)
