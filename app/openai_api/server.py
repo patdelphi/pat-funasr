@@ -141,23 +141,27 @@ MODEL_CONFIGS = {
     "sensevoice": {
         "model": "iic/SenseVoiceSmall",
         "hub": "ms",
+        "trust_remote_code": True,
         "vad_model": "fsmn-vad",
         "vad_kwargs": {"max_single_segment_time": 30000},
     },
     "paraformer": {
         "model": "paraformer-zh",
         "hub": "ms",
+        "trust_remote_code": True,
         "vad_model": "fsmn-vad",
         "punc_model": "ct-punc",
     },
     "paraformer-en": {
         "model": "paraformer-en",
         "hub": "ms",
+        "trust_remote_code": True,
         "vad_model": "fsmn-vad",
     },
     "paraformer-zh-streaming": {
         "model": "paraformer-zh-streaming",
         "hub": "ms",
+        "trust_remote_code": True,
         "punc_model": "ct-punc",
     },
     "fun-asr-nano": {
@@ -188,6 +192,7 @@ MODEL_CONFIGS = {
     "emotion2vec-plus-large": {
         "model": "iic/emotion2vec_plus_large",
         "hub": "ms",
+        "trust_remote_code": True,
     },
     "nllb-200-distilled-600m": {
         "model": "facebook/nllb-200-distilled-600m",

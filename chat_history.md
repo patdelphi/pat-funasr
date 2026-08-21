@@ -3646,3 +3646,36 @@ damo/ 目录下只有 .mdl 元数据文件，不是完整模型。函数检查�
 
 - Docs/design/oddminutes-integration-plan.md: 更新计划，增加 Tab 布局决策和分阶段实施
 - 未修改源代码，未 commit
+
+### User
+
+- 好的，开始执行阶段 1，新建音频工具 Tab
+
+### Assistant
+
+#### 阶段 1 完成：音频工具 Tab
+
+**新增文件:**
+- app/pat_funasr_webui/fine_transcription/__init__.py: 精细转录模块初始化
+- app/pat_funasr_webui/fine_transcription/audio_processor.py: 音频前处理核心模块
+  - get_audio_info(): ffprobe 获取音频信息
+  - process_audio(): ffmpeg 滤镜链 降噪(afftdn)→VAD(silenceremove)→音量归一化(loudnorm)
+  - format_audio_info(): 格式化音频信息为可读字符串
+
+**修改文件:**
+- gradio_app.py: 新增「音频工具」Tab（第8个Tab），含:
+  - 左列: 音频上传 + 前处理参数面板（降噪开关+强度滑块、采样率选择、VAD开关、音量归一化开关）
+  - 右列: 处理前/后音频信息对比 + 处理后音频预览 + WAV 下载
+- Docs/design/oddminutes-integration-plan.md: 更新计划，增加 Tab 布局决策(方案C)和分阶段实施
+- chat_history.md: 追加会话记录
+
+**验证结果:**
+- py_compile audio_processor.py + gradio_app.py: exit=0
+- 全管线测试(降噪15dB+VAD+归一化): 60.0s→56.6s(裁剪3.4s静音) ✓
+- 仅降噪+归一化(无VAD): 时长保持60.0s ✓
+- 仅重采样8000Hz: 16000→8000Hz, 1.83MB→0.92MB ✓
+
+**修复:**
+- silenceremove 滤镜参数: threshold→stop_threshold (ffmpeg 2025-08 版本语法变化)
+
+**git commit:** 96578f3 (5 files, +593 lines), 未 push
