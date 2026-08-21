@@ -22,6 +22,8 @@ except ImportError:
     AutoModelForCausalLM = None
 
 from .ctc import CTC
+from .checkpoint_utils import disable_incomplete_ctc, normalize_checkpoint_state
+from .device_utils import resolve_autocast_device_type
 from .tools.utils import forced_align
 
 dtype_map = {"bf16": torch.bfloat16, "fp16": torch.float16, "fp32": torch.float32}
@@ -32,7 +34,8 @@ class FunASRNano(nn.Module):
     """Fun-ASR-Nano: End-to-End ASR Large Model.
 
     Trained on tens of millions of hours of real speech data.
-    Supports 31 languages including Chinese dialects and regional accents.
+    Language coverage is checkpoint-specific: Nano supports Chinese, English,
+    and Japanese plus Chinese dialects/accents; MLT-Nano supports 31 languages.
 
     Features:
     - Character-level timestamps (via CTC forced alignment)
@@ -126,6 +129,10 @@ class FunASRNano(nn.Module):
         self.llm = model.to(dtype_map[self.llm_dtype])
         llm_dim = model.get_input_embeddings().weight.shape[-1]
 
+        # lora: inject LoRA adapters into the LLM target Linear layers
+        if self.llm is not None and llm_conf.get("use_lora", False):
+            self._apply_lora_to_llm(llm_conf)
+
         # adaptor
         adaptor_class = tables.adaptor_classes.get(audio_adaptor)
         if audio_encoder_output_size > 0:
@@ -144,6 +151,7 @@ class FunASRNano(nn.Module):
 
         # ctc decoder
         self.ctc_decoder = None
+        self._externally_loaded_ctc_keys = set()
         # TODO: fix table name
         ctc_decoder_class = tables.adaptor_classes.get(kwargs.get("ctc_decoder", None))
         if ctc_decoder_class is not None:
@@ -170,8 +178,15 @@ class FunASRNano(nn.Module):
             self.ctc_decoder = ctc_decoder_class(**ctc_decoder_conf)
             init_param_path = ctc_decoder_conf.get("init_param_path", None)
             if init_param_path is not None:
-                src_state = torch.load(init_param_path, map_location="cpu")
+                src_state = normalize_checkpoint_state(
+                    torch.load(init_param_path, map_location="cpu")
+                )
                 flag = self.ctc_decoder.load_state_dict(src_state, strict=False)
+                self._externally_loaded_ctc_keys.update(
+                    f"ctc_decoder.{key}"
+                    for key in self.ctc_decoder.state_dict()
+                    if key in src_state
+                )
                 logging.info(f"Loading ctc_decoder ckpt: {init_param_path}, status: {flag}")
             freeze = ctc_decoder_conf.get("freeze", False)
             if freeze:
@@ -194,6 +209,80 @@ class FunASRNano(nn.Module):
         self.length_normalized_loss = length_normalized_loss
         rank = int(os.environ.get("RANK", 0))
         logging.info(f"rank: {rank}, model is builded.")
+
+    def _apply_lora_to_llm(self, llm_conf: dict):
+        """Replace the LLM target Linear layers with LoRA adapters.
+
+        When ``llm_conf.use_lora`` is true, every ``nn.Linear`` in the LLM whose
+        module name contains one of ``lora_conf.target_modules`` is swapped for a
+        ``lora.Linear`` (base weight shared and frozen, trainable ``lora_A`` /
+        ``lora_B`` added). The base weights stay untouched in the state dict, so a
+        LoRA checkpoint can be loaded back into a model built with the same
+        ``lora_conf``, or folded for deployment (W' = W + alpha/r * B @ A).
+
+        Frozen-base behaviour: the LLM is frozen by ``llm_conf.freeze``; the
+        ``lora_A``/``lora_B`` parameters created here are trainable regardless.
+        With ``lora_only: true`` in the training config, ``mark_only_lora_as_trainable``
+        additionally freezes every non-LoRA parameter (encoder/adaptor/CTC), giving
+        pure-LoRA training. To keep the encoder/adaptor trainable while LoRA-tweaking
+        only the LLM, set ``lora_only: false`` and unfreeze them via their conf.
+        """
+        lora_conf = llm_conf.get("lora_conf", {})
+        lora_r = lora_conf.get("r", 16)
+        lora_alpha = lora_conf.get("lora_alpha", 32)
+        lora_dropout = lora_conf.get("lora_dropout", 0.05)
+        target_modules = lora_conf.get("target_modules", ["q_proj", "v_proj"])
+
+        from funasr.models.lora.layers import Linear as LoRALinear
+
+        lora_applied = 0
+        for name, module in list(self.llm.named_modules()):
+            if not isinstance(module, nn.Linear):
+                continue
+            if not any(target in name.split(".") for target in target_modules):
+                continue
+            parts = name.split(".")
+            parent = self.llm
+            for p in parts[:-1]:
+                parent = getattr(parent, p)
+            new_linear = LoRALinear(
+                in_features=module.in_features,
+                out_features=module.out_features,
+                r=lora_r,
+                lora_alpha=lora_alpha,
+                lora_dropout=lora_dropout,
+                bias=module.bias is not None,
+                # keep the adapter params in the base weight's dtype (e.g. bf16),
+                # so the LoRA path does not depend on autocast to reconcile dtypes
+                dtype=module.weight.dtype,
+            )
+            # share (and keep frozen) the pretrained base weight
+            new_linear.weight = module.weight
+            new_linear.bias = module.bias
+            setattr(parent, parts[-1], new_linear)
+            lora_applied += 1
+
+        if lora_applied > 0:
+            logging.info(
+                "LoRA applied to %d Linear layers in the LLM "
+                "(r=%d, alpha=%d, dropout=%s, targets=%s)",
+                lora_applied,
+                lora_r,
+                lora_alpha,
+                lora_dropout,
+                target_modules,
+            )
+        else:
+            logging.warning(
+                "use_lora=true but no target modules found in the LLM "
+                "(target_modules=%s)",
+                target_modules,
+            )
+
+    def on_pretrained_model_loaded(self, loaded_keys):
+        """Fail closed when a checkpoint configures CTC without trained weights."""
+        loaded_keys = set(loaded_keys).union(getattr(self, "_externally_loaded_ctc_keys", ()))
+        disable_incomplete_ctc(self, loaded_keys, log=logging)
 
     def forward(
         self,
@@ -279,9 +368,9 @@ class FunASRNano(nn.Module):
             stats["batch_size_real_frames"] = speech_lengths.sum().item()
             stats["padding_frames"] = stats["batch_size_x_frames"] - stats["batch_size_real_frames"]
 
-        device_type = next(self.parameters()).device.type
+        autocast_device_type = resolve_autocast_device_type(next(self.parameters()).device)
         with torch.autocast(
-            device_type=device_type if device_type in ["cuda", "xpu", "mps"] else "cpu",
+            device_type=autocast_device_type,
             enabled=True if self.llm_dtype != "fp32" else False,
             dtype=dtype_map[self.llm_dtype],
         ):
@@ -571,11 +660,11 @@ class FunASRNano(nn.Module):
                 encoder_out_lens = kwargs["audio_embedding_lens"]
             else:
                 speech_lengths = batch["speech_lengths"][:, 0]
-                # fp16
-                if kwargs.get("fp16", False):
-                    speech = speech.to(torch.float16)
-                elif kwargs.get("bf16", False):
-                    speech = speech.to(torch.bfloat16)
+                # NOTE: the audio encoder contains fp32-only ops, so casting its
+                # input to fp16/bf16 here raises a dtype mismatch. The encoder
+                # therefore always runs in fp32; low precision (fp16/bf16) is
+                # applied to the LLM decoder only. The audio embeddings are cast
+                # to the LLM dtype automatically when written into inputs_embeds.
                 # audio encoder
                 encoder_out, encoder_out_lens = self.encode(speech, speech_lengths)
 
@@ -718,6 +807,127 @@ class FunASRNano(nn.Module):
             **kwargs,
         )
 
+    def _inference_llm_batch(self, data_in, data_lengths, key, tokenizer, frontend, **kwargs):
+        """Batched LLM decoding for multiple VAD segments at once.
+
+        Builds each segment's inputs_embeds via the single-sample
+        inference_prepare, left-pads them into one batch, and runs a single
+        llm.generate. This greatly improves GPU utilization for the small LLM
+        decoder (the per-segment, batch_size=1 path underuses the GPU).
+        CTC timestamps are not produced in batched mode.
+        """
+        # normalize nested key (e.g. [[k1, k2, ...]]) like the single-sample path
+        if key is not None and len(key) > 0 and isinstance(key[0], (list, tuple)):
+            key = list(key[0])
+        embs = []
+        keys = []
+        for i, d in enumerate(data_in):
+            k_i = [key[i]] if key is not None and i < len(key) else None
+            emb_i, _c, _b, _s, _m = self.inference_prepare(
+                [d], data_lengths, k_i, tokenizer, frontend, **kwargs
+            )
+            embs.append(emb_i)
+            keys.append(key[i] if key is not None and i < len(key) else f"rand_{i}")
+
+        llm_dtype = kwargs.get("llm_dtype", "fp32")
+        if llm_dtype == "fp32":
+            llm_dtype = "fp16" if kwargs.get("fp16", False) else llm_dtype
+            llm_dtype = "bf16" if kwargs.get("bf16", False) else llm_dtype
+        dt = dtype_map[llm_dtype]
+        device = embs[0].device
+        self.llm = self.llm.to(dt)
+
+        B = len(embs)
+        D = embs[0].shape[-1]
+        Tmax = max(e.shape[1] for e in embs)
+        padded = torch.zeros(B, Tmax, D, device=device, dtype=dt)
+        attn = torch.zeros(B, Tmax, dtype=torch.long, device=device)
+        for i, e in enumerate(embs):
+            Ti = e.shape[1]
+            padded[i, Tmax - Ti :, :] = e[0].to(dt)  # left padding
+            attn[i, Tmax - Ti :] = 1
+
+        autocast_device_type = resolve_autocast_device_type(kwargs.get("device", "cuda"))
+        with torch.autocast(
+            device_type=autocast_device_type,
+            enabled=True if llm_dtype != "fp32" else False,
+            dtype=dt,
+        ):
+            # left padding requires explicit position_ids so each segment's real
+            # tokens get positions 0,1,2,... regardless of the padding length.
+            position_ids = attn.long().cumsum(-1) - 1
+            position_ids.masked_fill_(attn == 0, 1)
+            generated_ids = self.llm.generate(
+                inputs_embeds=padded,
+                attention_mask=attn,
+                position_ids=position_ids,
+                max_new_tokens=kwargs.get("max_length", 512),
+                pad_token_id=(
+                    self.llm.config.pad_token_id
+                    if self.llm.config.pad_token_id is not None
+                    else self.llm.config.eos_token_id
+                ),
+                **kwargs.get("llm_kwargs", {}),
+            )
+        texts = tokenizer.batch_decode(
+            generated_ids, skip_special_tokens=kwargs.get("skip_special_tokens", True)
+        )
+        results = []
+        for i, t in enumerate(texts):
+            t = kwargs.get("prev_text", "") + t
+            results.append(
+                {
+                    "key": keys[i],
+                    "text": re.sub(r"\s+", " ", t.replace("/sil", " ")),
+                    "text_tn": re.sub(r"[^\w\s\u3000\u4e00-\u9fff]+", "", t),
+                }
+            )
+        return results, {}
+
+    @staticmethod
+    def _slice_batch_value(value, index):
+        if value is None:
+            return None
+        if isinstance(value, torch.Tensor) and value.ndim > 0 and value.shape[0] > index:
+            return value[index : index + 1]
+        if isinstance(value, list) and len(value) > index:
+            return [value[index]]
+        if isinstance(value, tuple) and len(value) > index:
+            return (value[index],)
+        return value
+
+    @staticmethod
+    def _merge_inference_meta(target, source):
+        for name, value in source.items():
+            if isinstance(value, (int, float)):
+                target[name] = target.get(name, 0.0) + value
+            elif name not in target:
+                target[name] = value
+
+    def _inference_llm_ctc_sequential(
+        self, data_in, data_lengths, key, tokenizer, frontend, **kwargs
+    ):
+        """Run multi-segment input one segment at a time when CTC timestamps are active."""
+        if key is not None and len(key) > 0 and isinstance(key[0], (list, tuple)):
+            key = list(key[0])
+
+        results = []
+        meta_data = {}
+        for i, data_i in enumerate(data_in):
+            key_i = [key[i]] if key is not None and i < len(key) else None
+            data_lengths_i = self._slice_batch_value(data_lengths, i)
+            results_i, meta_i = self.inference_llm(
+                [data_i],
+                data_lengths=data_lengths_i,
+                key=key_i,
+                tokenizer=tokenizer,
+                frontend=frontend,
+                **kwargs,
+            )
+            results.extend(results_i)
+            self._merge_inference_meta(meta_data, meta_i)
+        return results, meta_data
+
     def inference_llm(
         self,
         data_in,
@@ -737,6 +947,17 @@ class FunASRNano(nn.Module):
                 frontend: Audio frontend for feature extraction.
                 **kwargs: Additional keyword arguments.
             """
+        # Only batch when CTC timestamps are not needed; the batched path does not
+        # produce ctc_timestamps, so fall back to the single-sample path when a CTC
+        # decoder is loaded (preserves timestamp behavior).
+        if len(data_in) > 1:
+            if self.ctc_decoder is None:
+                return self._inference_llm_batch(
+                    data_in, data_lengths, key, tokenizer, frontend, **kwargs
+                )
+            return self._inference_llm_ctc_sequential(
+                data_in, data_lengths, key, tokenizer, frontend, **kwargs
+            )
         inputs_embeds, contents, batch, source_ids, meta_data = self.inference_prepare(
             data_in, data_lengths, key, tokenizer, frontend, **kwargs
         )
@@ -768,9 +989,9 @@ class FunASRNano(nn.Module):
             llm_dtype = "fp16" if kwargs.get("fp16", False) else llm_dtype
             llm_dtype = "bf16" if kwargs.get("bf16", False) else llm_dtype
 
-        device_type = torch.device(kwargs.get("device", "cuda")).type
+        autocast_device_type = resolve_autocast_device_type(kwargs.get("device", "cuda"))
         with torch.autocast(
-            device_type=device_type if device_type in ["cuda", "xpu", "mps"] else "cpu",
+            device_type=autocast_device_type,
             enabled=True if llm_dtype != "fp32" else False,
             dtype=dtype_map[llm_dtype],
         ):

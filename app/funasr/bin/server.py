@@ -5,13 +5,24 @@ Usage:
     funasr-server                          # default: sensevoice on cuda:0, port 8000
     funasr-server --device cpu --port 9000
     funasr-server --model paraformer
+    funasr-server --model-path /path/to/local/model
+    funasr-server --model-path username/paraformer --hub hf
+    funasr-server --cors-origin http://localhost:3000
 """
 
 import argparse
 import sys
+from pathlib import Path
 
 
-def main():
+PACKAGE_VERSION = (Path(__file__).resolve().parents[1] / "version.txt").read_text().strip()
+
+
+def server_version_label():
+    return f"FunASR Server v{PACKAGE_VERSION}"
+
+
+def build_parser():
     parser = argparse.ArgumentParser(
         description="FunASR OpenAI-Compatible API Server",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -21,6 +32,9 @@ Examples:
   funasr-server --device cpu             # Start on CPU
   funasr-server --model paraformer       # Use Paraformer model
   funasr-server --port 9000             # Custom port
+  funasr-server --model-path /path/to/local/model  # Use local model
+  funasr-server --model-path username/model --hub hf  # Use HuggingFace model
+  funasr-server --cors-origin http://localhost:3000  # Allow one browser origin
 
 Then use with OpenAI SDK:
   from openai import OpenAI
@@ -32,7 +46,25 @@ Then use with OpenAI SDK:
     parser.add_argument("--port", type=int, default=8000, help="Port (default: 8000)")
     parser.add_argument("--device", default="cuda", help="Device: cuda, cpu, mps (default: cuda)")
     parser.add_argument("--model", default="auto", help="Pre-load model: auto (GPU=fun-asr-nano, CPU=sensevoice), sensevoice, paraformer, fun-asr-nano")
-    args = parser.parse_args()
+    parser.add_argument("--model-path", default=None, help="Local model path or model ID (overrides --model)")
+    parser.add_argument("--hub", default="ms", help="Model hub: ms (ModelScope), hf (HuggingFace) (default: ms)")
+    parser.add_argument(
+        "--spk-model",
+        default="cam++",
+        help="Speaker model loaded on the first spk=true request (default: cam++)",
+    )
+    parser.add_argument(
+        "--cors-origin",
+        action="append",
+        default=None,
+        metavar="ORIGIN",
+        help="Trusted browser origin for CORS; repeat for multiple origins (disabled by default)",
+    )
+    return parser
+
+
+def main():
+    args = build_parser().parse_args()
 
     try:
         import uvicorn
@@ -49,12 +81,22 @@ Then use with OpenAI SDK:
     # Use inline app to avoid path issues
     from funasr.bin._server_app import create_app
 
-    app = create_app(device=args.device, preload_model=args.model)
+    app = create_app(
+        device=args.device,
+        preload_model=args.model,
+        model_path=args.model_path,
+        hub=args.hub,
+        spk_model=args.spk_model,
+        cors_origins=args.cors_origin,
+    )
 
     print(f"╔══════════════════════════════════════════════╗")
-    print(f"║  FunASR Server v1.3.6                        ║")
+    print(f"║  {server_version_label():<44}║")
     print(f"║  Device: {args.device:<8}                          ║")
     print(f"║  Model:  {args.model:<12}                      ║")
+    if args.model_path:
+        print(f"║  Model Path: {args.model_path:<25} ║")
+        print(f"║  Hub:     {args.hub:<8}                          ║")
     print(f"║  URL:    http://{args.host}:{args.port}/v1          ║")
     print(f"║  Docs:   http://{args.host}:{args.port}/docs        ║")
     print(f"╚══════════════════════════════════════════════╝")

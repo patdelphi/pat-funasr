@@ -10,13 +10,15 @@ import re
 import time
 import logging
 import tempfile
-from typing import Optional
+from pathlib import Path
+from typing import Iterable, Optional
 
 import numpy as np
 import soundfile as sf
 
 try:
     from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+    from fastapi.middleware.cors import CORSMiddleware
     from fastapi.responses import JSONResponse
 except ImportError:
     raise ImportError(
@@ -26,15 +28,222 @@ except ImportError:
 logger = logging.getLogger("funasr.server")
 
 
-def create_app(device: str = "cuda", preload_model: str = "auto") -> FastAPI:
+PACKAGE_VERSION = (Path(__file__).resolve().parents[1] / "version.txt").read_text().strip()
+
+
+_LANGUAGE_TAG_RE = re.compile(r"<\|(zh|en|yue|ja|ko)\|>")
+
+
+def extract_language_from_asr_text(text):
+    """Extract a SenseVoice language code before special tokens are removed."""
+    if not isinstance(text, str):
+        return None
+    match = _LANGUAGE_TAG_RE.search(text)
+    return match.group(1) if match else None
+
+
+def resolve_transcription_language(requested_language, result):
+    """Prefer the caller's language hint, then backend detection, else unknown."""
+    if requested_language and requested_language.strip().lower() != "auto":
+        return requested_language
+    detected_language = result.get("language")
+    if isinstance(detected_language, str) and detected_language:
+        return detected_language
+    return "unknown"
+
+
+def _split_text_for_openai_segments(text: str, max_chars: int = 80):
+    """Split unsegmented ASR text into readable OpenAI-compatible cues."""
+    text = text.strip()
+    if not text:
+        return []
+
+    words = text.split()
+    if not words:
+        return [text[i : i + max_chars] for i in range(0, len(text), max_chars)]
+
+    parts = []
+    current = []
+    current_len = 0
+    for word in words:
+        next_len = len(word) if not current else current_len + 1 + len(word)
+        if current and next_len > max_chars:
+            parts.append(" ".join(current))
+            current = []
+            current_len = 0
+
+        current.append(word)
+        current_len = len(word) if current_len == 0 else current_len + 1 + len(word)
+        if word[-1:] in ".!?;:" and current_len >= max_chars // 2:
+            parts.append(" ".join(current))
+            current = []
+            current_len = 0
+
+    if current:
+        parts.append(" ".join(current))
+
+    if any(len(part) > max_chars for part in parts):
+        return [text[i : i + max_chars] for i in range(0, len(text), max_chars)]
+
+    return parts
+
+
+def build_openai_fallback_segments(text: str, duration: float, max_chars: int = 80):
+    """Build coarse timestamped segments when a backend returns text only."""
+    parts = _split_text_for_openai_segments(text, max_chars=max_chars)
+    if not parts:
+        return []
+    if len(parts) == 1 or duration <= 0:
+        return [{"start": 0.0, "end": max(float(duration), 0.0), "text": parts[0]}]
+
+    total_chars = sum(len(part) for part in parts)
+    if total_chars <= 0:
+        return [{"start": 0.0, "end": float(duration), "text": text.strip()}]
+
+    segments = []
+    consumed = 0
+    previous_end = 0.0
+    for i, part in enumerate(parts):
+        consumed += len(part)
+        end = float(duration) if i == len(parts) - 1 else float(duration) * consumed / total_chars
+        end = max(end, previous_end)
+        segments.append({"start": round(previous_end, 3), "end": round(end, 3), "text": part})
+        previous_end = end
+
+    return segments
+
+
+def prepare_audio_for_inference(audio_data, sr, target_sr=16000):
+    """Return mono float32 audio at target_sr for ASR inference."""
+    audio_data = np.asarray(audio_data)
+    if audio_data.ndim > 1:
+        channel_axis = -1 if audio_data.shape[-1] <= audio_data.shape[0] else 0
+        audio_data = audio_data.mean(axis=channel_axis)
+
+    if sr != target_sr:
+        import librosa
+        audio_data = librosa.resample(audio_data, orig_sr=sr, target_sr=target_sr)
+        sr = target_sr
+
+    return audio_data.astype(np.float32), sr
+
+
+def attach_speaker_labels(audio_data, sr, segments, speaker_model, device):
+    """Run speaker diarization once and attach labels to timestamped segments."""
+    if not segments:
+        return segments
+
+    import torch
+    from funasr.models.campplus.cluster_backend import ClusterBackend
+    from funasr.models.campplus.utils import distribute_spk, postprocess, sv_chunk
+
+    audio_data, sr = prepare_audio_for_inference(audio_data, sr)
+    duration = len(audio_data) / sr
+    diarization_inputs = []
+    segment_indexes = []
+    for index, segment in enumerate(segments):
+        start = max(float(segment.get("start", 0.0)), 0.0)
+        end = min(max(float(segment.get("end", start)), start), duration)
+        start_sample = int(start * sr)
+        end_sample = int(end * sr)
+        if end_sample <= start_sample:
+            continue
+        diarization_inputs.append([start, end, audio_data[start_sample:end_sample]])
+        segment_indexes.append(index)
+
+    chunks = sv_chunk(diarization_inputs, fs=sr)
+    if not chunks:
+        return segments
+
+    speaker_results = speaker_model.generate(
+        input=[chunk[2] for chunk in chunks], cache={}, is_final=True
+    )
+    embeddings = torch.cat(
+        [speaker_result["spk_embedding"] for speaker_result in speaker_results], dim=0
+    )
+    labels = ClusterBackend(merge_thr=0.78).to(device)(embeddings.cpu(), oracle_num=None)
+    if not isinstance(labels, np.ndarray):
+        labels = np.asarray(labels)
+    speaker_timeline = postprocess(
+        sorted(chunks, key=lambda chunk: chunk[0]),
+        None,
+        labels,
+        embeddings.detach().cpu().numpy(),
+    )
+    sentences = [
+        {
+            "text": segments[index]["text"],
+            "start": int(float(segments[index]["start"]) * 1000),
+            "end": int(float(segments[index]["end"]) * 1000),
+        }
+        for index in segment_indexes
+    ]
+    distribute_spk(sentences, speaker_timeline)
+    for index, sentence in zip(segment_indexes, sentences):
+        speaker = sentence.get("spk")
+        if speaker is not None:
+            segments[index]["speaker"] = f"SPK{speaker}"
+    return segments
+
+
+def build_openai_verbose_json(result, requested_language=None):
+    """Build OpenAI-compatible verbose JSON while preserving FunASR extensions."""
+    segments = []
+    for index, segment in enumerate(result.get("segments", [])):
+        item = {
+            "id": index,
+            "start": segment["start"],
+            "end": segment["end"],
+            "text": segment["text"],
+            "words": segment.get("words", []),
+        }
+        if segment.get("speaker") is not None:
+            item["speaker"] = segment["speaker"]
+        segments.append(item)
+
+    return {
+        "task": "transcribe",
+        "language": resolve_transcription_language(requested_language, result),
+        "duration": result.get("duration", 0),
+        "text": result["text"],
+        "segments": segments,
+    }
+
+
+def create_app(
+    device: str = "cuda",
+    preload_model: str = "auto",
+    model_path: str = None,
+    hub: str = "ms",
+    spk_model: str = "cam++",
+    cors_origins: Optional[Iterable[str]] = None,
+) -> FastAPI:
     if preload_model == "auto":
         preload_model = "fun-asr-nano" if device.startswith("cuda") else "sensevoice"
 
-    app = FastAPI(title="FunASR Server", version="1.3.6")
+    app = FastAPI(title="FunASR Server", version=PACKAGE_VERSION)
     app.state.device = device
     app.state.engine = None
     app.state.vad_model = None
+    app.state.spk_model = None
+    app.state.spk_model_name = spk_model
     app.state.fallback_models = {}
+    app.state.model_path = model_path
+    app.state.hub = hub
+
+    normalized_origins = []
+    for origin in cors_origins or []:
+        origin = origin.strip()
+        if origin and origin not in normalized_origins:
+            normalized_origins.append(origin)
+    if normalized_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=normalized_origins,
+            allow_credentials=False,
+            allow_methods=["GET", "POST", "OPTIONS"],
+            allow_headers=["Authorization", "Content-Type"],
+        )
 
     # Non-LLM model configs (use AutoModel, no vLLM)
     FALLBACK_CONFIGS = {
@@ -50,9 +259,27 @@ def create_app(device: str = "cuda", preload_model: str = "auto") -> FastAPI:
         },
     }
 
+    def _load_spk_model():
+        """Lazily load diarization only when a request opts in with spk=true."""
+        if app.state.spk_model is not None:
+            return app.state.spk_model
+        if not app.state.spk_model_name:
+            raise HTTPException(400, "Speaker diarization is disabled; configure --spk-model")
+
+        from funasr import AutoModel
+
+        logger.info(f"Loading speaker model: {app.state.spk_model_name}")
+        app.state.spk_model = AutoModel(
+            model=app.state.spk_model_name,
+            device=device,
+            disable_update=True,
+        )
+        logger.info("Speaker model ready.")
+        return app.state.spk_model
+
     def _load_vllm_engine():
         """Load Fun-ASR-Nano vLLM engine. Falls back to AutoModel if vLLM unavailable."""
-        if app.state.engine is not None:
+        if app.state.engine is not None or "fun-asr-nano" in app.state.fallback_models:
             return
         try:
             from funasr.models.fun_asr_nano.inference_vllm import FunASRNanoVLLM
@@ -60,27 +287,33 @@ def create_app(device: str = "cuda", preload_model: str = "auto") -> FastAPI:
 
             logger.info("Loading Fun-ASR-Nano vLLM engine...")
             t0 = time.time()
-            app.state.engine = FunASRNanoVLLM.from_pretrained(
-                model="FunAudioLLM/Fun-ASR-Nano-2512",
-                hub="hf",
+            # Use custom model_path if provided, otherwise default. In both
+            # cases, honor the server-level hub selection.
+            vllm_model = app.state.model_path if app.state.model_path else "FunAudioLLM/Fun-ASR-Nano-2512"
+            vllm_hub = app.state.hub
+            engine = FunASRNanoVLLM.from_pretrained(
+                model=vllm_model,
+                hub=vllm_hub,
                 device=device,
                 dtype="bf16",
                 max_model_len=4096,
                 gpu_memory_utilization=0.5,
             )
             logger.info(f"vLLM engine ready in {time.time()-t0:.1f}s")
-            app.state.use_vllm = True
 
             logger.info("Loading VAD model...")
-            app.state.vad_model = _AutoModel(model="fsmn-vad", device=device, disable_update=True)
+            vad_model = _AutoModel(model="fsmn-vad", device=device, disable_update=True)
+            app.state.engine = engine
+            app.state.vad_model = vad_model
+            app.state.use_vllm = True
             logger.info("VAD ready.")
         except Exception as e:
             logger.warning(f"vLLM failed ({e}), falling back to AutoModel for fun-asr-nano")
             app.state.use_vllm = False
             from funasr import AutoModel
             cfg = {
-                "model": "FunAudioLLM/Fun-ASR-Nano-2512",
-                "hub": "hf",
+                "model": app.state.model_path if app.state.model_path else "FunAudioLLM/Fun-ASR-Nano-2512",
+                "hub": app.state.hub,
                 "trust_remote_code": True,
                 "vad_model": "fsmn-vad",
                 "vad_kwargs": {"max_single_segment_time": 30000},
@@ -88,32 +321,32 @@ def create_app(device: str = "cuda", preload_model: str = "auto") -> FastAPI:
                 "disable_update": True,
             }
             app.state.fallback_models["fun-asr-nano"] = AutoModel(**cfg)
-            logger.info("Fallback AutoModel loaded for fun-asr-nano.")
+            logger.info(f"Fallback AutoModel loaded for fun-asr-nano with model={cfg['model']}, hub={cfg['hub']}.")
 
     def _load_fallback(name: str):
         """Load non-LLM model via AutoModel."""
         if name in app.state.fallback_models:
             return app.state.fallback_models[name]
-        if name not in FALLBACK_CONFIGS:
+        if name not in FALLBACK_CONFIGS and not app.state.model_path:
             return None
         from funasr import AutoModel
-        cfg = FALLBACK_CONFIGS[name].copy()
+        cfg = FALLBACK_CONFIGS.get(name, {}).copy()
+        # Override with custom model_path and hub if provided
+        if app.state.model_path:
+            cfg["model"] = app.state.model_path
+            cfg["hub"] = app.state.hub
+        elif app.state.hub:
+            cfg["hub"] = app.state.hub
         cfg["device"] = device
         cfg["disable_update"] = True
-        logger.info(f"Loading fallback model '{name}'...")
+        logger.info(f"Loading fallback model '{name}' with model={cfg['model']}, hub={cfg['hub']}...")
         model = AutoModel(**cfg)
         app.state.fallback_models[name] = model
         return model
 
     def _process_vllm(audio_data, sr, language=None, hotwords=None, use_spk=False):
         """Process audio with vLLM engine (Fun-ASR-Nano)."""
-        if sr != 16000:
-            import librosa
-            audio_data = librosa.resample(audio_data, orig_sr=sr, target_sr=16000)
-            sr = 16000
-        if audio_data.ndim > 1:
-            audio_data = audio_data[:, 0]
-        audio_data = audio_data.astype(np.float32)
+        audio_data, sr = prepare_audio_for_inference(audio_data, sr)
 
         # VAD
         vad_res = app.state.vad_model.generate(input=audio_data, fs=sr)
@@ -132,8 +365,10 @@ def create_app(device: str = "cuda", preload_model: str = "auto") -> FastAPI:
         if not seg_audios:
             return {"text": "", "segments": [], "duration": len(audio_data)/sr}
 
-        # vLLM generate with repetition_penalty
-        gen_kwargs = {"max_new_tokens": 500, "repetition_penalty": 1.3}
+        # repetition_penalty is left at the neutral 1.0: the Fun-ASR-Nano vLLM
+        # engine runs in prompt-embeds mode, where any other value crashes the
+        # CUDA kernel (see issue #2948 and fun_asr_nano.vllm_utils).
+        gen_kwargs = {"max_new_tokens": 500, "repetition_penalty": 1.0}
         if language:
             gen_kwargs["language"] = language
         if hotwords:
@@ -155,33 +390,72 @@ def create_app(device: str = "cuda", preload_model: str = "auto") -> FastAPI:
             output_segments.append(seg_info)
             full_text_parts.append(text)
 
+        if use_spk:
+            attach_speaker_labels(
+                audio_data,
+                sr,
+                output_segments,
+                _load_spk_model(),
+                device,
+            )
+
         return {
             "text": "".join(full_text_parts),
             "segments": output_segments,
             "duration": len(audio_data) / sr,
         }
 
-    def _process_fallback(model_name, audio_path, language=None):
+    def _process_fallback(model_name, audio_path, language=None, use_spk=False):
         """Process with non-LLM model (SenseVoice/Paraformer)."""
         model = _load_fallback(model_name)
+        try:
+            duration = float(sf.info(audio_path).duration)
+        except Exception:
+            duration = 0.0
         kwargs = {"input": audio_path, "batch_size": 1}
         if language:
             kwargs["language"] = language
         result = model.generate(**kwargs)
-        text = re.sub(r'<\|[^|]*\|>', '', result[0]["text"]).strip()
+        raw_text = result[0]["text"]
+        detected_language = extract_language_from_asr_text(raw_text)
+        text = re.sub(r'<\|[^|]*\|>', '', raw_text).strip()
         segments = []
         if "sentence_info" in result[0]:
             for s in result[0]["sentence_info"]:
-                segments.append({
+                segment = {
                     "start": s.get("start", 0)/1000,
                     "end": s.get("end", 0)/1000,
-                    "text": re.sub(r'<\|[^|]*\|>', '', s.get("text", "")).strip(),
-                    "speaker": s.get("spk"),
-                })
-        return {"text": text, "segments": segments}
+                    "text": re.sub(
+                        r'<\|[^|]*\|>', '', s.get("text") or s.get("sentence", "")
+                    ).strip(),
+                }
+                if s.get("spk") is not None:
+                    segment["speaker"] = s["spk"]
+                segments.append(segment)
+        if not segments and text:
+            segments = build_openai_fallback_segments(text, duration)
+        if use_spk and segments:
+            audio_data, sr = sf.read(audio_path)
+            attach_speaker_labels(
+                audio_data,
+                sr,
+                segments,
+                _load_spk_model(),
+                device,
+            )
+        return {
+            "text": text,
+            "segments": segments,
+            "duration": duration,
+            "language": detected_language,
+        }
 
     # Pre-load
-    if preload_model == "fun-asr-nano":
+    if app.state.model_path:
+        # When custom model_path is provided, use it as the model name for loading
+        logger.info(f"Loading custom model: {app.state.model_path} (hub: {app.state.hub})")
+        _load_fallback("custom")
+    elif preload_model == "fun-asr-nano":
         _load_vllm_engine()
     else:
         _load_fallback(preload_model)
@@ -208,34 +482,30 @@ def create_app(device: str = "cuda", preload_model: str = "auto") -> FastAPI:
                     tmp.write(content)
                     tmp_path = tmp.name
                 try:
-                    result = _process_fallback("fun-asr-nano", tmp_path, language=language)
+                    result = _process_fallback(
+                        "fun-asr-nano", tmp_path, language=language, use_spk=spk
+                    )
                 finally:
                     os.unlink(tmp_path)
-        elif model in FALLBACK_CONFIGS:
+        elif model in FALLBACK_CONFIGS or model == "custom":
             suffix = os.path.splitext(file.filename)[1] if file.filename else ".wav"
             with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
                 tmp.write(content)
                 tmp_path = tmp.name
             try:
-                result = _process_fallback(model, tmp_path, language=language)
+                result = _process_fallback(
+                    model, tmp_path, language=language, use_spk=spk
+                )
             finally:
                 os.unlink(tmp_path)
         else:
-            raise HTTPException(400, f"Unknown model '{model}'. Available: fun-asr-nano, {', '.join(FALLBACK_CONFIGS.keys())}")
+            available = ["fun-asr-nano", "custom"] + list(FALLBACK_CONFIGS.keys())
+            raise HTTPException(400, f"Unknown model '{model}'. Available: {', '.join(available)}")
 
         t1 = time.perf_counter()
 
         if response_format == "verbose_json":
-            return JSONResponse({
-                "task": "transcribe",
-                "language": language or "zh",
-                "duration": result.get("duration", 0),
-                "text": result["text"],
-                "segments": [
-                    {"id": i, "start": s["start"], "end": s["end"], "text": s["text"], "words": s.get("words", [])}
-                    for i, s in enumerate(result["segments"])
-                ],
-            })
+            return JSONResponse(build_openai_verbose_json(result, requested_language=language))
         elif response_format == "text":
             return JSONResponse(result["text"])
         else:
@@ -263,7 +533,9 @@ def create_app(device: str = "cuda", preload_model: str = "auto") -> FastAPI:
                 tmp.write(content)
                 tmp_path = tmp.name
             try:
-                result = _process_fallback("fun-asr-nano", tmp_path, language=language)
+                result = _process_fallback(
+                    "fun-asr-nano", tmp_path, language=language, use_spk=spk
+                )
             finally:
                 os.unlink(tmp_path)
         t1 = time.perf_counter()
@@ -275,6 +547,8 @@ def create_app(device: str = "cuda", preload_model: str = "auto") -> FastAPI:
     @app.get("/v1/models")
     async def list_models():
         all_models = ["fun-asr-nano"] + list(FALLBACK_CONFIGS.keys())
+        if app.state.model_path:
+            all_models.append("custom")
         return JSONResponse({"object": "list", "data": [{"id": n, "object": "model"} for n in all_models]})
 
     @app.get("/health")

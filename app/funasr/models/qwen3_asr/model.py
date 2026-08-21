@@ -1,6 +1,9 @@
 import logging
 import os
 import time
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import requires as _package_requires
+from importlib.metadata import version as _package_version
 from typing import List, Optional, Union
 
 import numpy as np
@@ -8,6 +11,87 @@ import torch
 import torch.nn as nn
 
 from funasr.register import tables
+
+
+def _qwen_asr_transformers_specifier():
+    try:
+        from packaging.requirements import InvalidRequirement, Requirement
+    except ImportError:
+        return None
+
+    requirements = _package_requires("qwen-asr") or []
+    for requirement_text in requirements:
+        try:
+            requirement = Requirement(requirement_text)
+        except InvalidRequirement:
+            continue
+        if requirement.name.lower() == "transformers":
+            return requirement.specifier
+    return None
+
+
+def _qwen_asr_install_command(qwen_asr_version, transformers_specifier=None):
+    if transformers_specifier:
+        transformers_requirement = f"transformers{transformers_specifier}"
+        return (
+            f'pip install -U "qwen-asr=={qwen_asr_version}" '
+            f'"{transformers_requirement}" accelerate'
+        )
+    return 'pip install -U "qwen-asr" transformers accelerate'
+
+
+def _check_qwen3_asr_dependencies():
+    try:
+        qwen_asr_version = _package_version("qwen-asr")
+    except PackageNotFoundError as e:
+        raise ImportError(
+            'qwen-asr package is required for Qwen3-ASR. Install with: pip install -U "qwen-asr"'
+        ) from e
+
+    try:
+        transformers_version = _package_version("transformers")
+    except PackageNotFoundError as e:
+        raise ImportError(
+            "transformers is required by qwen-asr. "
+            f"Install with: {_qwen_asr_install_command(qwen_asr_version)}"
+        ) from e
+
+    transformers_specifier = _qwen_asr_transformers_specifier()
+    if transformers_specifier:
+        try:
+            from packaging.version import InvalidVersion, Version
+
+            Version(transformers_version)
+            is_compatible = transformers_version in transformers_specifier
+        except InvalidVersion:
+            is_compatible = True
+
+        if not is_compatible:
+            install_command = _qwen_asr_install_command(qwen_asr_version, transformers_specifier)
+            raise ImportError(
+                "Qwen3-ASR dependency mismatch: "
+                f"qwen-asr=={qwen_asr_version} requires transformers{transformers_specifier}, "
+                f"but the active environment has transformers=={transformers_version}. "
+                "This can trigger qwen_asr errors such as "
+                "`AttributeError: 'Qwen3ASRConfig' object has no attribute 'thinker_config'`. "
+                f"Run: {install_command}"
+            )
+
+
+# qwen-asr's validate_language() only accepts canonical full names ("Chinese", "English",
+# ...), but FunASR documents short/ISO codes ("zh", "en", "auto") as valid language hints.
+# Defined at module level so the lookup table is built once, not on every inference call.
+_ISO_LANG_ALIASES = {
+    "zh": "Chinese", "zh-cn": "Chinese", "zho": "Chinese", "cmn": "Chinese",
+    "en": "English", "yue": "Cantonese", "ar": "Arabic", "de": "German",
+    "fr": "French", "es": "Spanish", "pt": "Portuguese", "id": "Indonesian",
+    "it": "Italian", "ko": "Korean", "ru": "Russian", "th": "Thai",
+    "vi": "Vietnamese", "ja": "Japanese", "tr": "Turkish", "hi": "Hindi",
+    "ms": "Malay", "nl": "Dutch", "sv": "Swedish", "da": "Danish",
+    "fi": "Finnish", "pl": "Polish", "cs": "Czech", "fil": "Filipino",
+    "fa": "Persian", "el": "Greek", "ro": "Romanian", "hu": "Hungarian",
+    "mk": "Macedonian",
+}
 
 
 @tables.register("model_classes", "Qwen3ASR")
@@ -21,7 +105,7 @@ class Qwen3ASR(nn.Module):
     for character-level timestamps.
 
     Requirements:
-        pip install qwen-asr
+        pip install -U "qwen-asr==0.0.6" "transformers==4.57.6" accelerate
 
     Models:
         - Qwen/Qwen3-ASR-0.6B (lighter, ~4GB GPU memory)
@@ -51,13 +135,14 @@ class Qwen3ASR(nn.Module):
         model_path = self._resolve_model_path(model_path, hub, kwargs)
         self.model_path = model_path
 
+        _check_qwen3_asr_dependencies()
         try:
             from qwen_asr import Qwen3ASRModel
         except ImportError as e:
             # Only catch if the package itself is missing, not if its dependencies are broken
             if "qwen_asr" in str(e):
                 raise ImportError(
-                    "qwen-asr package is required. Install with: pip install qwen-asr"
+                    'qwen-asr package is required. Install with: pip install -U "qwen-asr"'
                 ) from e
             raise e
 
@@ -145,12 +230,19 @@ class Qwen3ASR(nn.Module):
                 - "text" (str): Recognized text (with punctuation)
                 - "language" (str): Detected language (if available)
                 - "timestamp" (list): [[start_ms, end_ms], ...] (if timestamps enabled)
-                - "timestamps" (list): [{text, start_time, end_time}, ...] in seconds
         """
         meta_data = {}
         time1 = time.perf_counter()
 
         language = kwargs.get("language", None)
+        # Normalize FunASR's documented short/ISO codes (and "auto") to qwen-asr full names
+        # so a hint like language="zh" doesn't raise "Unsupported language: Zh".
+        if language is not None:
+            _lk = str(language).strip().lower()
+            if _lk in ("auto", "none", ""):
+                language = None
+            else:
+                language = _ISO_LANG_ALIASES.get(_lk, language)
         return_time_stamps = kwargs.get("return_time_stamps", False) or kwargs.get("output_timestamp", False)
         context = kwargs.get("context", "")
 
@@ -205,18 +297,27 @@ class Qwen3ASR(nn.Module):
             if r.language:
                 result_dict["language"] = r.language
             if return_time_stamps and r.time_stamps is not None:
-                # 同时保留结构化字词，供字幕按真实边界聚合；旧字段继续兼容现有消费者。
+                # 单位兼容:FunASR 1.3.9 forced_aligner 返回毫秒(int,如 125)
+                # FunASR 1.4.1 增强 forced_aligner 后 返回秒(float,如 0.125)
+                # 若为 float 且 0<=x<100 视为秒,乘以 1000 取整为毫秒;否则直接 int(兼容旧毫秒)
+                def _to_ms(x):
+                    if isinstance(x, float) and 0.0 <= x < 100.0:
+                        return int(round(x * 1000))
+                    return int(x)
+
+                ts_items = list(r.time_stamps.items)
+                result_dict["timestamp"] = [
+                    [_to_ms(ts.start_time), _to_ms(ts.end_time)]
+                    for ts in ts_items
+                ]
+                # 保留结构化 timestamps(list[dict]):text + 原始秒级 start_time/end_time
                 result_dict["timestamps"] = [
                     {
-                        "text": str(ts.text),
-                        "start_time": float(ts.start_time),
-                        "end_time": float(ts.end_time),
+                        "text": ts.text,
+                        "start_time": ts.start_time,
+                        "end_time": ts.end_time,
                     }
-                    for ts in r.time_stamps.items
-                ]
-                result_dict["timestamp"] = [
-                    [round(ts.start_time * 1000), round(ts.end_time * 1000)]
-                    for ts in r.time_stamps.items
+                    for ts in ts_items
                 ]
             output.append(result_dict)
 

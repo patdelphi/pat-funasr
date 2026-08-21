@@ -636,6 +636,16 @@ def cif_v1_export(hidden, alphas, threshold: float):
     fires[fire_idxs] = 1
     fires = fires + prefix_sum - prefix_sum_floor
 
+    if fire_idxs.sum() == 0:
+        # No integration boundaries fired (e.g. a very short / silent segment):
+        # return zero frames instead of indexing into the resulting empty
+        # tensors, which raised an IndexError at `shift_frames[shift_batch_idxs]`.
+        # Placed after fire_idxs/fires are computed (TorchScript requires every
+        # referenced name to be defined first).
+        max_label_len = torch.floor(alphas.sum(dim=-1)).max().to(dtype=torch.int64)
+        frame_fires = torch.zeros(batch_size, max_label_len, hidden_size, dtype=dtype, device=device)
+        return frame_fires, fires
+
     # prefix_sum_hidden = torch.cumsum(alphas.unsqueeze(-1).tile((1, 1, hidden_size)) * hidden, dim=1)
     prefix_sum_hidden = torch.cumsum(alphas.unsqueeze(-1).repeat((1, 1, hidden_size)) * hidden, dim=1)
     frames = prefix_sum_hidden[fire_idxs]
@@ -853,6 +863,15 @@ def cif_v1(hidden, alphas, threshold):
     device = hidden.device
     dtype = hidden.dtype
     batch_size, len_time, hidden_size = hidden.size()
+    if fire_idxs.sum() == 0:
+        # No integration boundaries fired (e.g. a very short / silent
+        # segment): return zero frames instead of indexing into the
+        # resulting empty tensors, which raised an IndexError.
+        max_label_len = torch.round(alphas.sum(-1)).int().max()
+        return (
+            torch.zeros(batch_size, max_label_len, hidden_size, dtype=dtype, device=device),
+            fires,
+        )
     # frames = torch.zeros(batch_size, len_time, hidden_size, dtype=dtype, device=device)
     # prefix_sum_hidden = torch.cumsum(alphas.unsqueeze(-1).tile((1, 1, hidden_size)) * hidden, dim=1)
     frames = torch.zeros(batch_size, len_time, hidden_size, dtype=dtype, device=device)

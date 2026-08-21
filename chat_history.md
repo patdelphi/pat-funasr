@@ -3417,3 +3417,59 @@ damo/ 目录下只有 .mdl 元数据文件，不是完整模型。函数检查�
 
 - 已确认提交范围仅包含 Qwen3-ASR 离线字幕时间轴修复、相关测试及文档记录。
 - 不包含 `Qwen3-ASR` 临时参考目录，不执行 Git push。
+
+## 2026-06-15
+
+### User
+
+- 询问离线识别超大视频时，是否经过上传到项目目录、转换 WAV、识别并删除原文件和 WAV 的流程。
+
+### Assistant
+
+- 已核对正式 Pat WebUI 与 OpenAI API 文件流。
+- 视频由 Gradio 上传到系统临时目录，不进入项目目录；WebUI 使用 ffmpeg 转为系统临时目录下的 16kHz、单声道、PCM16 WAV。
+- WebUI 将 WAV 整体读入内存构造 multipart 请求；API 再整体读入内存，并写入 API 的 TemporaryDirectory 后交给模型识别。
+- API 请求结束会自动删除 API 临时副本；WebUI 成功生成的 WAV 当前没有主动删除，Gradio 上传的原视频也没有由业务代码立即删除。
+
+## 2026-06-17
+
+### User
+
+- 要求用 1234... 总结当前项目的主要功能。
+
+### Assistant
+
+- 按序号概括项目核心能力：离线识别、流式识别、说话人分离、情感识别、翻译、模型管理、导出、批处理、API/WebUI 架构等。
+
+## 会话记录 2026-08-21 11:xx~12:xx (FunASR 升级 + 23 文件丢失恢复 + Git 对象库根本修复 + Qwen3 时间戳回归修复)
+
+### 时间线与关键动作
+- 发现 23 个项目文件物理丢失(.gitignore/README.md/FunASR_pat.bat/run_test_all_models.ps1/Docs 5 个/aipython/scripts/app/openai_api/vad_presets.py/app/pat_funasr_webui 4 个/tests 7 个)，同时 .git/index 损坏(cache-tree 30+ 无效 sha1 指针)、.git/objects 缺失 tree=8bd90edc、commit=ff47e34/76688f7、blob=08d10da1 等，导致 git reset/checkout/fetch 全部失败。
+- 绕过损坏 git 对象库:走 GitHub zipball(bdf7fcc 提交 = GitHub main HEAD) 从 raw CDN 失败后换代理下载 zip 57.5MB 解压，精准复制 23 文件回项目根，不碰 FunASR 升级的文件，23/23 成功恢复，大小与 GitHub 完全一致。
+- 根本修复 .git 对象库(参考 Experience 606026 "远程为真源"):rename 旧 .git → .git_broken_20260821(留作可回退备份，73MB)，从 GitHub 全新 bare clone 完整 history 合并回工作区新 .git/，修 bare=false，补 HEAD LF，git reset HEAD --mixed 重建 index = exit 0(之前一直因对象缺失失败)。
+- FunASR 升级"374 修改"核实:是被旧损坏 index 算错的假数字。真实:仅 29 M + 7 新增 .py(CLI/vLLM utils/hotwords/postprocess)，418 新增实为 __pycache__ .pyc 被 .gitignore 正确忽略。
+- pytest 验证:恢复前 38 vad_presets 失败 → 恢复文件后 166 passed / 1 failed → 改产品代码后 **167/167 全绿(exit 0)**。
+- Qwen3-ASR 回归修复(逻辑重算，不改测试):
+  - 根因①:FunASR 1.4.1 forced_aligner 增强后 start_time/end_time 从"毫秒(int)"改为"秒(float 0.125)"，原代码 int(ts.start_time) 直接取整得 0，导致 timestamp 字段 [[0,0],[0,0]]。
+  - 根因②:1.4.1 升级时误删 	imestamps 结构化 list[dict] 字段输出。
+  - 修复:在 pp/funasr/models/qwen3_asr/model.py inference() 中加内部函数 _to_ms(x) 做单位兼容(float 且 0≤x<100 视为秒 ×1000 round 取整为毫秒；否则直接 int 保留旧毫秒路径)；并补回 timestamps(text+start_time+end_time) 结构化输出。
+- Git 健康最终:
+  - HEAD=bdf7fcc, git fsck exit=0, git log 上溯 8 代可及
+  - D=0(丢失文件全恢复), M=29(FunASR 升级 + 本次修复), ??=10(3 dir 备份/临时 + 7 新增 py, 将被 commit)
+
+### 验证
+- 23 丢失文件物理 EXISTS + SIZE OK
+- vad_presets import exit=0, 4 webui py py_compile=0
+- pytest tests/: **167 passed, 0 failed, exit 0**
+- git status: D=0 ✅
+
+### 改了哪些文件
+- pp/funasr/models/qwen3_asr/model.py [inference timestamp 单位兼容 + 补 timestamps 结构化输出]
+- .git/config [bare=false, logallrefupdates=true]
+- .git/HEAD [补 LF 消除 fsck refMissingNewline 警告]
+- .git 整体替换 [rename 旧 → .git_broken_20260821; 新 bare clone 合并入; index 重建]
+- 23 恢复文件 [从 GitHub bdf7fcc 精准复制]
+
+### 待后续(不自动执行)
+- 备份目录清理:.git_broken_20260821/(73MB)、pp/funasr_v1.3.9_backup/(3.8MB) — 按用户指令保留不动
+- git push — 按规则禁止自动执行

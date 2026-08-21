@@ -26,6 +26,36 @@ import torch
 logger = logging.getLogger(__name__)
 dtype_map = {"bf16": torch.bfloat16, "fp16": torch.float16, "fp32": torch.float32}
 
+# Warn only once per process so batch loops do not spam the log.
+_warned_rep_penalty = False
+
+
+def _safe_repetition_penalty(repetition_penalty):
+    """Force ``repetition_penalty`` to the neutral value for prompt-embeds mode.
+
+    GLM-ASR feeds vLLM precomputed embeddings (``enable_prompt_embeds=True``), so
+    a request carries no prompt token IDs. vLLM applies ``repetition_penalty`` by
+    scattering over those IDs, so any value other than 1.0 indexes an empty
+    token-id tensor and aborts the engine with a CUDA
+    ``scatter gather index out of bounds`` assertion (issue #2948). We therefore
+    warn once and fall back to the neutral value of 1.0.
+    """
+    global _warned_rep_penalty
+
+    if repetition_penalty is None or repetition_penalty == 1.0:
+        return 1.0
+
+    if not _warned_rep_penalty:
+        logger.warning(
+            "repetition_penalty=%s is not supported in vLLM prompt-embeds mode "
+            "(no prompt token IDs to penalize) and would trigger a CUDA scatter "
+            "index-out-of-bounds crash; using repetition_penalty=1.0 instead. "
+            "See https://github.com/modelscope/FunASR/issues/2948.",
+            repetition_penalty,
+        )
+        _warned_rep_penalty = True
+    return 1.0
+
 
 def prepare_glmasr_vllm_dir(model_dir: str) -> str:
     """Extract language_model weights into vLLM-compatible Llama format."""
@@ -80,6 +110,63 @@ def prepare_glmasr_vllm_dir(model_dir: str) -> str:
     return output_dir
 
 
+# Warn only once per process so batch loops do not spam the log.
+_warned_dup_keys = False
+
+
+def _dedup_keys(keys):
+    """Make result keys unique while preserving order and first-occurrence names.
+
+    Each result key is derived from the audio file basename
+    (``os.path.splitext(os.path.basename(path))[0]``), so two inputs that live
+    in different directories but share a basename -- e.g. ``spk1/segment.wav``
+    and ``spk2/segment.wav`` -- both map to ``"segment"``. A downstream
+    ``{r["key"]: r["text"]}`` mapping (the canonical FunASR result shape) would
+    then silently drop all but the last colliding entry, returning fewer
+    transcripts than inputs with no error. Appending a deterministic ``_N``
+    suffix to later collisions keeps every transcript addressable.
+
+    Args:
+        keys: Result keys in input order.
+
+    Returns:
+        A new list of unique keys, same length and order as ``keys``. The first
+        occurrence of each key is preserved unchanged; the n-th repeat becomes
+        ``"<key>_<n-1>"`` (e.g. ``"seg"`` -> ``"seg"``, ``"seg_1"``, ``"seg_2"``).
+    """
+    global _warned_dup_keys
+
+    seen = set()
+    out = []
+    collided = False
+    for key in keys:
+        if key not in seen:
+            seen.add(key)
+            out.append(key)
+            continue
+        # Find the first free "<key>_<n>" so a suffixed key cannot itself clash
+        # with an existing one (e.g. inputs "seg", "seg_1", "seg").
+        collided = True
+        n = 1
+        candidate = f"{key}_{n}"
+        while candidate in seen:
+            n += 1
+            candidate = f"{key}_{n}"
+        seen.add(candidate)
+        out.append(candidate)
+
+    if collided and not _warned_dup_keys:
+        logger.warning(
+            "Duplicate result keys from audio basenames were made unique with "
+            "'_N' suffixes (e.g. two files named 'segment.wav' in different "
+            "directories map to the same key); pass distinct filenames if you "
+            "rely on the basename as the result key."
+        )
+        _warned_dup_keys = True
+
+    return out
+
+
 class GLMASRVLLMEngine:
     """GLM-ASR with vLLM backend.
 
@@ -101,8 +188,10 @@ class GLMASRVLLMEngine:
         from vllm import LLM
         from transformers import AutoProcessor, AutoConfig, AutoModel as HFAutoModel
 
+        from funasr.models.glm_asr.vllm_utils import warn_if_degraded_dtype
+
         self.device = device
-        self.torch_dtype = dtype_map.get(dtype, torch.bfloat16)
+        self.torch_dtype = dtype_map.get(warn_if_degraded_dtype(dtype), torch.bfloat16)
         self.model_dir = model_dir
 
         logger.info(f"Loading GLM-ASR audio components from {model_dir}")
@@ -180,13 +269,22 @@ class GLMASRVLLMEngine:
         audio_emb = audio_embeds[0] if audio_embeds.dim() == 3 else audio_embeds
         return torch.cat([prefix_emb, audio_emb, suffix_emb], dim=0)
 
-    def generate(self, inputs, prompt="转录以下音频内容", max_new_tokens=500, **kwargs):
+    def generate(self, inputs, prompt="转录以下音频内容", max_new_tokens=500,
+                 temperature=0.0, top_p=1.0, top_k=-1, repetition_penalty=1.0,
+                 **kwargs):
         """Run batch ASR inference.
 
         Args:
             inputs: Audio file path(s), numpy arrays, or tensors.
             prompt: Instruction prompt for ASR.
             max_new_tokens: Maximum tokens to generate per sample.
+            temperature: Sampling temperature (0 = greedy decoding).
+            top_p: Nucleus sampling parameter.
+            top_k: Top-k sampling (-1 = disabled).
+            repetition_penalty: Repetition penalty factor. Non-neutral values are
+                forced back to 1.0 here because this engine feeds vLLM precomputed
+                embeddings (``enable_prompt_embeds=True``); see
+                ``resolve_repetition_penalty`` and issue #2948.
 
         Returns:
             List of {"key": str, "text": str}
@@ -202,7 +300,10 @@ class GLMASRVLLMEngine:
 
         sampling_params = SamplingParams(
             max_tokens=max_new_tokens,
-            temperature=0,
+            temperature=temperature,
+            top_p=top_p,
+            top_k=top_k if top_k > 0 else -1,
+            repetition_penalty=_safe_repetition_penalty(repetition_penalty),
             skip_special_tokens=True,
         )
 
@@ -219,13 +320,18 @@ class GLMASRVLLMEngine:
         t2 = time.perf_counter()
         logger.info(f"vLLM generation: {t2-t1:.3f}s")
 
+        raw_keys = [
+            os.path.splitext(os.path.basename(x))[0] if isinstance(x, str) else f"sample_{i}"
+            for i, x in enumerate(inputs)
+        ]
+        keys = _dedup_keys(raw_keys)
+
         results = []
         for i, output in enumerate(outputs):
             token_ids = list(output.outputs[0].token_ids)
             text = self.tokenizer.decode(token_ids, skip_special_tokens=True)
             text = re.sub(r'\s+', ' ', text).strip()
-            key = os.path.splitext(os.path.basename(inputs[i]))[0] if isinstance(inputs[i], str) else f"sample_{i}"
-            results.append({"key": key, "text": text})
+            results.append({"key": keys[i], "text": text})
 
         return results
 

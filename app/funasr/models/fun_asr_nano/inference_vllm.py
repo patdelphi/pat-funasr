@@ -33,6 +33,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 
+from .checkpoint_utils import disable_incomplete_ctc, normalize_checkpoint_state
+
 logger = logging.getLogger(__name__)
 
 dtype_map = {"bf16": torch.bfloat16, "fp16": torch.float16, "fp32": torch.float32}
@@ -175,6 +177,13 @@ class FunASRNanoVLLM:
         self.device = device
         self.dtype = dtype
         self.torch_dtype = dtype_map.get(dtype, torch.bfloat16)
+        if self.torch_dtype == torch.float16:
+            logger.warning(
+                "dtype='fp16' can produce degraded or garbage transcription for "
+                "Fun-ASR-Nano (numerical overflow in the audio embedding path). "
+                "Use dtype='bf16' (recommended) or dtype='fp32'. On GPUs without "
+                "bfloat16 support (e.g. NVIDIA V100), use 'fp32'."
+            )
         self.model_dir = model_dir
 
         # Step 1: Prepare LLM weights for vLLM (extract from model.pt if needed)
@@ -336,20 +345,7 @@ class FunASRNanoVLLM:
 
             # CTC decoder
             if self.ctc_decoder is not None:
-                ctc_dec_state = {
-                    k[len("ctc_decoder."):]: v
-                    for k, v in state_dict.items()
-                    if k.startswith("ctc_decoder.")
-                }
-                if ctc_dec_state:
-                    self.ctc_decoder.load_state_dict(ctc_dec_state, strict=False)
-                ctc_state = {
-                    k[len("ctc."):]: v
-                    for k, v in state_dict.items()
-                    if k.startswith("ctc.") and not k.startswith("ctc_decoder.")
-                }
-                if ctc_state:
-                    self.ctc.load_state_dict(ctc_state, strict=False)
+                self._load_ctc_weights(state_dict)
 
         # Move to device
         self.audio_encoder = self.audio_encoder.to(self.device, dtype=torch.float32)
@@ -357,6 +353,35 @@ class FunASRNanoVLLM:
         if self.ctc_decoder is not None:
             self.ctc_decoder = self.ctc_decoder.to(self.device, dtype=torch.float32)
             self.ctc = self.ctc.to(self.device, dtype=torch.float32)
+
+    def _load_ctc_weights(self, state_dict):
+        """Load timestamp modules and disable them when the checkpoint is incomplete."""
+        if self.ctc_decoder is None or self.ctc is None:
+            return
+
+        state_dict = normalize_checkpoint_state(state_dict)
+
+        def compatible_state(module, prefix):
+            expected = module.state_dict()
+            return {
+                key[len(prefix) :]: value
+                for key, value in state_dict.items()
+                if key.startswith(prefix)
+                and key[len(prefix) :] in expected
+                and value.size() == expected[key[len(prefix) :]].size()
+            }
+
+        ctc_dec_state = compatible_state(self.ctc_decoder, "ctc_decoder.")
+        if ctc_dec_state:
+            self.ctc_decoder.load_state_dict(ctc_dec_state, strict=False)
+
+        ctc_state = compatible_state(self.ctc, "ctc.")
+        if ctc_state:
+            self.ctc.load_state_dict(ctc_state, strict=False)
+
+        loaded_keys = {f"ctc_decoder.{key}" for key in ctc_dec_state}
+        loaded_keys.update(f"ctc.{key}" for key in ctc_state)
+        disable_incomplete_ctc(self, loaded_keys, log=logger)
 
     def _load_embedding_layer(self, model_dir: str):
         """Load the LLM embedding layer for text token embedding computation."""
@@ -527,6 +552,8 @@ class FunASRNanoVLLM:
         except ImportError:
             from vllm.inputs.data import EmbedsPrompt
 
+        from funasr.models.fun_asr_nano.vllm_utils import resolve_repetition_penalty
+
         if isinstance(inputs, (str, np.ndarray, torch.Tensor)):
             inputs = [inputs]
 
@@ -535,7 +562,8 @@ class FunASRNanoVLLM:
             temperature=temperature,
             top_p=top_p,
             top_k=top_k if top_k > 0 else -1,
-            repetition_penalty=repetition_penalty,
+            # Prompt-embeds mode has no token IDs to penalize; see #2948.
+            repetition_penalty=resolve_repetition_penalty(repetition_penalty),
             skip_special_tokens=True,
         )
 
