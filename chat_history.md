@@ -3472,4 +3472,82 @@ damo/ 目录下只有 .mdl 元数据文件，不是完整模型。函数检查�
 
 ### 待后续(不自动执行)
 - 备份目录清理:.git_broken_20260821/(73MB)、pp/funasr_v1.3.9_backup/(3.8MB) — 按用户指令保留不动
-- git push — 按规则禁止自动执行
+- git push — 按规则禁止自动执行## 会话 @ 2026-08-21 12:44:44
+
+**用户输入**:用真实场景测试,test目录里面有测试音频
+
+### 执行步骤
+
+- **F1 盘点真实音频** test/ 目录发现 2 条长录音:	est/IBEC竞标会议录音.m4a 4213s 32.4MB(ch1 sr44100)、	est/孙老师分享录音20250310.aac 3913s 59.7MB(ch1 sr32000)。ffmpeg C:\ffmpeg\bin\ffmpeg.exe 可用。
+
+- **F1c 裁 60s 冒烟片段** ffmpeg exit=0 -> test/demo.wav 1.83MB(IBEC 竞标前 60s 16k mono 16-bit PCM s16),同时生成 test/demo_cn_60s.wav 1.83MB(孙老师分享前 60s,单人中文适合验证语义)。
+
+- **F1d 确定真实入口** Server 主入口 app/openai_api/server.py main() uvicorn.run;客户端 aipython/asr_b5_regression.py 项目自带 7 格式(json/verbose_json/txt/srt/vtt/tsv/all zip) multipart HTTP 回归器。
+
+- **F2a 启动真实 OpenAI 兼容服务** runtime/python/python.exe app/openai_api/server.py --device cuda --port 8000(后台 PID=39504,log=tmp_server_e2e.log)。GET /health HTTP 200 返回 device=cuda,10 model aliases 全注册(含 FunASR 1.4.1 新增 qwen3-asr、fun-asr-nano、emotion2vec-plus-large、nllb-200-distilled-600m/1.3b,证明升级生效)。
+
+- **F2 真实 E2E B5 回归 POST /v1/audio/transcriptions** aipython/asr_b5_regression.py --audio test/demo_cn_60s.wav --model sensevoice --timeout 480 --out-dir b5_outputs。结果:7/7 OK exit=0 wall=16.4s;推理性能 Transcription done model=sensevoice elapsed=0.64s duration=60.00s RTF=0.011(CUDA 实跑 ~90x 实时);中文识别语义可信(孙老师分享主题:做培训/大纲写好/第一次/分享思路/最多 1 小时);verbose_json duration=60.0 segments=8 段每 7.5s 对齐;srt/vtt/tsv 字幕 00:00:00->00:01:00 全时覆盖;zip=all 内含 output.txt/tsv/srt/vtt/json 共 5 个产物完整。
+
+- **F5 收尾** StopCommand 停 uvicorn 后台进程;清理 tmp_server_e2e.log 临时日志。
+
+### 验证清单(真实场景)
+
+| 项 | 结果 |
+|---|---|
+| 2 条真实长音频盘点 + ffmpeg 时长读取 | OK (4213s + 3913s) |
+| ffmpeg 裁剪 16k mono PCM 16-bit WAV x2 (前 60s) | OK exit=0,1.83MB/个 |
+| OpenAI-compat Server /health 200 device=cuda 含 1.4.1 新模型别名(qwen3-asr/fun-asr-nano/emotion2vec+/nllb-*) | OK |
+| POST /v1/audio/transcriptions 7 真实格式(SenseVoice @ CUDA,60s 中文真实单人) | OK 7/7 exit=0 |
+| 推理性能 RTF=0.011 60s 音频 0.64s,GPU 90x 实时 | OK |
+| 中文识别语义可信 + verbose_json 60s 8 segments 对齐 + srt/vtt/tsv 字幕 0->60s 全时覆盖 + zip=all 5 产物齐全 | OK |
+| 后台 Server 干净停止 + tmp log 清理 | OK |
+
+### 产出/改动
+
+- 新产生(测试数据/产物,不计代码改动): test/demo.wav test/demo_cn_60s.wav b5_outputs/demo_cn_60s.* (json/verbose_json/txt/srt/vtt/tsv/zip 共 7 个)
+- 未改任何源代码;未做 git add / commit / push。旧备份 .git_broken_20260821/ app/funasr_v1.3.9_backup/ 保持不动。
+
+### 未执行 / 后续可选
+
+- 未跑 diarization + transcription 联合 IBEC 竞标会议 4213s 多人长录音(作为 F4 后续,预计 2~5 分钟 GPU)
+- 未将 test/ demo wav 与 b5_outputs/ 产物加入 git(保持未追踪即可)
+- 未自动清理 b5_outputs/ 产物目录(作为证据链可保留)
+
+
+
+
+## 模型全局化迁移 - 2026-08-21 14:40:02
+
+
+### 操作内容
+
+- **复制 4 模型到 C 盘全局缓存** (workspace -> ~/.cache/modelscope/hub/models/): fun-asr-nano(2046MB) + qwen3-asr-1.7B(4485MB) + qwen3-asr-0.6B(1794MB) + paraformer-en(847MB) = 9.2GB, 52.4s
+
+- **修复 3 个嵌套目录** (Copy-Item 导致的子目录嵌套, 已展平)
+
+- **下载 emotion2vec-plus-large** (ModelScope snapshot_download, 1.86GB, 74.3s)
+
+- **修改 server.py _is_model_downloaded()**: 增加 C 盘 ~/.cache/modelscope/hub/models 路径检查 + _has_model_files 增加 safetensors 分片文件支持
+
+- **删除 workspace/models/ 模型文件** (22.0GB, 2.7s, Y盘释放)
+
+
+### 验证结果
+
+- C 盘全局缓存: 12/12 模型权重完整, 总占用 26.5GB
+
+- py_compile server.py: exit=0
+
+- 启动服务 /health: status=ok, device=cuda, models_available=10
+
+- /v1/models downloaded 状态: 10/10 OK (全部从 C 盘全局缓存检出)
+
+
+### 改了哪些文件
+
+- pp/openai_api/server.py: _has_model_files() 增加 safetensors 检查 + _is_model_downloaded() 增加 ModelScope 全局缓存路径
+
+- workspace/models/: 删除 22GB 模型文件, 保留空目录结构
+
+- 未做 git commit/push; 备份目录不动
+

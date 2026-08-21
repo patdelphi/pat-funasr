@@ -1740,8 +1740,14 @@ def _is_model_downloaded(model_name: str) -> bool:
         if not os.path.isdir(path):
             return False
         files = os.listdir(path)
-        model_indicators = {'config.yaml', 'configuration.json', 'model.pt', 'model.bin', 'pytorch_model.bin', 'tokenizer.json'}
-        return bool(model_indicators & set(files))
+        model_indicators = {'config.yaml', 'configuration.json', 'model.pt', 'model.bin', 'pytorch_model.bin', 'tokenizer.json', 'model.safetensors'}
+        # 精确匹配常见权重文件
+        if model_indicators & set(files):
+            return True
+        # 检查 safetensors 分片文件（如 model-00001-of-00002.safetensors）
+        if any(f.endswith('.safetensors') for f in files):
+            return True
+        return False
     
     def _check_model_in_cache(cache_dir: str, model_id: str) -> bool:
         """在指定缓存目录中检查模型。"""
@@ -1780,6 +1786,11 @@ def _is_model_downloaded(model_name: str) -> bool:
         
         # 回退到 workspace/models 目录
         cache_dir = os.path.join(str(_PROJECT_ROOT), 'workspace', 'models')
+        if os.path.isdir(cache_dir) and _check_model_in_cache(cache_dir, model_id):
+            return True
+        
+        # 检查 ModelScope 全局缓存（~/.cache/modelscope/hub/models）
+        cache_dir = os.path.join(os.path.expanduser('~'), '.cache', 'modelscope', 'hub', 'models')
         if os.path.isdir(cache_dir) and _check_model_in_cache(cache_dir, model_id):
             return True
         
