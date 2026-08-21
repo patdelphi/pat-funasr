@@ -65,3 +65,7 @@ trae-debug-log-*.txt
 Thumbs.db
 .DS_Store
 Qwen3-ASR/
+
+# 备份目录（本地保留，不推送）
+.git_broken_*/
+app/funasr_v1.*_backup/
