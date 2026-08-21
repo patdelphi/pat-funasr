@@ -73,6 +73,13 @@ from app_utils import (
 )
 import renderers as diarization_renderers
 
+# 精细转录模块：音频前处理
+from fine_transcription.audio_processor import (
+    process_audio as preprocess_audio,
+    get_audio_info,
+    format_audio_info,
+)
+
 DEFAULT_BASE_URL = "http://localhost:8000"
 DEFAULT_PREVIEW_FORMAT = "txt"
 PREVIEW_FORMAT_CHOICES = ["json", "txt", "srt", "vtt", "tsv"]
@@ -3314,6 +3321,106 @@ def build_app(default_base_url: str, default_timeout: float):
                         label="下载翻译后的文件",
                         visible=False,
                     )
+
+            # ========== 音频工具 Tab（阶段 1：音频前处理） ==========
+            with gr.Tab("音频工具") as audio_tool_tab:
+                with gr.Row(equal_height=False):
+                    # 左列：参数面板
+                    with gr.Column(scale=1, min_width=340):
+                        gr.Markdown("### 音频前处理\n降噪 · 重采样 · VAD 裁剪 · 音量归一化")
+
+                        audio_tool_input = gr.Audio(
+                            label="上传音频文件",
+                            type="filepath",
+                        )
+
+                        with gr.Accordion("前处理参数", open=True):
+                            with gr.Row():
+                                at_nr_enable = gr.Checkbox(
+                                    label="降噪 (afftdn)",
+                                    value=True,
+                                )
+                                at_nr_strength = gr.Slider(
+                                    label="降噪强度 (dB)",
+                                    minimum=3,
+                                    maximum=48,
+                                    value=12,
+                                    step=1,
+                                )
+
+                            at_sample_rate = gr.Dropdown(
+                                label="目标采样率",
+                                choices=[("8000 Hz", 8000), ("16000 Hz (ASR)", 16000), ("22050 Hz", 22050), ("44100 Hz (CD)", 44100), ("48000 Hz (高保真)", 48000)],
+                                value=16000,
+                            )
+
+                            with gr.Row():
+                                at_vad_enable = gr.Checkbox(
+                                    label="VAD 裁剪静音段",
+                                    value=False,
+                                )
+                                at_loudnorm = gr.Checkbox(
+                                    label="音量归一化",
+                                    value=True,
+                                )
+
+                        at_process_btn = gr.Button(
+                            "🚀 开始处理", variant="primary"
+                        )
+
+                    # 右列：结果展示
+                    with gr.Column(scale=1, min_width=520):
+                        at_info_before = gr.Textbox(
+                            label="处理前音频信息",
+                            lines=6,
+                            max_lines=10,
+                            interactive=False,
+                        )
+                        at_info_after = gr.Textbox(
+                            label="处理后音频信息",
+                            lines=6,
+                            max_lines=10,
+                            interactive=False,
+                        )
+                        at_output_audio = gr.Audio(
+                            label="处理后音频预览",
+                            type="filepath",
+                            visible=False,
+                        )
+                        at_download = gr.File(
+                            label="下载处理后的 WAV",
+                            visible=False,
+                        )
+
+                # 按钮点击处理函数
+                def _on_process_audio(input_path, nr_enable, nr_strength, sample_rate, vad_enable, loudnorm_enable):
+                    """音频前处理按钮回调。"""
+                    if not input_path:
+                        return "❌ 请先上传音频文件", "", None, gr.update(visible=False), gr.update(visible=False)
+                    try:
+                        output_path, info_before, info_after = preprocess_audio(
+                            input_path,
+                            noise_reduction=nr_enable,
+                            noise_strength=float(nr_strength),
+                            sample_rate=int(sample_rate),
+                            vad_enabled=vad_enable,
+                            loudnorm=loudnorm_enable,
+                        )
+                        return (
+                            format_audio_info(info_before),
+                            format_audio_info(info_after),
+                            output_path,
+                            gr.update(visible=True, value=output_path),
+                            gr.update(visible=True, value=output_path),
+                        )
+                    except Exception as e:
+                        return f"❌ 处理失败: {e}", "", None, gr.update(visible=False), gr.update(visible=False)
+
+                at_process_btn.click(
+                    fn=_on_process_audio,
+                    inputs=[audio_tool_input, at_nr_enable, at_nr_strength, at_sample_rate, at_vad_enable, at_loudnorm],
+                    outputs=[at_info_before, at_info_after, at_output_audio, at_output_audio, at_download],
+                )
 
             with gr.Tab("服务与调试") as service_tab:
                 gr.Markdown("用于查看服务运行状态、模型加载方式、语言覆盖、能力分布、调试返回与运行日志。建议需要时再开启日志自动刷新。")

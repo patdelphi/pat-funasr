@@ -3551,3 +3551,98 @@ damo/ 目录下只有 .mdl 元数据文件，不是完整模型。函数检查�
 
 - 未做 git commit/push; 备份目录不动
 
+
+## 2026-08-21 18:33:00
+### User
+
+- 用真实场景测试，test目录里面有测试音频
+- 模型是不是也要下载更新
+- 你确定模型是更新的？
+- sensevoice，paraformer之前都测试过，你看下是不是在系统目录里，c盘
+- 我希望所有模型都放到c盘作为全局可用
+- workspace 下的模型文件可以删掉吗？
+- 先commit
+- 服务启动，让我测试
+- 前端地址呢？
+- 你看下日志，识别没结果
+- https://github.com/oddmeta/oddminutes 你下载 研究下这个项目 看如何融入我们的项目
+- c 先做计划
+- 这几个功能你详细描述一下
+- 你输出的内容别忘存入chat history
+
+### Assistant
+
+#### 真实场景 E2E 测试
+
+- 裁剪 test/ 下两条真实长音频为 60s 冒烟片段：	est/demo.wav（IBEC 竞标会议）和 	est/demo_cn_60s.wav（孙老师分享）
+- 启动 server.py（device=cuda, port=8000），/health 返回 200，10 个模型全部注册
+- POST /v1/audio/transcriptions 用 sr_b5_regression.py 上传 demo_cn_60s.wav：7/7 格式全过，RTF=0.011（GPU 90× 实时）
+- 中文识别语义可信，SRT/VTT/TSV 字幕 0→60s 全时对齐
+
+#### 模型全局化迁移
+
+- 盘点 workspace/models/ 和 C 盘 ~/.cache/modelscope/hub/models/ 两处缓存
+- 发现 workspace 下 SenseVoice/paraformer 缺权重（实际在 C 盘全局缓存），emotion2vec-plus-large 完全缺失
+- 复制 4 个模型（fun-asr-nano、qwen3-asr 1.7B/0.6B、paraformer-en）从 workspace → C 盘，修复 3 个嵌套目录
+- 从 ModelScope 下载 emotion2vec-plus-large（1.86 GB）
+- 最终 12/12 模型权重全部在 C 盘全局缓存（26.5 GB）
+- 删除 workspace/models/ 下 22 GB 模型文件，保留空目录
+- 修改 server.py：_has_model_files() 增加 safetensors 检查 + _is_model_downloaded() 增加 C 盘全局缓存路径检查
+- git commit（2 个 commit：模型迁移 + gitignore 排除备份），未 push
+
+#### trust_remote_code 修复
+
+- 诊断 WebUI 识别无结果问题：SenseVoice 缺 	rust_remote_code: True，导致模型远程代码加载失败
+- 修复：给 sensevoice/paraformer/paraformer-en/paraformer-zh-streaming/emotion2vec-plus-large 全部加 	rust_remote_code: True
+- 重启服务验证：GPU 确认（nvidia-smi 显存 3618 MiB，RTX 3080），/health device=cuda，/v1/models downloaded 10/10
+
+#### OddMinutes 项目研究与融入计划
+
+- 克隆 oddminutes 到临时目录研究（不装依赖、不污染当前项目）
+- 核心发现：OddMinutes 是 Django 会议纪要系统，自带录音/音字联动/AI 摘要，但 ASR 外包给 OpenAI 兼容服务
+- pat-funasr 的 /v1/audio/transcriptions + erbose_json + segments[] + speaker 完全匹配 OddMinutes 的 ASR 接口契约
+- 用户选择策略 C：吸收 OddMinutes 三大能力到现有 Gradio WebUI，不引入 Django
+
+#### 三大功能详细设计（可视化）
+
+1. **双轨录音 + AGC**：麦克风 + 系统音频双 InputStream 并行采集（16kHz mono int16），各自 AGC 自动增益（target_rms=8000），混音压限（0.55+0.55 权重），5 秒分块回调送 ASR，最终输出 WAV。电平监测线程 100ms 刷新 RMS+peak
+2. **音字联动**：三条双向同步路径纯前端实现——①点击文字→seekAudio 跳转播放 ②timeupdate→highlightWordAtTime 高亮当前字 ③seeked→scrollToWordAtTime 自动滚动。每个词渲染为 <span data-start data-end> 结构
+3. **会议纪要全链路**：新建会议→录音+ASR→SQLite 存储（WAL 模式）→LLM 摘要（chunk 5000+1000 overlap，openai 库统一调用 Ollama/OpenAI/Claude）→导出 txt/md/json。摘要 7 字段 JSON 结构
+
+#### 改了哪些文件
+
+- app/openai_api/server.py: MODEL_CONFIGS 加 trust_remote_code + _has_model_files/_is_model_downloaded 增加 C 盘缓存检查
+- workspace/models/: 删除 22GB 模型文件
+- Docs/design/oddminutes-integration-plan.md: 新增融入计划文档
+- .gitignore: 排除备份目录
+- git commit: 模型迁移 + gitignore（2 个 commit，未 push）
+- 备份目录 .git_broken_20260821/ 和 app/funasr_v1.3.9_backup/ 保留不动
+
+### User
+
+- 1. 双规录音不需要，倒是可以改为音频降噪、提高分辨率，你规划下
+- 2. 音字联动可以保留
+- 3. 会议纪要改为精细转录，用户选择场景，可基于预设模板、prompt，调用LLM和ASR做转录，例如：精细会议转录（可提供专业词表进行精准识别，识别说话人，对转录内容进行二次词句优化，提炼会议纪要，提炼思维导图等）
+- 你先画dummy gradio webui 吧，作为3个独立tab是否合理你评估下
+
+### Assistant
+
+#### 计划修订（3 大变更）
+
+1. **双轨录音 → 音频前处理**：ffmpeg 降噪(afftdn/anlmdn) + 重采样(16kHz) + VAD裁剪 + 音量归一化(loudnorm)，不装新依赖
+2. **音字联动保留**：三条双向同步路径纯前端 JS
+3. **会议纪要 → 精细转录**：场景选择(6种预设) → hotword热词ASR → 说话人分离 → LLM纠错润色 → 纪要(7字段) + 思维导图(markmap)
+
+#### Tab 布局评估
+
+评估了 3 种方案：
+- 方案 A（3 独立 Tab）：音字联动无法独立运行，前处理与精细转录重复，9 Tab 太多 → 不合理
+- 方案 B（1 统一 Tab）：数据流连贯，音字联动嵌入结果区，7 Tab → 推荐
+- 方案 C（2 新 Tab）：音频工具(独立前处理) + 精细转录(完整管线+音字联动)，8 Tab → 折中
+
+**用户选定方案 C**：2 个新 Tab（音频工具 + 精细转录），共 8 个 Tab。
+
+#### 文件变更
+
+- Docs/design/oddminutes-integration-plan.md: 更新计划，增加 Tab 布局决策和分阶段实施
+- 未修改源代码，未 commit
