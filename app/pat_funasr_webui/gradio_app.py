@@ -73,12 +73,17 @@ from app_utils import (
 )
 import renderers as diarization_renderers
 
-# 精细转录模块：音频前处理
+# 精细转录模块：音频前处理 + 精细转录管线
 from fine_transcription.audio_processor import (
     process_audio as preprocess_audio,
     get_audio_info,
     format_audio_info,
 )
+from fine_transcription.scene_templates import SCENE_CHOICES, get_template
+from fine_transcription.transcription_pipeline import (
+    run_pipeline, format_transcript_text, format_summary_display, export_result,
+)
+from fine_transcription.audio_sync_js import get_audio_sync_html, get_markmap_html
 
 DEFAULT_BASE_URL = "http://localhost:8000"
 DEFAULT_PREVIEW_FORMAT = "txt"
@@ -3420,6 +3425,216 @@ def build_app(default_base_url: str, default_timeout: float):
                     fn=_on_process_audio,
                     inputs=[audio_tool_input, at_nr_enable, at_nr_strength, at_sample_rate, at_vad_enable, at_loudnorm],
                     outputs=[at_info_before, at_info_after, at_output_audio, at_output_audio, at_download],
+                )
+
+            # ========== 精细转录 Tab（阶段 2：ASR+LLM 协同管线） ==========
+            with gr.Tab("精细转录") as fine_transcription_tab:
+                with gr.Row(equal_height=False):
+                    # 左列：配置面板
+                    with gr.Column(scale=1, min_width=340):
+                        gr.Markdown("### 精细转录\n场景化 ASR + LLM 协同，产出精细文本/纪要/思维导图")
+
+                        ft_scene = gr.Dropdown(
+                            label="选择场景",
+                            choices=SCENE_CHOICES,
+                            value="general",
+                        )
+                        ft_scene_desc = gr.Markdown("")
+
+                        ft_audio = gr.Audio(
+                            label="上传音频文件",
+                            type="filepath",
+                        )
+
+                        with gr.Accordion("词表编辑（每行一个热词）", open=False):
+                            ft_hotwords = gr.Textbox(
+                                label="专业词表（覆盖场景预设）",
+                                placeholder="输入自定义热词，每行一个...\n例：\n项目名\n人名\n专业术语",
+                                lines=5,
+                                max_lines=10,
+                            )
+
+                        with gr.Accordion("ASR 参数", open=False):
+                            ft_model = gr.Dropdown(
+                                label="ASR 模型",
+                                choices=[("SenseVoice", "sensevoice"), ("Paraformer", "paraformer"), ("Paraformer-EN", "paraformer-en")],
+                                value="sensevoice",
+                            )
+                            ft_enable_preprocess = gr.Checkbox(
+                                label="启用音频前处理（降噪+重采样）",
+                                value=False,
+                            )
+
+                        with gr.Accordion("LLM 配置", open=True):
+                            ft_enable_llm = gr.Checkbox(
+                                label="启用 LLM 二次优化",
+                                value=True,
+                            )
+                            ft_enable_summary = gr.Checkbox(
+                                label="生成纪要",
+                                value=True,
+                            )
+                            ft_enable_mindmap = gr.Checkbox(
+                                label="生成思维导图",
+                                value=True,
+                            )
+                            ft_llm_url = gr.Textbox(
+                                label="LLM API 地址",
+                                value="http://127.0.0.1:11434/v1",
+                                placeholder="Ollama: http://127.0.0.1:11434/v1",
+                            )
+                            ft_llm_model = gr.Textbox(
+                                label="LLM 模型名",
+                                value="qwen2.5:7b",
+                                placeholder="如 qwen2.5:7b, gpt-4o-mini",
+                            )
+
+                        ft_run_btn = gr.Button("🚀 开始精细转录", variant="primary")
+
+                    # 右列：结果展示
+                    with gr.Column(scale=2, min_width=600):
+                        ft_status = gr.Textbox(
+                            label="执行状态",
+                            lines=2,
+                            interactive=False,
+                        )
+
+                        with gr.Accordion("音字联动", open=True):
+                            ft_audio_sync = gr.HTML(
+                                value=get_audio_sync_html(),
+                            )
+
+                        with gr.Accordion("转写文本", open=True):
+                            ft_transcript = gr.Textbox(
+                                label="精细转录文本",
+                                lines=15,
+                                max_lines=30,
+                                interactive=False,
+                            )
+
+                        with gr.Accordion("会议纪要", open=False):
+                            ft_summary = gr.Markdown("")
+
+                        with gr.Accordion("思维导图", open=False):
+                            ft_mindmap = gr.HTML(value="")
+
+                        with gr.Row():
+                            ft_export_format = gr.Dropdown(
+                                label="导出格式",
+                                choices=["md", "txt", "json"],
+                                value="md",
+                            )
+                            ft_export_btn = gr.Button("📥 导出", variant="secondary")
+                            ft_export_file = gr.File(label="下载", visible=False)
+
+                        ft_result_state = gr.State(value=None)
+
+                # 场景描述更新
+                def _on_scene_change(scene_id):
+                    """场景切换时更新描述"""
+                    t = get_template(scene_id)
+                    if t:
+                        desc = f"**{t.name}** — {t.description}\n\n预设热词({len(t.hotwords)}个): {'、'.join(t.hotwords[:8])}{'...' if len(t.hotwords)>8 else ''}"
+                        return desc
+                    return ""
+
+                ft_scene.change(
+                    fn=_on_scene_change,
+                    inputs=[ft_scene],
+                    outputs=[ft_scene_desc],
+                )
+
+                # 执行精细转录
+                def _on_run_pipeline(
+                    audio_path, scene_id, model, enable_preprocess,
+                    enable_llm, enable_summary, enable_mindmap,
+                    custom_hotwords, llm_url, llm_model, base_url,
+                ):
+                    """精细转录执行按钮回调"""
+                    if not audio_path:
+                        return "❌ 请先上传音频文件", "", "", "", "", None, gr.update(visible=False)
+                    try:
+                        result = run_pipeline(
+                            audio_path=audio_path,
+                            scene_id=scene_id,
+                            model=model,
+                            enable_preprocess=enable_preprocess,
+                            enable_llm_refine=enable_llm,
+                            enable_summary=enable_summary,
+                            enable_mindmap=enable_mindmap,
+                            custom_hotwords=custom_hotwords,
+                            asr_base_url=base_url,
+                            llm_base_url=llm_url,
+                            llm_model=llm_model,
+                        )
+                        # 格式化输出
+                        transcript_text = format_transcript_text(
+                            result.get("segments", []),
+                            result.get("refined_text", ""),
+                        )
+                        summary_md = format_summary_display(result.get("summary", {}))
+                        mindmap_data = result.get("mindmap", {})
+                        mindmap_html = get_markmap_html(
+                            __import__("json").dumps(mindmap_data, ensure_ascii=False)
+                        ) if mindmap_data else ""
+
+                        # 音字联动数据
+                        segments_json = __import__("json").dumps(
+                            result.get("segments", []), ensure_ascii=False
+                        )
+                        audio_url = result.get("audio_path", "")
+                        # 注入音频和转写数据到前端 JS
+                        sync_script = f"""
+                        <script>
+                        (function() {{
+                            if (window.__audioSync) {{
+                                window.__audioSync.setAudioSrc('{audio_url}');
+                                window.__audioSync.renderTranscript({segments_json});
+                            }}
+                        }})();
+                        </script>
+                        """
+                        # 覆盖音字联动区域
+                        sync_html = get_audio_sync_html() + sync_script
+
+                        status = f"✅ 完成 — 场景: {result.get('scene_name','')} | 耗时: {result.get('elapsed',0):.1f}s | ASR+LLM 协同"
+
+                        return status, sync_html, transcript_text, summary_md, mindmap_html, result, gr.update(visible=False)
+                    except Exception as e:
+                        return f"❌ 执行失败: {e}", "", "", "", "", None, gr.update(visible=False)
+
+                ft_run_btn.click(
+                    fn=_on_run_pipeline,
+                    inputs=[
+                        ft_audio, ft_scene, ft_model, ft_enable_preprocess,
+                        ft_enable_llm, ft_enable_summary, ft_enable_mindmap,
+                        ft_hotwords, ft_llm_url, ft_llm_model, base_url,
+                    ],
+                    outputs=[ft_status, ft_audio_sync, ft_transcript, ft_summary, ft_mindmap, ft_result_state, ft_export_file],
+                )
+
+                # 导出
+                def _on_export(result_state, fmt):
+                    """导出精细转录结果"""
+                    if not result_state:
+                        return gr.update(visible=False)
+                    try:
+                        content = export_result(result_state, format=fmt)
+                        import tempfile
+                        suffix = ".json" if fmt == "json" else (".md" if fmt == "md" else ".txt")
+                        tmp = tempfile.NamedTemporaryFile(
+                            mode="w", suffix=suffix, delete=False, encoding="utf-8"
+                        )
+                        tmp.write(content)
+                        tmp.close()
+                        return gr.update(visible=True, value=tmp.name)
+                    except Exception as e:
+                        return gr.update(visible=False)
+
+                ft_export_btn.click(
+                    fn=_on_export,
+                    inputs=[ft_result_state, ft_export_format],
+                    outputs=[ft_export_file],
                 )
 
             with gr.Tab("服务与调试") as service_tab:
