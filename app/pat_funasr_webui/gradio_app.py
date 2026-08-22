@@ -51,6 +51,7 @@ from app_utils import (
     MEDIA_FILE_SUFFIXES,
     build_request_fields,
     build_known_model_choices,
+    filter_asr_model_choices,
     choose_default_diarization_model,
     choose_default_emotion_model,
     render_capability_target_markdown,
@@ -84,6 +85,7 @@ from fine_transcription.transcription_pipeline import (
     run_pipeline, format_transcript_text, format_summary_display, export_result,
 )
 from fine_transcription.audio_sync_js import get_audio_sync_html, get_markmap_html
+from fine_transcription.llm_config import get_llm_choices, get_default_llm_value, get_llm_by_value
 
 DEFAULT_BASE_URL = "http://localhost:8000"
 DEFAULT_PREVIEW_FORMAT = "txt"
@@ -2801,6 +2803,8 @@ def refresh_model_dropdown(base_url: str, timeout: float):
         raise SystemExit("Install Gradio first: pip install gradio") from error
 
     choices, status_text, _ = fetch_model_choices(base_url, timeout)
+    # 离线识别只显示 ASR 转写模型（排除翻译/情感模型）
+    asr_choices = filter_asr_model_choices(choices)
     streaming_choices = ensure_dropdown_choices(
         filter_streaming_model_choices(choices),
         fallback=DEFAULT_STREAMING_MODEL,
@@ -2815,7 +2819,7 @@ def refresh_model_dropdown(base_url: str, timeout: float):
     )
     hint_html = get_model_source_hint_html(status_text)
     return (
-        gr.update(choices=choices, value=choose_default_model(choices) or DEFAULT_MODEL),
+        gr.update(choices=asr_choices, value=choose_default_model(asr_choices) or DEFAULT_MODEL),
         gr.update(
             choices=streaming_choices,
             value=choose_default_streaming_model(streaming_choices) or DEFAULT_STREAMING_MODEL,
@@ -2846,6 +2850,8 @@ def initialize_service_dashboard(base_url: str, timeout: float, capability_filte
 
     normalized_base_url = base_url.rstrip("/")
     choices, status_text, models_payload = fetch_model_choices(normalized_base_url, timeout)
+    # 离线识别只显示 ASR 转写模型（排除翻译/情感模型）
+    asr_choices = filter_asr_model_choices(choices)
     streaming_choices = ensure_dropdown_choices(
         filter_streaming_model_choices(choices),
         fallback=DEFAULT_STREAMING_MODEL,
@@ -2875,7 +2881,7 @@ def initialize_service_dashboard(base_url: str, timeout: float, capability_filte
         target_markdown = "### 使用建议\n\n加载失败，无法生成建议入口。"
 
     return (
-        gr.update(choices=choices, value=choose_default_model(choices) or DEFAULT_MODEL),
+        gr.update(choices=asr_choices, value=choose_default_model(asr_choices) or DEFAULT_MODEL),
         gr.update(
             choices=streaming_choices,
             value=choose_default_streaming_model(streaming_choices) or DEFAULT_STREAMING_MODEL,
@@ -2926,7 +2932,9 @@ def build_app(default_base_url: str, default_timeout: float):
     else:
         model_choices, model_status_text = fetched_model_choices
         initial_models_payload = {"data": [{"id": value, "ready": False} for _, value in model_choices]}
-    default_model_value = choose_default_model(model_choices) or DEFAULT_MODEL
+    # 离线识别只显示 ASR 转写模型（排除翻译/情感模型）
+    asr_model_choices = filter_asr_model_choices(model_choices)
+    default_model_value = choose_default_model(asr_model_choices) or DEFAULT_MODEL
     streaming_model_choices = ensure_dropdown_choices(
         filter_streaming_model_choices(model_choices),
         fallback=DEFAULT_STREAMING_MODEL,
@@ -2968,7 +2976,7 @@ def build_app(default_base_url: str, default_timeout: float):
                     with gr.Column(scale=1, min_width=320):
                         model = gr.Dropdown(
                             label="模型",
-                            choices=model_choices,
+                            choices=asr_model_choices,
                             value=default_model_value,
                         )
                         offline_model_source_hint = gr.HTML(
@@ -3457,8 +3465,8 @@ def build_app(default_base_url: str, default_timeout: float):
                         with gr.Accordion("ASR 参数", open=False):
                             ft_model = gr.Dropdown(
                                 label="ASR 模型",
-                                choices=[("SenseVoice", "sensevoice"), ("Paraformer", "paraformer"), ("Paraformer-EN", "paraformer-en")],
-                                value="sensevoice",
+                                choices=asr_model_choices,
+                                value=default_model_value,
                             )
                             ft_enable_preprocess = gr.Checkbox(
                                 label="启用音频前处理（降噪+重采样）",
@@ -3478,15 +3486,11 @@ def build_app(default_base_url: str, default_timeout: float):
                                 label="生成思维导图",
                                 value=True,
                             )
-                            ft_llm_url = gr.Textbox(
-                                label="LLM API 地址",
-                                value="http://127.0.0.1:11434/v1",
-                                placeholder="Ollama: http://127.0.0.1:11434/v1",
-                            )
-                            ft_llm_model = gr.Textbox(
-                                label="LLM 模型名",
-                                value="qwen2.5:7b",
-                                placeholder="如 qwen2.5:7b, gpt-4o-mini",
+                            ft_llm_select = gr.Dropdown(
+                                label="LLM 模型（从 .env 配置读取）",
+                                choices=get_llm_choices(),
+                                value=get_default_llm_value(),
+                                info="在 .env 文件中配置 LLM providers，复制 .env.sample 为 .env 修改",
                             )
 
                         ft_run_btn = gr.Button("🚀 开始精细转录", variant="primary")
@@ -3548,11 +3552,21 @@ def build_app(default_base_url: str, default_timeout: float):
                 def _on_run_pipeline(
                     audio_path, scene_id, model, enable_preprocess,
                     enable_llm, enable_summary, enable_mindmap,
-                    custom_hotwords, llm_url, llm_model, base_url,
+                    custom_hotwords, llm_select, base_url,
                 ):
                     """精细转录执行按钮回调"""
                     if not audio_path:
                         return "❌ 请先上传音频文件", "", "", "", "", None, gr.update(visible=False)
+                    # 从 .env 解析选中的 LLM 配置
+                    llm_cfg_model = get_llm_by_value(llm_select)
+                    if llm_cfg_model:
+                        llm_cfg, llm_model = llm_cfg_model
+                        llm_url = llm_cfg.base_url
+                        llm_api_key = llm_cfg.api_key
+                    else:
+                        llm_url = "http://127.0.0.1:11434/v1"
+                        llm_model = "qwen2.5:7b"
+                        llm_api_key = "no-key"
                     try:
                         result = run_pipeline(
                             audio_path=audio_path,
@@ -3566,6 +3580,7 @@ def build_app(default_base_url: str, default_timeout: float):
                             asr_base_url=base_url,
                             llm_base_url=llm_url,
                             llm_model=llm_model,
+                            llm_api_key=llm_api_key or "no-key",
                         )
                         # 格式化输出
                         transcript_text = format_transcript_text(
@@ -3608,7 +3623,7 @@ def build_app(default_base_url: str, default_timeout: float):
                     inputs=[
                         ft_audio, ft_scene, ft_model, ft_enable_preprocess,
                         ft_enable_llm, ft_enable_summary, ft_enable_mindmap,
-                        ft_hotwords, ft_llm_url, ft_llm_model, base_url,
+                        ft_hotwords, ft_llm_select, base_url,
                     ],
                     outputs=[ft_status, ft_audio_sync, ft_transcript, ft_summary, ft_mindmap, ft_result_state, ft_export_file],
                 )

@@ -84,6 +84,14 @@ MODEL_LABELS = {
     "qwen3-asr": "Qwen3-ASR-1.7B",
     "qwen3-asr-0.6b": "Qwen3-ASR-0.6B",
     "emotion2vec-plus-large": "Emotion2Vec Plus Large",
+    "nllb-200-distilled-600m": "NLLB-200 600M",
+    "nllb-200-distilled-1.3b": "NLLB-200 1.3B",
+}
+
+# ASR 转写模型 ID（仅这些模型可用于离线识别/精细转录，不含翻译/情感模型）
+ASR_MODEL_IDS = {
+    "sensevoice", "paraformer", "paraformer-en", "paraformer-zh-streaming",
+    "fun-asr-nano", "qwen3-asr", "qwen3-asr-0.6b",
 }
 
 MODEL_LANGUAGE_MATRIX = {
@@ -326,6 +334,12 @@ def parse_model_choices(payload: dict[str, Any]) -> list[tuple[str, str]]:
         # 下拉列表不显示状态，保持简洁
         choices.append((format_model_label(model_id, show_status=False), model_id))
     return choices
+
+
+def filter_asr_model_choices(choices: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """过滤出仅 ASR 转写模型（排除翻译/情感模型），用于离线识别和精细转录。"""
+    return [(label, value) for label, value in choices if value in ASR_MODEL_IDS]
+
 
 
 def build_known_model_choices() -> list[tuple[str, str]]:

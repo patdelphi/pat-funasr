@@ -69,3 +69,7 @@ Qwen3-ASR/
 # 备份目录（本地保留，不推送）
 .git_broken_*/
 app/funasr_v1.*_backup/
+
+# 环境变量（含 API Key，禁止提交）
+.env
+*.db
