@@ -3679,3 +3679,26 @@ damo/ 目录下只有 .mdl 元数据文件，不是完整模型。函数检查�
 - silenceremove 滤镜参数: threshold→stop_threshold (ffmpeg 2025-08 版本语法变化)
 
 **git commit:** 96578f3 (5 files, +593 lines), 未 push
+## 2026-08-21 (阶段 2: 精细转录 Tab 开发)
+
+### 完成项
+1. **scene_templates.py** — 6 场景预设模板(会议/访谈/讲座/法庭/医疗/通用), 每个含专业词表(25个热词)、ASR参数、LLM优化prompt、纪要prompt、思维导图prompt
+2. **audio_sync_js.py** — 音字联动前端 JS(点击词跳音频+播放时高亮+自动滚动+说话人标签), 含 markmap CDN 思维导图渲染
+3. **store.py** — SQLite WAL 模式存储(任务/片段/LLM产出三表), 全部事务操作, PRAGMA journal_mode=WAL + synchronous=NORMAL
+4. **summary_processor.py** — LLM 纪要+思维导图生成(requests 调 OpenAI 兼容接口, 支持 Ollama), 长文本 chunk(5000字+1000 overlap), JSON 解析容错
+5. **transcription_pipeline.py** — ASR+LLM 协同管线(前处理→ASR→LLM优化→纪要→思维导图→SQLite存储→导出), 含导出(txt/md/json)
+6. **gradio_app.py** — 新增第 8 个 Tab '精细转录', 含场景选择/词表编辑/ASR参数/LLM配置/音字联动/转写文本/纪要/思维导图/导出
+
+### 验证
+- 6 文件 py_compile exit=0
+- import 全链路通过: 6 场景, 25 热词, store init OK, html 5317 字符
+- git commit 513dfd2, 6 files +1513 lines, 未 push
+
+### 文件清单
+- app/pat_funasr_webui/fine_transcription/scene_templates.py (新建)
+- app/pat_funasr_webui/fine_transcription/audio_sync_js.py (新建)
+- app/pat_funasr_webui/fine_transcription/store.py (新建)
+- app/pat_funasr_webui/fine_transcription/summary_processor.py (新建)
+- app/pat_funasr_webui/fine_transcription/transcription_pipeline.py (新建)
+- app/pat_funasr_webui/gradio_app.py (修改, +精细转录 Tab)
+- Docs/design/oddminutes-integration-plan.md (新建, 融入计划)
