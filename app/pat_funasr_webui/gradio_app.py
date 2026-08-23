@@ -4437,54 +4437,75 @@ def build_app(default_base_url: str, default_timeout: float):
 
             with gr.Tab("模型与服务", render_children=False) as service_tab:
                 gr.Markdown("模型与服务控制台：按总览、模型、资源、任务和诊断五个区域集中管理。")
-                with gr.Accordion("1. 服务总览", open=True):
-                    gr.Markdown(f"- API：`{default_base_url}`\n- UI：默认 `7861/7862/7863` 自动择空闲端口")
-                    with gr.Row():
-                        check_button = gr.Button("检查服务", variant="secondary")
-                        auto_refresh_logs = gr.Checkbox(label="自动刷新状态与日志(可能影响性能)", value=True)
-                    service_overview = gr.Markdown(initial_overview_markdown)
-                    capability_target = gr.Markdown(initial_target_markdown)
+                with gr.Tabs():
+                    with gr.Tab("服务总览", render_children=False) as service_overview_tab:
+                        gr.Markdown(f"- API：`{default_base_url}`\n- UI：默认 `7861/7862/7863` 自动择空闲端口")
+                        with gr.Row():
+                            check_button = gr.Button("检查服务", variant="secondary")
+                            auto_refresh_logs = gr.Checkbox(label="自动刷新状态与日志(可能影响性能)", value=True)
+                        service_overview = gr.Markdown(initial_overview_markdown)
+                        capability_target = gr.Markdown(initial_target_markdown)
 
-                with gr.Accordion("2. 模型管理与能力", open=True):
-                    with gr.Row():
-                        refresh_models_button = gr.Button("刷新模型列表", variant="secondary")
-                        capability_filter = gr.Dropdown(
-                            label="能力筛选",
-                            choices=CAPABILITY_FILTER_CHOICES,
-                            value="all",
+                    with gr.Tab("模型管理", render_children=False) as service_models_tab:
+                        with gr.Row():
+                            refresh_models_button = gr.Button("刷新模型列表", variant="secondary")
+                            capability_filter = gr.Dropdown(
+                                label="能力筛选",
+                                choices=CAPABILITY_FILTER_CHOICES,
+                                value="all",
+                            )
+                        model_status = gr.Textbox(label="模型摘要", value=model_status_text, interactive=False)
+                        service_capability = gr.Markdown(initial_capability_markdown)
+
+                    with gr.Tab("运行资源", render_children=False) as service_resources_tab:
+                        refresh_runtime_button = gr.Button("刷新运行资源", variant="secondary")
+                        runtime_resources = gr.Markdown("### 运行资源\n\n点击“刷新运行资源”加载。")
+                        service_raw_json = gr.Textbox(label="服务 / 资源原始状态", lines=10, max_lines=20)
+
+                    with gr.Tab("任务队列", render_children=False) as service_workflows_tab:
+                        refresh_workflow_queue_button = gr.Button("刷新任务队列", variant="secondary")
+                        workflow_queue_panel = gr.Markdown("### 任务队列\n\n点击“刷新任务队列”加载。")
+
+                    with gr.Tab("诊断与日志", render_children=False) as service_diagnostics_tab:
+                        with gr.Row():
+                            log_max_lines = gr.Slider(label="日志行数", minimum=50, maximum=2000, step=50, value=120)
+                            log_max_kb = gr.Slider(label="单文件读取上限(KB)", minimum=64, maximum=2048, step=64, value=256)
+                            log_max_section_chars = gr.Slider(
+                                label="单段显示上限(字符)", minimum=2000, maximum=40000, step=2000, value=8000,
+                            )
+                        with gr.Row():
+                            refresh_logs_button = gr.Button("刷新运行日志", variant="secondary")
+                            download_logs_button = gr.Button("打包下载运行日志", variant="secondary")
+                        runtime_logs = gr.Textbox(
+                            label="运行日志", value=initial_runtime_logs, lines=18, max_lines=30, interactive=False,
                         )
-                    model_status = gr.Textbox(label="模型摘要", value=model_status_text, interactive=False)
-                    service_capability = gr.Markdown(initial_capability_markdown)
-
-                with gr.Accordion("3. 运行资源", open=True):
-                    runtime_resources = gr.Markdown("### 运行资源\n\n点击“检查服务”加载。")
-                    service_raw_json = gr.Textbox(label="服务 / 资源原始状态", lines=10, max_lines=20)
-
-                with gr.Accordion("4. 工作流任务队列", open=True):
-                    workflow_queue_panel = gr.Markdown("### 任务队列\n\n点击“检查服务”加载。")
-
-                with gr.Accordion("5. 诊断与日志", open=False):
-                    with gr.Row():
-                        log_max_lines = gr.Slider(label="日志行数", minimum=50, maximum=2000, step=50, value=120)
-                        log_max_kb = gr.Slider(label="单文件读取上限(KB)", minimum=64, maximum=2048, step=64, value=256)
-                        log_max_section_chars = gr.Slider(
-                            label="单段显示上限(字符)", minimum=2000, maximum=40000, step=2000, value=8000,
-                        )
-                    with gr.Row():
-                        refresh_logs_button = gr.Button("刷新运行日志", variant="secondary")
-                        download_logs_button = gr.Button("打包下载运行日志", variant="secondary")
-                    runtime_logs = gr.Textbox(
-                        label="运行日志", value=initial_runtime_logs, lines=18, max_lines=30, interactive=False,
-                    )
-                    runtime_logs_archive = gr.File(label="日志下载", visible=True)
+                        runtime_logs_archive = gr.File(label="日志下载", visible=True)
                 runtime_log_timer = gr.Timer(value=5.0)
 
         check_button.click(
-            fn=safe_check_with_capabilities,
-            inputs=[base_url, timeout, capability_filter],
-            outputs=[service_raw_json, service_overview, service_capability, capability_target],
+            fn=activate_and_refresh_service_tab,
+            inputs=[base_url, timeout, capability_filter, log_max_lines, log_max_kb, log_max_section_chars],
+            outputs=[
+                service_tab_active,
+                model_status,
+                service_raw_json,
+                service_overview,
+                service_capability,
+                capability_target,
+                runtime_logs,
+            ],
         )
         check_button.click(
+            fn=safe_build_runtime_panels,
+            inputs=[base_url, timeout],
+            outputs=[runtime_resources, workflow_queue_panel],
+        )
+        refresh_runtime_button.click(
+            fn=safe_build_runtime_panels,
+            inputs=[base_url, timeout],
+            outputs=[runtime_resources, workflow_queue_panel],
+        )
+        refresh_workflow_queue_button.click(
             fn=safe_build_runtime_panels,
             inputs=[base_url, timeout],
             outputs=[runtime_resources, workflow_queue_panel],
@@ -4541,25 +4562,22 @@ def build_app(default_base_url: str, default_timeout: float):
             feature_tab.select(
                 fn=lambda: set_service_tab_auto_refresh_active(False),
                 outputs=[service_tab_active],
+                queue=False,
+                show_progress="hidden",
             )
-        service_tab.select(
-            fn=activate_and_refresh_service_tab,
-            inputs=[base_url, timeout, capability_filter, log_max_lines, log_max_kb, log_max_section_chars],
-            outputs=[
-                service_tab_active,
-                model_status,
-                service_raw_json,
-                service_overview,
-                service_capability,
-                capability_target,
-                runtime_logs,
-            ],
-        )
-        service_tab.select(
-            fn=safe_build_runtime_panels,
-            inputs=[base_url, timeout],
-            outputs=[runtime_resources, workflow_queue_panel],
-        )
+        for service_feature_tab in (
+            service_overview_tab,
+            service_models_tab,
+            service_resources_tab,
+            service_workflows_tab,
+            service_diagnostics_tab,
+        ):
+            service_feature_tab.select(
+                fn=lambda: set_service_tab_auto_refresh_active(True),
+                outputs=[service_tab_active],
+                queue=False,
+                show_progress="hidden",
+            )
         media_file.change(
             fn=update_media_preview,
             inputs=[media_file],

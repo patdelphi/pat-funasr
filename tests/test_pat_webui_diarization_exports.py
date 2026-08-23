@@ -920,9 +920,18 @@ class TestPatWebUiDiarizationExports(unittest.TestCase):
                 for child in top_level_nodes["实时识别"].get("children", [])
                 if components[child["id"]].get("type") == "tabs"
             )
+            service_tabs = next(
+                child
+                for child in top_level_nodes["模型与服务"].get("children", [])
+                if components[child["id"]].get("type") == "tabs"
+            )
             self.assertEqual(tab_labels(transcription_tabs), ["快速转录", "会议精细转录", "说话人时间轴"])
             self.assertEqual(tab_labels(media_tabs), ["音频处理", "跨语言翻译", "情感识别"])
             self.assertEqual(tab_labels(streaming_tabs), ["文件流式识别", "Mic 实时识别"])
+            self.assertEqual(
+                tab_labels(service_tabs),
+                ["服务总览", "模型管理", "运行资源", "任务队列", "诊断与日志"],
+            )
 
             def descendant_ids(node):
                 ids = {node["id"]}
@@ -983,6 +992,7 @@ class TestPatWebUiDiarizationExports(unittest.TestCase):
                 "快速转录", "会议精细转录", "说话人时间轴",
                 "音频处理", "跨语言翻译", "情感识别",
                 "文件流式识别", "Mic 实时识别",
+                "服务总览", "模型管理", "运行资源", "任务队列", "诊断与日志",
             }
             for component in components.values():
                 label = component.get("props", {}).get("label")
@@ -1003,6 +1013,21 @@ class TestPatWebUiDiarizationExports(unittest.TestCase):
                 )
             ]
             self.assertEqual(streaming_select_dependencies, [])
+            service_tab_id = next(
+                component_id
+                for component_id, component in components.items()
+                if component.get("type") == "tabitem"
+                and component.get("props", {}).get("label") == "模型与服务"
+            )
+            service_select_dependencies = [
+                dependency
+                for dependency in config["dependencies"]
+                if any(
+                    target[0] == service_tab_id and target[1] == "select"
+                    for target in dependency.get("targets", [])
+                )
+            ]
+            self.assertEqual(service_select_dependencies, [])
             for dependency in config["dependencies"]:
                 outputs = dependency.get("outputs", [])
                 self.assertEqual(outputs, list(dict.fromkeys(outputs)))
