@@ -1,4 +1,4 @@
-"""
+﻿"""
 程序说明：
 模型别名与 model id 映射的单元测试（unittest）。
 
@@ -10,7 +10,11 @@
 import sys
 import unittest
 import importlib.util
+import threading
+import time
+import types
 from pathlib import Path
+from unittest import mock
 
 
 _ROOT = Path(__file__).resolve().parents[1]
@@ -111,6 +115,78 @@ class TestModelConfigs(unittest.TestCase):
         server.MODEL_REGISTRY["paraformer::device=cpu|hub=ms|disable_update=True|ncpu=|log_level=|disable_pbar=|punc_model=ct-punc"] = object()
         self.assertTrue(server._is_model_ready("paraformer"))
         self.assertFalse(server._is_model_ready("sensevoice"))
+
+    def test_runtime_config_accepts_explicit_forced_aligner(self):
+        server = _load_server_module()
+        cfg = server.build_model_runtime_config(
+            model_name="qwen3-asr",
+            device="cpu",
+            hub=None,
+            disable_update=True,
+            ncpu=None,
+            log_level=None,
+            disable_pbar=None,
+            punc_mode="auto",
+            forced_aligner="custom/aligner",
+        )
+        self.assertEqual(cfg["forced_aligner"], "custom/aligner")
+        self.assertIn("forced_aligner=custom/aligner", server.build_model_registry_key("qwen3-asr", cfg))
+
+    def test_resolve_local_model_path_uses_alias_without_network(self):
+        from tempfile import TemporaryDirectory
+
+        server = _load_server_module()
+        with TemporaryDirectory() as temp_dir:
+            model_dir = (
+                Path(temp_dir)
+                / "iic"
+                / "speech_campplus_sv_zh-cn_16k-common"
+            )
+            model_dir.mkdir(parents=True)
+            (model_dir / "configuration.json").write_text("{}", encoding="utf-8")
+            (model_dir / "campplus_cn_common.bin").write_bytes(b"weight")
+
+            resolved = server.resolve_local_model_path("cam++", [temp_dir])
+
+            self.assertEqual(resolved, model_dir.resolve())
+
+    def test_concurrent_first_load_uses_single_flight(self):
+        server = _load_server_module()
+        server.MODEL_REGISTRY.clear()
+        server.MODEL_LOAD_STATUS.clear()
+        server.MODEL_LOAD_EVENTS.clear()
+        server.MODEL_LOAD_ERRORS.clear()
+
+        calls = []
+        loaded_model = object()
+
+        def fake_auto_model(**_kwargs):
+            calls.append(time.monotonic())
+            time.sleep(0.15)
+            return loaded_model
+
+        fake_funasr = types.SimpleNamespace(AutoModel=fake_auto_model)
+        results = []
+        errors = []
+
+        def worker():
+            try:
+                results.append(server.load_model("paraformer", device="cpu"))
+            except Exception as exc:  # pragma: no cover - 失败时由断言显示
+                errors.append(exc)
+
+        with mock.patch.dict(sys.modules, {"funasr": fake_funasr}):
+            threads = [threading.Thread(target=worker) for _ in range(2)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=3)
+
+        self.assertEqual(errors, [])
+        self.assertEqual(len(results), 2)
+        self.assertIs(results[0], loaded_model)
+        self.assertIs(results[1], loaded_model)
+        self.assertEqual(len(calls), 1)
 
 
 if __name__ == "__main__":

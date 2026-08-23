@@ -1,4 +1,4 @@
-"""
+﻿"""
 FunASR OpenAI-Compatible API Server
 
 Drop-in replacement for OpenAI's /v1/audio/transcriptions endpoint.
@@ -37,12 +37,14 @@ except Exception:
     pass
 
 import argparse
+from functools import partial
 import tempfile
 import time
 import os
 import re
 import logging
 import json
+import shutil
 from typing import Optional
 import threading
 import uuid
@@ -51,11 +53,16 @@ import urllib.request
 import numpy as np
 import uvicorn
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
+from starlette.concurrency import run_in_threadpool
 
 import renderers
 import vad_presets
 import segmentation
+import media_service
+import workflow_service
+import workflow_runner
+import artifact_service
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -135,171 +142,23 @@ SERVER_START_EPOCH = int(time.time())
 MODEL_REGISTRY = {}
 MODEL_LOAD_STATUS: dict[str, dict] = {}
 MODEL_LOAD_LOCK = threading.Lock()
+MODEL_LOAD_EVENTS: dict[str, threading.Event] = {}
+MODEL_LOAD_ERRORS: dict[str, str] = {}
 DEVICE = "cpu"
 
-MODEL_CONFIGS = {
-    "sensevoice": {
-        "model": "iic/SenseVoiceSmall",
-        "hub": "ms",
-        "trust_remote_code": True,
-        "vad_model": "fsmn-vad",
-        "vad_kwargs": {"max_single_segment_time": 30000},
-    },
-    "paraformer": {
-        "model": "paraformer-zh",
-        "hub": "ms",
-        "trust_remote_code": True,
-        "vad_model": "fsmn-vad",
-        "punc_model": "ct-punc",
-    },
-    "paraformer-en": {
-        "model": "paraformer-en",
-        "hub": "ms",
-        "trust_remote_code": True,
-        "vad_model": "fsmn-vad",
-    },
-    "paraformer-zh-streaming": {
-        "model": "paraformer-zh-streaming",
-        "hub": "ms",
-        "trust_remote_code": True,
-        "punc_model": "ct-punc",
-    },
-    "fun-asr-nano": {
-        "model": "FunAudioLLM/Fun-ASR-Nano-2512",
-        "hub": "ms",
-        "trust_remote_code": True,
-        "vad_model": "fsmn-vad",
-        "vad_kwargs": {"max_single_segment_time": 30000},
-    },
-    "qwen3-asr": {
-        "model": "Qwen/Qwen3-ASR-1.7B",
-        "hub": "ms",
-        "trust_remote_code": True,
-        "dtype": "fp16",
-        "forced_aligner": "Qwen/Qwen3-ForcedAligner-0.6B",
-        "vad_model": "fsmn-vad",
-        "vad_kwargs": {"max_single_segment_time": 30000},
-    },
-    "qwen3-asr-0.6b": {
-        "model": "Qwen/Qwen3-ASR-0.6B",
-        "hub": "ms",
-        "trust_remote_code": True,
-        "dtype": "fp16",
-        "forced_aligner": "Qwen/Qwen3-ForcedAligner-0.6B",
-        "vad_model": "fsmn-vad",
-        "vad_kwargs": {"max_single_segment_time": 30000},
-    },
-    "emotion2vec-plus-large": {
-        "model": "iic/emotion2vec_plus_large",
-        "hub": "ms",
-        "trust_remote_code": True,
-    },
-    "nllb-200-distilled-600m": {
-        "model": "facebook/nllb-200-distilled-600m",
-        "hub": "ms",
-        "type": "translation",
-    },
-    "nllb-200-distilled-1.3b": {
-        "model": "facebook/nllb-200-distilled-1.3b",
-        "hub": "ms",
-        "type": "translation",
-    },
-}
+from model_catalog import (
+    DIARIZATION_MODELS,
+    EMOTION_MODELS,
+    OFFLINE_ASR_MODELS,
+    STREAMING_MODELS,
+    get_model_capabilities,
+    get_model_configs,
+    resolve_local_model_path,
+)
 
-MODEL_CAPABILITIES = {
-    "sensevoice": {
-        "offline_asr": True,
-        "streaming_asr": False,
-        "diarization": True,
-        "emotion": True,
-        "vad": True,
-        "punc": True,
-        "notes": "多语言；支持说话人分离，也可直接输出情感标签",
-    },
-    "paraformer": {
-        "offline_asr": True,
-        "streaming_asr": False,
-        "diarization": True,
-        "emotion": False,
-        "vad": True,
-        "punc": True,
-        "notes": "中文离线识别；支持 cam++ 说话人分离",
-    },
-    "paraformer-en": {
-        "offline_asr": True,
-        "streaming_asr": False,
-        "diarization": False,
-        "emotion": False,
-        "vad": True,
-        "punc": False,
-        "notes": "英文离线识别",
-    },
-    "paraformer-zh-streaming": {
-        "offline_asr": False,
-        "streaming_asr": True,
-        "diarization": False,
-        "emotion": False,
-        "vad": False,
-        "punc": True,
-        "notes": "流式识别专用；默认挂载 ct-punc 提升断句与可读性",
-    },
-    "fun-asr-nano": {
-        "offline_asr": True,
-        "streaming_asr": False,
-        "diarization": True,
-        "emotion": False,
-        "vad": True,
-        "punc": True,
-        "notes": "轻量多语言模型；支持 cam++ 说话人分离",
-    },
-    "qwen3-asr": {
-        "offline_asr": True,
-        "streaming_asr": False,
-        "diarization": False,
-        "emotion": False,
-        "vad": True,
-        "punc": True,
-        "notes": "高精度离线识别",
-    },
-    "qwen3-asr-0.6b": {
-        "offline_asr": True,
-        "streaming_asr": False,
-        "diarization": False,
-        "emotion": False,
-        "vad": True,
-        "punc": True,
-        "notes": "轻量版 Qwen3-ASR",
-    },
-    "emotion2vec-plus-large": {
-        "offline_asr": False,
-        "streaming_asr": False,
-        "diarization": False,
-        "emotion": True,
-        "vad": False,
-        "punc": False,
-        "notes": "独立情感识别模型",
-    },
-    "nllb-200-distilled-600m": {
-        "offline_asr": False,
-        "streaming_asr": False,
-        "diarization": False,
-        "emotion": False,
-        "vad": False,
-        "punc": False,
-        "translation": True,
-        "notes": "多语种文本翻译；支持 200+ 语言互译；600M 参数轻量版",
-    },
-    "nllb-200-distilled-1.3b": {
-        "offline_asr": False,
-        "streaming_asr": False,
-        "diarization": False,
-        "emotion": False,
-        "vad": False,
-        "punc": False,
-        "translation": True,
-        "notes": "多语种文本翻译；支持 200+ 语言互译；1.3B 参数高精度版",
-    },
-}
+
+MODEL_CONFIGS = get_model_configs()
+MODEL_CAPABILITIES = get_model_capabilities()
 
 LANGUAGE_CODE_MAP = {
     "zh": "Chinese", "cn": "Chinese", "chinese": "Chinese",
@@ -345,14 +204,63 @@ def normalize_language(lang: str | None) -> str | None:
     return LANGUAGE_CODE_MAP.get(normalized, lang)
 
 
-STREAMING_MODELS = {"paraformer-zh-streaming"}
-EMOTION_MODELS = {"emotion2vec-plus-large", "sensevoice"}
-DIARIZATION_MODELS = {"paraformer", "fun-asr-nano", "sensevoice"}
 STREAMING_SESSIONS: dict[str, dict] = {}
 STREAMING_SESSION_TTL_S = int(os.environ.get("FUNASR_STREAMING_SESSION_TTL_S", "3600"))
 VALID_LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
 VALID_PUNC_MODES = {"auto", "disabled"}
 VALID_MODEL_HUBS = {"ms", "modelscope", "hf", "huggingface"}
+MAX_UPLOAD_BYTES = int(os.environ.get("FUNASR_MAX_UPLOAD_BYTES", str(2 * 1024 * 1024 * 1024)))
+MAX_STREAM_CHUNK_BYTES = int(
+    os.environ.get("FUNASR_MAX_STREAM_CHUNK_BYTES", str(8 * 1024 * 1024))
+)
+WORKFLOW_TEMP_ROOT = Path(tempfile.gettempdir()) / "pat-funasr-workflows"
+WORKFLOW_TEMP_TTL_S = int(os.environ.get("FUNASR_WORKFLOW_TEMP_TTL_S", str(24 * 3600)))
+WORKFLOW_MANAGER = workflow_service.WorkflowJobManager(
+    max_workers=int(os.environ.get("FUNASR_WORKFLOW_MAX_WORKERS", "1"))
+)
+
+
+def _workflow_runner_not_configured(context: workflow_service.WorkflowRunContext) -> dict:
+    """在完整执行器接入前返回明确错误，避免任务假完成。"""
+    context.emit(
+        level="error",
+        stage="workflow",
+        progress=0.0,
+        message="工作流执行器尚未配置",
+        error_code="WORKFLOW_RUNNER_NOT_CONFIGURED",
+        retryable=False,
+    )
+    raise RuntimeError("工作流执行器尚未配置")
+
+
+WORKFLOW_RUNNER = _workflow_runner_not_configured
+
+
+def _cleanup_workflow_temp_dirs(now: float | None = None) -> int:
+    """删除超过 TTL 的非活动任务目录，返回清理数量。"""
+    if not WORKFLOW_TEMP_ROOT.exists():
+        return 0
+    current_time = float(now if now is not None else time.time())
+    active_roots = {
+        Path(path).resolve().parent
+        for path in WORKFLOW_MANAGER.active_source_paths()
+    }
+    removed = 0
+    root = WORKFLOW_TEMP_ROOT.resolve()
+    for child in WORKFLOW_TEMP_ROOT.iterdir():
+        try:
+            resolved = child.resolve()
+            if resolved.parent != root or not child.is_dir() or resolved in active_roots:
+                continue
+            if current_time - child.stat().st_mtime <= WORKFLOW_TEMP_TTL_S:
+                continue
+            shutil.rmtree(resolved)
+            removed += 1
+        except FileNotFoundError:
+            continue
+        except Exception as exc:
+            logger.warning("工作流临时目录清理失败 %s: %s", child, exc)
+    return removed
 
 
 def get_default_model_hub() -> str | None:
@@ -420,6 +328,7 @@ def build_model_runtime_config(
     disable_pbar: Optional[bool],
     punc_mode: Optional[str],
     spk_model: Optional[str] = None,
+    forced_aligner: Optional[str] = None,
 ) -> dict:
     """基于静态模型配置与运行时覆写项，生成最终 AutoModel 配置。"""
     if model_name not in MODEL_CONFIGS:
@@ -452,6 +361,8 @@ def build_model_runtime_config(
         cfg.pop("punc_model", None)
     if spk_model:
         cfg["spk_model"] = spk_model
+    if forced_aligner:
+        cfg["forced_aligner"] = forced_aligner
     return cfg
 
 
@@ -466,6 +377,7 @@ def build_model_registry_key(model_name: str, cfg: dict) -> str:
         f"disable_pbar={cfg.get('disable_pbar', '')}",
         f"punc_model={cfg.get('punc_model', '')}",
         f"spk_model={cfg.get('spk_model', '')}",
+        f"forced_aligner={cfg.get('forced_aligner', '')}",
     ]
     return f"{model_name}::{'|'.join(variant_parts)}"
 
@@ -509,6 +421,7 @@ def load_model(
     disable_pbar: Optional[bool] = None,
     punc_mode: Optional[str] = None,
     spk_model: Optional[str] = None,
+    forced_aligner: Optional[str] = None,
 ):
     """Load a model and store in registry. Thread-safe via MODEL_LOAD_LOCK."""
     cfg = build_model_runtime_config(
@@ -521,29 +434,53 @@ def load_model(
         disable_pbar=disable_pbar,
         punc_mode=punc_mode,
         spk_model=spk_model,
+        forced_aligner=forced_aligner,
     )
     registry_key = build_model_registry_key(model_name, cfg)
 
+    is_loader = False
     with MODEL_LOAD_LOCK:
         if registry_key in MODEL_REGISTRY:
             MODEL_LOAD_STATUS[model_name] = {"state": "ready", "error": None, "updated_at": time.time()}
             return MODEL_REGISTRY[registry_key]
+        load_event = MODEL_LOAD_EVENTS.get(registry_key)
+        if load_event is None:
+            load_event = threading.Event()
+            MODEL_LOAD_EVENTS[registry_key] = load_event
+            MODEL_LOAD_ERRORS.pop(registry_key, None)
+            is_loader = True
 
-    # Try to find local model cache first
+    if not is_loader:
+        wait_timeout_s = float(os.environ.get("FUNASR_MODEL_LOAD_WAIT_TIMEOUT_S", "1800"))
+        if not load_event.wait(timeout=wait_timeout_s):
+            raise TimeoutError(
+                f"Timed out waiting for model '{model_name}' to finish loading"
+            )
+        with MODEL_LOAD_LOCK:
+            if registry_key in MODEL_REGISTRY:
+                return MODEL_REGISTRY[registry_key]
+            error = MODEL_LOAD_ERRORS.get(registry_key) or "unknown model load error"
+        raise RuntimeError(f"Model '{model_name}' load failed: {error}")
+
+    # 优先解析本地缓存，避免已下载模型仍访问模型站点检查元数据。
     model_id = cfg["model"]
-    if "/" in model_id and "hub" not in cfg and cfg.get("type") != "translation":
-        # ModelScope local cache lookup
-        cache_root = os.environ.get("MODELSCOPE_CACHE", "")
-        if cache_root:
-            local_paths = [
-                os.path.join(cache_root, model_id, "model.pt"),
-                os.path.join(cache_root, "models", model_id, "model.pt"),
-            ]
-            for pt in local_paths:
-                if os.path.exists(pt):
-                    cfg["model"] = os.path.dirname(pt)
-                    logger.info(f"Using local model: {cfg['model']}")
-                    break
+    if cfg.get("hub", "ms") in {"ms", "modelscope"} and cfg.get("type") != "translation":
+        cache_roots = [
+            _PROJECT_ROOT / "workspace" / "models",
+            Path.home() / ".cache" / "modelscope" / "hub" / "models",
+        ]
+        configured_cache = os.environ.get("MODELSCOPE_CACHE", "").strip()
+        if configured_cache:
+            cache_roots.insert(0, Path(configured_cache))
+        for key in ("model", "vad_model", "punc_model", "spk_model", "forced_aligner"):
+            configured_model = str(cfg.get(key) or "").strip()
+            if not configured_model or os.path.exists(configured_model):
+                continue
+            local_path = resolve_local_model_path(configured_model, cache_roots)
+            if local_path is not None:
+                cfg[key] = str(local_path)
+                logger.info("Using local %s: %s", key, local_path)
+        cfg["check_latest"] = False
 
     logger.info(f"Loading model '{model_name}' on {cfg['device']}...")
     MODEL_LOAD_STATUS[model_name] = {"state": "loading", "error": None, "updated_at": time.time()}
@@ -607,7 +544,16 @@ def load_model(
     except Exception as exc:
         import traceback
         traceback.print_exc()
-        MODEL_LOAD_STATUS[model_name] = {"state": "error", "error": str(exc), "updated_at": time.time()}
+        with MODEL_LOAD_LOCK:
+            MODEL_LOAD_STATUS[model_name] = {
+                "state": "error",
+                "error": str(exc),
+                "updated_at": time.time(),
+            }
+            MODEL_LOAD_ERRORS[registry_key] = str(exc)
+            event = MODEL_LOAD_EVENTS.pop(registry_key, None)
+            if event is not None:
+                event.set()
         raise
     elapsed = time.time() - t0
     logger.info(f"Model '{model_name}' loaded in {elapsed:.1f}s")
@@ -615,6 +561,10 @@ def load_model(
     with MODEL_LOAD_LOCK:
         MODEL_REGISTRY[registry_key] = model
         MODEL_LOAD_STATUS[model_name] = {"state": "ready", "error": None, "updated_at": time.time()}
+        MODEL_LOAD_ERRORS.pop(registry_key, None)
+        event = MODEL_LOAD_EVENTS.pop(registry_key, None)
+        if event is not None:
+            event.set()
     return model
 
 
@@ -1288,6 +1238,246 @@ def resolve_diarization_spk_mode(model: str, requested_spk_mode: str) -> str:
     return normalized_mode
 
 
+def _workflow_transcribe_model(
+    source_path: str,
+    model_config: workflow_service.ModelRunConfig,
+    config: workflow_service.WorkflowConfig,
+    progress_callback,
+) -> dict:
+    """复用模型加载、参数白名单和分段器执行工作流中的一次 ASR。"""
+    load_kwargs = {"punc_mode": model_config.punc_mode}
+    if (
+        config.timestamps.forced_alignment
+        and MODEL_CAPABILITIES.get(model_config.model, {}).get("forced_alignment", False)
+    ):
+        load_kwargs["forced_aligner"] = config.timestamps.aligner_model
+    asr_model = load_model(model_config.model, **load_kwargs)
+    chunks: list[tuple[str, float]] = [(source_path, 0.0)]
+    chunk_dirs: set[str] = set()
+    if config.segmentation.chunk_enabled:
+        from pat_funasr_webui.fine_transcription.transcription_pipeline import (
+            _split_audio_ffmpeg,
+        )
+
+        split_chunks = _split_audio_ffmpeg(
+            source_path,
+            chunk_seconds=config.segmentation.chunk_seconds,
+            overlap_seconds=config.segmentation.overlap_seconds,
+        )
+        if not split_chunks:
+            raise RuntimeError("已启用音频分块，但 FFmpeg 未生成有效分块")
+        chunks = split_chunks
+        chunk_dirs = {str(Path(path).parent) for path, _offset in chunks}
+
+    all_segments: list[list[dict]] = []
+    offsets: list[float] = []
+    total_duration = 0.0
+    try:
+        for index, (chunk_path, offset) in enumerate(chunks, start=1):
+            generate_kwargs = build_generate_kwargs(
+                tmp_path=chunk_path,
+                model=model_config.model,
+                language=model_config.language,
+                hotword=model_config.hotword,
+                use_itn=model_config.use_itn,
+                vad_preset=config.segmentation.vad_preset if config.segmentation.vad_enabled else None,
+                merge_vad=None,
+                merge_length_s=None,
+                batch_size_s=None,
+                batch_size_threshold_s=None,
+                vad_max_single_segment_time=None,
+            )
+            try:
+                generated = asr_model.generate(**generate_kwargs)
+            except KeyError as exc:
+                if str(exc) == "'timestamp'" and "sentence_timestamp" in generate_kwargs:
+                    generate_kwargs.pop("sentence_timestamp", None)
+                    generated = asr_model.generate(**generate_kwargs)
+                else:
+                    raise
+            result0 = generated[0] if generated else {"text": ""}
+            duration_s = segmentation.ffprobe_duration_s(chunk_path)
+            text = clean_text(result0.get("text", ""))
+            segments = segmentation.build_segments(
+                result0=result0,
+                duration_s=duration_s,
+                clean_text=clean_text,
+            )
+            if not segments:
+                segments = [
+                    {
+                        "start": 0.0,
+                        "end": round(duration_s, 3),
+                        "text": text,
+                        "speaker": None,
+                    }
+                ]
+            all_segments.append(segments)
+            offsets.append(offset)
+            total_duration = max(total_duration, offset + duration_s)
+            progress_callback(index, len(chunks), f"分块 {index}/{len(chunks)} 转录完成")
+    finally:
+        for directory in chunk_dirs:
+            shutil.rmtree(directory, ignore_errors=True)
+
+    if len(all_segments) == 1:
+        merged_segments = all_segments[0]
+    else:
+        from pat_funasr_webui.fine_transcription.transcription_pipeline import (
+            _merge_chunk_segments,
+        )
+
+        merged_segments = _merge_chunk_segments(
+            all_segments,
+            offsets,
+            overlap_seconds=config.segmentation.overlap_seconds,
+        )
+    return {
+        "model": model_config.model,
+        "weight": model_config.weight,
+        "language": model_config.language,
+        "duration": round(total_duration, 3),
+        "text": "".join(str(item.get("text") or "") for item in merged_segments),
+        "segments": merged_segments,
+        "chunks": len(chunks),
+    }
+
+
+def _workflow_preprocess(source_path: str, preprocess_config, output_dir: str) -> str:
+    """按显式配置执行 FFmpeg 前处理，并把结果保留在任务目录。"""
+    from pat_funasr_webui.fine_transcription.audio_processor import process_audio
+
+    destination = Path(output_dir).resolve().parent / "processed.wav"
+    processed_path, _before, _after = process_audio(
+        source_path,
+        noise_reduction=preprocess_config.noise_reduction,
+        noise_strength=preprocess_config.noise_strength,
+        sample_rate=preprocess_config.sample_rate,
+        vad_enabled=preprocess_config.silence_mode == "trim_silence",
+        loudnorm=preprocess_config.loudnorm,
+        output_path=str(destination),
+    )
+    return str(processed_path)
+
+
+def _workflow_diarize(source_path: str, diarization_config) -> dict:
+    """生成独立说话人时间轴，后续只按时间重叠对齐到主转录。"""
+    effective_spk_mode = resolve_diarization_spk_mode(
+        diarization_config.asr_model,
+        diarization_config.spk_mode,
+    )
+    load_kwargs = {"spk_model": diarization_config.speaker_model}
+    if diarization_config.asr_model == "sensevoice" and effective_spk_mode == "vad_segment":
+        load_kwargs["punc_mode"] = "disabled"
+    asr_model = load_model(diarization_config.asr_model, **load_kwargs)
+    generate_kwargs = {
+        "input": source_path,
+        "batch_size": 1,
+        "spk_mode": effective_spk_mode,
+        "return_spk_res": True,
+        "output_timestamp": True,
+    }
+    if diarization_config.preset_speaker_count is not None:
+        generate_kwargs["preset_spk_num"] = int(diarization_config.preset_speaker_count)
+    generated = asr_model.generate(**generate_kwargs)
+    return build_diarization_payload(
+        model=diarization_config.asr_model,
+        spk_model=diarization_config.speaker_model,
+        spk_mode=effective_spk_mode,
+        result0=generated[0] if generated else {},
+        duration_s=segmentation.ffprobe_duration_s(source_path),
+    )
+
+
+def _resolve_workflow_llm(stage_config):
+    """将前端选择的 provider profile 与模型解析为可调用配置。"""
+    from pat_funasr_webui.fine_transcription.llm_config import get_llm_by_value
+
+    profile_value = str(stage_config.provider_profile_id or "")
+    selection = profile_value if "|" in profile_value else f"{profile_value}|{stage_config.model}"
+    resolved = get_llm_by_value(selection)
+    if resolved is None:
+        raise RuntimeError(f"LLM provider profile 不存在或模型未启用：{selection}")
+    llm_config, selected_model = resolved
+    if selected_model != stage_config.model:
+        raise RuntimeError("LLM provider profile 与所选模型不一致")
+    return llm_config, selected_model
+
+
+def _workflow_llm_stage(stage_name: str, text: str, stage_config):
+    """调用已配置的 LLM 执行校对、纪要或思维导图。"""
+    from pat_funasr_webui.fine_transcription.summary_processor import (
+        generate_mindmap,
+        generate_summary,
+        refine_transcript,
+    )
+
+    llm_config, selected_model = _resolve_workflow_llm(stage_config)
+    common = {
+        "base_url": llm_config.base_url,
+        "api_key": llm_config.api_key or "no-key",
+        "model": selected_model,
+    }
+    if stage_name == "llm_proofread":
+        prompt = "只校正错别字、同音词、标点和断句，不增删事实，不输出说明。"
+        return refine_transcript(text, prompt, **common)
+    if stage_name == "summary":
+        prompt = "根据转写生成结构化 JSON 纪要，包含 summary、decisions、action_items 和 notes。"
+        return generate_summary(text, prompt, **common)
+    if stage_name == "mindmap":
+        prompt = "根据转写生成 JSON 思维导图，格式为 title 与 children，禁止输出 JSON 之外的内容。"
+        return generate_mindmap(text, prompt, **common)
+    raise RuntimeError(f"未知 LLM 阶段：{stage_name}")
+
+
+def _workflow_translate(text: str, translation_config):
+    model_obj = load_model(translation_config.model)
+    return model_obj.translate(
+        text,
+        translation_config.source_lang,
+        translation_config.target_lang,
+    )
+
+
+def _workflow_emotion(source_path: str, emotion_config) -> dict:
+    emotion_model = load_model(emotion_config.model)
+    generated = emotion_model.generate(
+        input=source_path,
+        granularity=emotion_config.granularity,
+        extract_embedding=False,
+    )
+    result0 = generated[0] if generated else {}
+    if emotion_config.model == "sensevoice":
+        return build_sensevoice_emotion_payload(
+            model=emotion_config.model,
+            raw_text=str(result0.get("text", "") or ""),
+        )
+    return build_emotion_payload(
+        model=emotion_config.model,
+        granularity=emotion_config.granularity,
+        result0=result0,
+    )
+
+
+WORKFLOW_RUNTIME = workflow_runner.WorkflowRuntime(
+    transcribe=_workflow_transcribe_model,
+    preprocess=_workflow_preprocess,
+    diarize=_workflow_diarize,
+    llm_stage=_workflow_llm_stage,
+    translate=_workflow_translate,
+    emotion=_workflow_emotion,
+    write_artifacts=artifact_service.write_workflow_artifacts,
+)
+
+
+def _run_workflow_job(context: workflow_service.WorkflowRunContext) -> dict:
+    """API 默认真实工作流执行器。"""
+    return workflow_runner.run_workflow(context, WORKFLOW_RUNTIME)
+
+
+WORKFLOW_RUNNER = _run_workflow_job
+
+
 @app.post("/v1/audio/transcriptions")
 async def transcribe(
     file: UploadFile = File(...),
@@ -1336,6 +1526,14 @@ async def transcribe(
             status_code=400,
             detail=f"Model '{model}' not found. Available: {list(MODEL_CONFIGS.keys())}"
         )
+    if model not in OFFLINE_ASR_MODELS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Model '{model}' does not support offline transcription. "
+                f"Offline ASR models: {sorted(OFFLINE_ASR_MODELS)}"
+            ),
+        )
 
     allowed_formats = {"json", "verbose_json", "txt", "srt", "vtt", "tsv", "all"}
     if response_format not in allowed_formats:
@@ -1355,21 +1553,19 @@ async def transcribe(
             detail=f"Unsupported punc_mode '{punc_mode}'. Allowed: {sorted(VALID_PUNC_MODES)}",
         )
 
-    # Save uploaded file (with size limit)
+    # 分块保存上传文件，在写入过程中执行上限，避免整文件先进入内存。
     trace_id = uuid.uuid4().hex
-    MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024  # 2 GB
-    suffix = os.path.splitext(file.filename)[1] if file.filename else ".wav"
-    content = await file.read()
-    if len(content) > MAX_UPLOAD_BYTES:
-        raise HTTPException(
-            status_code=413,
-            detail=f"Upload too large: {len(content)} bytes exceeds limit of {MAX_UPLOAD_BYTES} bytes",
-        )
-
     with tempfile.TemporaryDirectory() as tmpdir:
-        tmp_path = os.path.join(tmpdir, f"upload{suffix}")
-        with open(tmp_path, "wb") as f:
-            f.write(content)
+        try:
+            tmp_path, upload_bytes = await media_service.save_upload_file(
+                file,
+                tmpdir,
+                max_bytes=MAX_UPLOAD_BYTES,
+            )
+        except media_service.UploadTooLargeError as exc:
+            raise HTTPException(status_code=413, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"读取上传文件失败：{exc}") from exc
 
         _dbg_report(
             hypothesis_id="D",
@@ -1380,22 +1576,25 @@ async def transcribe(
                 "model": model,
                 "response_format": response_format,
                 "filename": getattr(file, "filename", ""),
-                "upload_bytes": len(content) if content is not None else 0,
+                "upload_bytes": upload_bytes,
                 "tmp_bytes": os.path.getsize(tmp_path) if os.path.exists(tmp_path) else 0,
             },
         )
 
         try:
             try:
-                asr_model = load_model(
-                    model,
-                    device=device,
-                    hub=hub,
-                    disable_update=disable_update,
-                    ncpu=ncpu,
-                    log_level=log_level,
-                    disable_pbar=disable_pbar,
-                    punc_mode=punc_mode,
+                asr_model = await run_in_threadpool(
+                    partial(
+                        load_model,
+                        model,
+                        device=device,
+                        hub=hub,
+                        disable_update=disable_update,
+                        ncpu=ncpu,
+                        log_level=log_level,
+                        disable_pbar=disable_pbar,
+                        punc_mode=punc_mode,
+                    )
                 )
             except ValueError as ve:
                 raise HTTPException(status_code=400, detail=str(ve))
@@ -1440,11 +1639,11 @@ async def transcribe(
                 },
             )
             try:
-                result = asr_model.generate(**generate_kwargs)
+                result = await run_in_threadpool(partial(asr_model.generate, **generate_kwargs))
             except KeyError as ke:
                 if str(ke) == "'timestamp'" and "sentence_timestamp" in generate_kwargs:
                     generate_kwargs.pop("sentence_timestamp", None)
-                    result = asr_model.generate(**generate_kwargs)
+                    result = await run_in_threadpool(partial(asr_model.generate, **generate_kwargs))
                 else:
                     raise
             elapsed = time.time() - t0
@@ -1518,6 +1717,8 @@ async def transcribe(
 
             return JSONResponse({"text": text})
 
+        except HTTPException:
+            raise
         except Exception as e:
             logger.error(f"Transcription error: {e}")
             raise HTTPException(status_code=500, detail=str(e))
@@ -1546,7 +1747,12 @@ async def transcribe_streaming(
         )
 
     try:
-        chunk = await file.read()
+        chunk = await media_service.read_upload_bytes_limited(
+            file,
+            max_bytes=MAX_STREAM_CHUNK_BYTES,
+        )
+    except media_service.UploadTooLargeError as exc:
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"读取上传分片失败：{exc}") from exc
     if not chunk:
@@ -1566,15 +1772,18 @@ async def transcribe_streaming(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     try:
-        asr_model = load_model(model)
+        asr_model = await run_in_threadpool(load_model, model)
         speech_chunk = pcm16_bytes_to_float32_audio(chunk)
-        result = asr_model.generate(
-            input=speech_chunk,
-            cache=state["cache"],
-            is_final=bool(is_final),
-            chunk_size=parsed_chunk_size,
-            encoder_chunk_look_back=int(encoder_chunk_look_back),
-            decoder_chunk_look_back=int(decoder_chunk_look_back),
+        result = await run_in_threadpool(
+            partial(
+                asr_model.generate,
+                input=speech_chunk,
+                cache=state["cache"],
+                is_final=bool(is_final),
+                chunk_size=parsed_chunk_size,
+                encoder_chunk_look_back=int(encoder_chunk_look_back),
+                decoder_chunk_look_back=int(decoder_chunk_look_back),
+            )
         )
         text = clean_text(result[0].get("text", "")) if result else ""
         state["full_text"] = merge_streaming_text(state.get("full_text", ""), text)
@@ -1622,20 +1831,27 @@ async def recognize_emotion(
             detail="Unsupported granularity. Allowed: ['frame', 'utterance']",
         )
 
-    suffix = os.path.splitext(file.filename)[1] if file.filename else ".wav"
-    content = await file.read()
-
     with tempfile.TemporaryDirectory() as tmpdir:
-        tmp_path = os.path.join(tmpdir, f"upload{suffix}")
-        with open(tmp_path, "wb") as f:
-            f.write(content)
+        try:
+            tmp_path, _upload_bytes = await media_service.save_upload_file(
+                file,
+                tmpdir,
+                max_bytes=MAX_UPLOAD_BYTES,
+            )
+        except media_service.UploadTooLargeError as exc:
+            raise HTTPException(status_code=413, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"读取上传文件失败：{exc}") from exc
 
         try:
-            emotion_model = load_model(model)
-            result = emotion_model.generate(
-                input=tmp_path,
-                granularity=granularity,
-                extract_embedding=False,
+            emotion_model = await run_in_threadpool(load_model, model)
+            result = await run_in_threadpool(
+                partial(
+                    emotion_model.generate,
+                    input=tmp_path,
+                    granularity=granularity,
+                    extract_embedding=False,
+                )
             )
             result0 = result[0] if result else {}
             if model == "sensevoice":
@@ -1682,13 +1898,17 @@ async def recognize_diarization(
             detail="Unsupported spk_mode. Allowed: ['default', 'punc_segment', 'vad_segment']",
         )
 
-    suffix = os.path.splitext(file.filename)[1] if file.filename else ".wav"
-    content = await file.read()
-
     with tempfile.TemporaryDirectory() as tmpdir:
-        tmp_path = os.path.join(tmpdir, f"upload{suffix}")
-        with open(tmp_path, "wb") as f:
-            f.write(content)
+        try:
+            tmp_path, _upload_bytes = await media_service.save_upload_file(
+                file,
+                tmpdir,
+                max_bytes=MAX_UPLOAD_BYTES,
+            )
+        except media_service.UploadTooLargeError as exc:
+            raise HTTPException(status_code=413, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"读取上传文件失败：{exc}") from exc
 
         try:
             duration_s = segmentation.ffprobe_duration_s(tmp_path)
@@ -1697,7 +1917,7 @@ async def recognize_diarization(
             # SenseVoice 说话人分离在 vad_segment 下仍加载 punc_model 时，可能触发时间戳异常。
             if model == "sensevoice" and effective_spk_mode == "vad_segment":
                 load_kwargs["punc_mode"] = "disabled"
-            asr_model = load_model(model, **load_kwargs)
+            asr_model = await run_in_threadpool(partial(load_model, model, **load_kwargs))
             generate_kwargs = {
                 "input": tmp_path,
                 "batch_size": 1,
@@ -1707,7 +1927,7 @@ async def recognize_diarization(
             }
             if preset_spk_num is not None:
                 generate_kwargs["preset_spk_num"] = int(preset_spk_num)
-            result = asr_model.generate(**generate_kwargs)
+            result = await run_in_threadpool(partial(asr_model.generate, **generate_kwargs))
             result0 = result[0] if result else {}
             payload = build_diarization_payload(
                 model=model,
@@ -1722,6 +1942,168 @@ async def recognize_diarization(
         except Exception as exc:
             logger.error(f"Diarization error: {exc}")
             raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+def _parse_workflow_payload(raw: str | dict) -> workflow_service.WorkflowConfig:
+    """解析 HTTP 请求中的 workflow JSON。"""
+    try:
+        payload = json.loads(raw) if isinstance(raw, str) else raw
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail=f"workflow JSON 解析失败：{exc.msg}") from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="workflow JSON 必须是对象")
+    try:
+        return workflow_service.parse_workflow_config(payload)
+    except workflow_service.WorkflowConfigError as exc:
+        raise HTTPException(status_code=400, detail=f"workflow JSON 不符合 schema：{exc}") from exc
+
+
+@app.post("/v1/funasr/workflows/validate")
+async def validate_workflow(payload: dict):
+    """校验工作流 schema、模型能力与跨阶段依赖。"""
+    try:
+        config = workflow_service.parse_workflow_config(payload)
+    except workflow_service.WorkflowConfigError as exc:
+        return JSONResponse(
+            {
+                "valid": False,
+                "errors": [
+                    {
+                        "code": "WORKFLOW_SCHEMA_INVALID",
+                        "path": "workflow",
+                        "message": str(exc),
+                    }
+                ],
+                "warnings": [],
+                "normalized": None,
+            }
+        )
+    errors, warnings = workflow_service.validate_workflow_config(
+        config,
+        MODEL_CAPABILITIES,
+    )
+    return JSONResponse(
+        {
+            "valid": not errors,
+            "errors": errors,
+            "warnings": warnings,
+            "normalized": workflow_service.workflow_config_to_dict(config),
+        }
+    )
+
+
+@app.post("/v1/funasr/workflows")
+async def submit_workflow(
+    file: UploadFile = File(...),
+    workflow: str = Form(...),
+):
+    """提交显式精细转录工作流，返回异步任务 ID。"""
+    config = _parse_workflow_payload(workflow)
+    errors, warnings = workflow_service.validate_workflow_config(
+        config,
+        MODEL_CAPABILITIES,
+    )
+    if errors:
+        raise HTTPException(
+            status_code=400,
+            detail={"message": "workflow 配置校验失败", "errors": errors, "warnings": warnings},
+        )
+
+    _cleanup_workflow_temp_dirs()
+    upload_dir = WORKFLOW_TEMP_ROOT / f"pending_{uuid.uuid4().hex}"
+    try:
+        source_path, upload_bytes = await media_service.save_upload_file(
+            file,
+            upload_dir,
+            max_bytes=MAX_UPLOAD_BYTES,
+        )
+    except media_service.UploadTooLargeError as exc:
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"读取上传文件失败：{exc}") from exc
+
+    config_snapshot = workflow_service.workflow_config_to_dict(config)
+    job_id = WORKFLOW_MANAGER.submit(
+        config=config_snapshot,
+        source_path=source_path,
+        runner=WORKFLOW_RUNNER,
+    )
+    return JSONResponse(
+        {
+            "job_id": job_id,
+            "status": "queued",
+            "upload_bytes": upload_bytes,
+            "warnings": warnings,
+            "status_url": f"/v1/funasr/workflows/{job_id}",
+            "events_url": f"/v1/funasr/workflows/{job_id}/events",
+        },
+        status_code=202,
+    )
+
+
+@app.get("/v1/funasr/workflows")
+async def list_workflows():
+    """列出当前进程内工作流任务，供模型与服务页展示队列。"""
+    return JSONResponse({"object": "list", "data": WORKFLOW_MANAGER.list_snapshots()})
+
+
+@app.get("/v1/funasr/workflows/{job_id}")
+async def get_workflow(job_id: str):
+    """获取任务和完整事件快照。"""
+    try:
+        return JSONResponse(WORKFLOW_MANAGER.get_snapshot(job_id))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"Workflow job not found: {job_id}") from exc
+
+
+@app.get("/v1/funasr/workflows/{job_id}/events")
+async def get_workflow_events(job_id: str, after_event_id: int = 0):
+    """获取指定事件之后的追加日志；前端可轮询，后续可复用为 SSE 数据源。"""
+    try:
+        snapshot = WORKFLOW_MANAGER.get_snapshot(job_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"Workflow job not found: {job_id}") from exc
+    events = [
+        event
+        for event in snapshot.get("events", [])
+        if int(event.get("event_id", 0)) > int(after_event_id)
+    ]
+    return JSONResponse(
+        {
+            "object": "list",
+            "job_id": job_id,
+            "status": snapshot["status"],
+            "data": events,
+        }
+    )
+
+
+@app.post("/v1/funasr/workflows/{job_id}/cancel")
+async def cancel_workflow(job_id: str):
+    """请求取消工作流任务。"""
+    try:
+        return JSONResponse(WORKFLOW_MANAGER.cancel(job_id))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"Workflow job not found: {job_id}") from exc
+
+
+@app.get("/v1/funasr/workflows/{job_id}/artifacts/{artifact_name}")
+async def download_workflow_artifact(job_id: str, artifact_name: str):
+    """下载任务声明的产物；仅允许访问结果清单中的精确文件。"""
+    try:
+        snapshot = WORKFLOW_MANAGER.get_snapshot(job_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"Workflow job not found: {job_id}") from exc
+    if Path(artifact_name).name != artifact_name:
+        raise HTTPException(status_code=400, detail="Invalid artifact name")
+    artifacts = (snapshot.get("result") or {}).get("artifacts") or []
+    artifact = next((item for item in artifacts if item.get("name") == artifact_name), None)
+    if artifact is None:
+        raise HTTPException(status_code=404, detail=f"Artifact not found: {artifact_name}")
+    path = Path(str(artifact.get("path") or "")).resolve()
+    if not path.is_file():
+        raise HTTPException(status_code=410, detail=f"Artifact expired or missing: {artifact_name}")
+    return FileResponse(path=str(path), filename=artifact_name)
 
 
 def _is_model_downloaded(model_name: str) -> bool:
@@ -1850,7 +2232,7 @@ async def preload_model(model: str):
             detail=f"Model '{model}' not found. Available: {list(MODEL_CONFIGS.keys())}",
         )
     try:
-        load_model(model)
+        await run_in_threadpool(load_model, model)
         return JSONResponse(_model_load_state(model))
     except Exception as exc:
         logger.error(f"Model preload error: {exc}")
@@ -1908,7 +2290,7 @@ async def translate_text(req: TranslationRequest):
         )
 
     try:
-        model_obj = load_model(req.model)
+        model_obj = await run_in_threadpool(load_model, req.model)
     except Exception as exc:
         logger.error(f"Failed to load translation model '{req.model}': {exc}")
         raise HTTPException(status_code=500, detail=f"Failed to load model: {exc}")
@@ -1922,11 +2304,14 @@ async def translate_text(req: TranslationRequest):
         if "max_length" in sig.parameters:
             kwargs["max_length"] = req.max_length
 
-        translated = model_obj.translate(
-            req.text,
-            req.source_lang,
-            req.target_lang,
-            **kwargs
+        translated = await run_in_threadpool(
+            partial(
+                model_obj.translate,
+                req.text,
+                req.source_lang,
+                req.target_lang,
+                **kwargs,
+            )
         )
         return {"translated_text": translated}
     except Exception as exc:
@@ -1949,6 +2334,73 @@ async def health():
         "models_loaded": _loaded_model_names(),
         "models_available": list(MODEL_CONFIGS.keys()),
     }
+
+
+def _resource_status() -> dict:
+    """以可选依赖采集 CPU、内存与 GPU 状态；无法采集时明确标记 unavailable。"""
+    resources = {
+        "cpu": {"available": False},
+        "memory": {"available": False},
+        "gpu": {"available": False},
+    }
+    try:
+        import psutil
+
+        virtual_memory = psutil.virtual_memory()
+        resources["cpu"] = {
+            "available": True,
+            "percent": float(psutil.cpu_percent(interval=None)),
+            "logical_count": psutil.cpu_count(logical=True),
+        }
+        resources["memory"] = {
+            "available": True,
+            "total_bytes": int(virtual_memory.total),
+            "available_bytes": int(virtual_memory.available),
+            "percent": float(virtual_memory.percent),
+        }
+    except Exception as exc:
+        resources["cpu"]["reason"] = str(exc)
+        resources["memory"]["reason"] = str(exc)
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            index = torch.cuda.current_device()
+            resources["gpu"] = {
+                "available": True,
+                "device": torch.cuda.get_device_name(index),
+                "allocated_bytes": int(torch.cuda.memory_allocated(index)),
+                "reserved_bytes": int(torch.cuda.memory_reserved(index)),
+                "total_bytes": int(torch.cuda.get_device_properties(index).total_memory),
+            }
+        else:
+            resources["gpu"]["reason"] = "CUDA unavailable"
+    except Exception as exc:
+        resources["gpu"]["reason"] = str(exc)
+    return resources
+
+
+@app.get("/v1/runtime/status")
+async def runtime_status():
+    """返回模型、运行资源和工作流队列的统一状态。"""
+    return JSONResponse(
+        {
+            "status": "ok",
+            "device": DEVICE,
+            "uptime_seconds": max(0, int(time.time()) - SERVER_START_EPOCH),
+            "resources": _resource_status(),
+            "models": {
+                "loaded": _loaded_model_names(),
+                "loading": sorted(
+                    name
+                    for name, state in MODEL_LOAD_STATUS.items()
+                    if state.get("state") == "loading"
+                ),
+                "available": len(MODEL_CONFIGS),
+            },
+            "workflow_queue": WORKFLOW_MANAGER.queue_summary(),
+        }
+    )
 
 
 def main():

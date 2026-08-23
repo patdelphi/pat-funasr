@@ -1,4 +1,4 @@
-"""
+﻿"""
 程序说明：
 模型预下载脚本（使用 FunASR AutoModel 触发下载并缓存到本地）。
 
@@ -19,35 +19,16 @@ import traceback
 from pathlib import Path
 
 
-MODEL_CONFIGS = {
-    "sensevoice": {
-        "model": "iic/SenseVoiceSmall",
-        "vad_model": "fsmn-vad",
-        "vad_kwargs": {"max_single_segment_time": 30000},
-        "hub": "ms",
-    },
-    "paraformer": {
-        "model": "paraformer-zh",
-        "vad_model": "fsmn-vad",
-        "punc_model": "ct-punc",
-        "hub": "ms",
-    },
-    "fun-asr-nano": {
-        "model": "FunAudioLLM/Fun-ASR-Nano-2512",
-        "hub": "ms",
-        "trust_remote_code": False,
-        "vad_model": "fsmn-vad",
-        "vad_kwargs": {"max_single_segment_time": 30000},
-    },
-    "qwen3-asr": {
-        "model": "Qwen/Qwen3-ASR-1.7B",
-        "hub": "ms",
-        "trust_remote_code": False,
-        "dtype": "fp16",
-        "vad_model": "fsmn-vad",
-        "vad_kwargs": {"max_single_segment_time": 30000},
-    },
-}
+_APP_DIR = Path(__file__).resolve().parents[1] / "app"
+if str(_APP_DIR) not in sys.path:
+    sys.path.insert(0, str(_APP_DIR))
+
+from model_catalog import get_model_configs
+
+
+MODEL_CONFIGS = get_model_configs(
+    ("sensevoice", "paraformer", "fun-asr-nano", "qwen3-asr")
+)
 
 
 def _print(msg: str) -> None:

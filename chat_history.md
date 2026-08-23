@@ -872,7 +872,7 @@ Chat History
 - 已修复后端启动稳定性：`app/openai_api/server.py` 启动时会自动把自身目录加入 `sys.path`，避免 `renderers` 等同目录模块找不到
 - 已新增 B5 回归脚本：`aipython/asr_b5_regression.py`，支持自定义 formats，便于做正向/异常回归
 - 已新增测试：`tests/test_aipython_asr_b5_regression.py`
- 
+
 ## 2026-06-08 17:26:24
 
 ### User
@@ -2490,7 +2490,7 @@ http://127.0.0.1:8000/mic-stream  先搞定这个页面，有时候可以有时�
 
 ## 2026-06-10 16:20:25 +08:00 User
 
-1. 暗色主题也显示白色吗？ 
+1. 暗色主题也显示白色吗？
  2 实时 峰值、RMS、分片整和在一行显示.
 3. 还有竖向滚动条，你就不能整个竖向排布好，为啥一定在一个固定高度容器里？你重新排版，对齐左边最下面下载结果的下边位置
 
@@ -2560,7 +2560,7 @@ http://127.0.0.1:8000/mic-stream  先搞定这个页面，有时候可以有时�
 
 ## 2026-06-10 19:32:10 +08:00 Assistant
 
-处理“可以收声但没有识别结果显示”：实测后端 /v1/funasr/streaming 可返回文本，定位到前端实时分片可能并发发送导致 
+处理“可以收声但没有识别结果显示”：实测后端 /v1/funasr/streaming 可返回文本，定位到前端实时分片可能并发发送导致
 eset=true 重复重置 session，且前端只在 ull_text truthy 时更新。已改为串行发送队列、按字段存在更新识别框，并增加空返回日志提示。测试通过，实际 HTML/JS 已验证并重启 API。
 
 ## 2026-06-10 19:39:41 +08:00 User
@@ -2581,7 +2581,7 @@ eset=true 重复重置 session，且前端只在 ull_text truthy 时更新。�
 
 ## 2026-06-10 20:17:02 +08:00 Assistant
 
-已先提交当前进度 commit 90fff95。随后参考 Gradio 官方 Audio.stream demo、Gradio Audio 文档和实时语音识别教程，新建独立 Gradio FunASR 流式测试页 ipython/gradio_streaming_asr_test.py、启动脚本 
+已先提交当前进度 commit 90fff95。随后参考 Gradio 官方 Audio.stream demo、Gradio Audio 文档和实时语音识别教程，新建独立 Gradio FunASR 流式测试页 ipython/gradio_streaming_asr_test.py、启动脚本
 un_gradio_streaming_asr_test.bat 和测试 	ests/test_aipython_gradio_streaming_asr_test.py。测试通过，API 与 7872 测试页已启动，浏览器已打开 7872。
 
 ## 2026-06-10 20:23:37 +08:00 User
@@ -2853,8 +2853,8 @@ fun-asr-nano trust_remote_code 改为 True，同步 batch_transcribe.py 和测�
 
 1. **专用翻译模型（专注于机器翻译，速度快，支持语种最全）**：
    * **NLLB-200** 系列（Meta）：专门为多语言翻译训练的 Encoder-Decoder 架构，支持 200 种语言。
-     * `nllb-200-distilled-600M`（约 600M 参数，极其省显存/内存，适合极低配置环境）。
-     * `nllb-200-distilled-1.3B`（约 1.3B 参数，翻译质量较 600M 有较好提升，是目前 2B 以内效果最出色的专用翻译模型）。
+     *`nllb-200-distilled-600M`（约 600M 参数，极其省显存/内存，适合极低配置环境）。
+     *`nllb-200-distilled-1.3B`（约 1.3B 参数，翻译质量较 600M 有较好提升，是目前 2B 以内效果最出色的专用翻译模型）。
    * **MarianMT / OPUS-MT 系列**：参数量在 70M~150M，通常是一对一或一对多的超轻量模型，极速，但不算大一统模型。
 
 2. **多语言大模型小尺寸版本（LLM-based，支持通过 Prompt 自定义直译、意译、术语库，效果灵活）**：
@@ -2923,7 +2923,7 @@ fun-asr-nano trust_remote_code 改为 True，同步 batch_transcribe.py 和测�
 2. **高保真段落样式分段**：在 `"app/pat_funasr_webui/translation_utils.py"` 实现了 `translate_text_preserving_paragraphs` 逻辑，优先基于自然段落与空行进行切分和拼接翻译，在文本框翻译或 Markdown 翻译中，100% 完美保持源文本的排版与分段样式。
 3. **中文标点原生支持**：NLLB 翻译模型与 Tokenizer 在目标语言选择中文时，能够原生且精准地输出中文全角标点符号（，。！？）。
 4. **模型参数（高级生成参数）**：
-   - 增加了一个折叠的“高级生成参数”面板。支持在界面可视化调节 `num_beams`（束搜索宽度，默认为 1 / 2-5 支持更精准翻译但速度稍慢）和 `max_length`（最大生成长度，默认 512）。
+   - 增加了一个折叠的“高级生成参数”面板。支持在界面可视化调节`num_beams`（束搜索宽度，默认为 1 / 2-5 支持更精准翻译但速度稍慢）和 `max_length`（最大生成长度，默认 512）。
    - 在 API 路由中引入了 `inspect` 参数检查，完美透传并生效这些高级生成参数，且 100% 保持单元测试 dummy 模型的兼容性。
 5. **文本框加高**：长文本输入框默认加高到 15 行（最大 30 行），翻译结果框默认加高到 20 行（最大 35 行）。
 6. **重启与测试**：全量单元测试已全部通过 (158 passed)，服务已成功在 GPU (CUDA) 下热重启。
@@ -2952,7 +2952,7 @@ fun-asr-nano trust_remote_code 改为 True，同步 batch_transcribe.py 和测�
 已经完成了翻译 Tab 的界面深度排版重构与服务的热重启：
 1. **热重启解决语言未更新**：之前没看到全部语言下拉，是因为虽然修改了代码，但是后台托管的服务进程 `task-634` 并没有重新加载新模块。刚才我已安全地杀掉了该后台进程，并通过 GPU 模式（`FunASR_pat.bat cuda`）重新热拉起了 API & WebUI（已成功运行在 http://127.0.0.1:7861）。现在刷新页面即可完整看到 202 种语言下拉。
 2. **解释模型与推理**：
-   - 刚才没有增加任何新的模型，翻译依然使用的是本地已缓存下载的专有翻译模型 `nllb-200-distilled-600m` 与 `nllb-200-distilled-1.3b`。
+   - 刚才没有增加任何新的模型，翻译依然使用的是本地已缓存下载的专有翻译模型`nllb-200-distilled-600m` 与`nllb-200-distilled-1.3b`。
    - “翻译好了还在跑推理”是因为之前的服务进程在加载过 NLLB 模型后有内存/显存悬挂，或者 pytest 单元测试的残留。现在服务经过完全杀掉并重新启动，悬挂的推理已彻底清理干净。
 3. **参数选择提到最上方（左右分栏）**：
    - 将“翻译模型选择”、“源/目标语言/交换按钮”、“高级生成参数”整合提到左上角 Column。
@@ -3019,7 +3019,7 @@ if "%DEVICE%"=="" set "DEVICE=cuda"
 2. **环境警告清理**：
    - 删除了代码中已废弃的 `TRANSFORMERS_CACHE` 环境变量设置（统一使用 `HF_HOME`）。涉及 `run_api.bat`, `scripts/batch_transcribe.py`, `scripts/prefetch_models.py`, `start_services.py`。
    - 在 `app/openai_api/server.py` NLLB 模型加载时增加了 `warnings.filterwarnings`，屏蔽了由于当前 PyTorch 未编译 Flash Attention 导致的无害 `UserWarning`。
-3. **参数默认值优化**：在 `server.py` 和 `gradio_app.py` 中，将翻译模块的 `num_beams` 默认值和 UI 滑块最大值统一修改为了 5，以便提升生成的翻译质量。
+3. **参数默认值优化**：在 `server.py` 和 `gradio_app.py` 中，将翻译模块的`num_beams` 默认值和 UI 滑块最大值统一修改为了 5，以便提升生成的翻译质量。
 4. **生成文件名丰富元数据**：
    - 修改了 `translation_utils.py`（处理文件翻译）和 `gradio_app.py`（处理纯文本翻译）。
    - 在生成的临时导出文件名中追加了原文件名（若有）、源语言缩写、目标语言缩写及生成时间戳（格式如 `原文件名_en_zh_20260612_170255.txt`），使用户导出的文件更容易追溯和归档。
@@ -3702,3 +3702,193 @@ damo/ 目录下只有 .mdl 元数据文件，不是完整模型。函数检查�
 - app/pat_funasr_webui/fine_transcription/transcription_pipeline.py (新建)
 - app/pat_funasr_webui/gradio_app.py (修改, +精细转录 Tab)
 - Docs/design/oddminutes-integration-plan.md (新建, 融入计划)
+
+## 2026-08-22 13:07:41
+
+**用户请求**：重启前后端
+
+**执行**：
+1. 清理旧进程：	askkill /F /PID 27320（原 7861 Gradio）
+2. 启动 ASR 后端：
+untime\python\python.exe -X utf8 app\openai_api\server.py --model sensevoice --device cuda --port 8000
+   - /health：{"status":"ok","device":"cuda","models_available":[...]} ✅
+   - 端口：127.0.0.1:8000 LISTENING PID=27092
+3. 启动 Gradio 前端：
+untime\python\python.exe -X utf8 app\pat_funasr_webui\gradio_app.py --base-url http://localhost:8000 --port 7861
+   - HTTP 200（643,128 bytes）✅
+   - 端口：127.0.0.1:7861 LISTENING PID=32816
+4. 页面验证（Chrome DevTools）：
+   - 离线识别 Tab 显示「● 当前为后端实时模型列表」→ 前后端通信 OK
+   - 精细转录 Tab 元素齐全：场景/词表/音频上传 + 启用 LLM 优化 + 生成纪要 + 生成思维导图全部默认勾选
+   - Accordion「会议纪要 ▼」「思维导图 ▼」默认展开
+   - Console 0 errors/warnings ✅
+
+**未执行**：未 commit/push；未运行真实 ASR/LLM 长音频推理（请在页面上传音频实测流式体验）
+## 2026-08-22 14:32:04
+
+**用户反馈**：检查一下，怎么还在转录？很久了
+
+**根因定位（查 UI LOG）**：
+- ASR 正常：fun-asr-nano RTF=0.199，chunk_0026 已处理完，/health 200，CPU 正常
+- Gradio UI LOG 最后三行：LLM 调用超时(300s) × 连续 3 次 → 前端假死显示「执行中」，用户以为 ASR 还在转
+- 真实 endpoint 很快（/models 0.4s / chat 1.3s），超时是**大 prompt 推理顶满 300s** 或某块异常，但**旧代码存在 3 个叠加问题**：
+  1) timeout 未拆 connect/read：	imeout=300 单值，DNS/连不通也要等 5min/块
+  2) 无**连续失败熔断**：10 块 × 优化/纪要/思维导图 = 30 次调用，连挂 2 次后第 3+ 次依然每块空等 5min
+  3) LLM 阶段"假流式"：
+efine_transcript_chunked 用闭包收集事件，**全部块结束后一次性 yield**，前端 progress 只有 LLM 二次优化中... 一行，用户看不到块号也看不出卡哪步
+
+**修复代码（4 处）**：
+
+1. [summary_processor.py](file:///y:/NewStore/AI/pat-funasr/app/pat_funasr_webui/fine_transcription/summary_processor.py)
+   - call_llm timeout 拆分：	imeout=(connect=10s, read=300s)，ConnectTimeout/ReadTimeout 分情况日志
+   - 全局熔断器 _fuse_state：同一 (base_url, model) 连续失败 ≥2 次 → 5min 内直接短路返回空串，logger 输出「LLM 熔断激活 剩余Xs」
+   - 新增 *_streaming 生成器：
+efine_transcript_streaming(chunk_start/piece_done/done)、generate_summary_streaming(chunk_start/chunk_done/agg_start/done)、generate_mindmap_streaming(chunk_start/chunk_done/agg_start/done)，每块开始/结束都产出事件；旧同步函数
+efine_transcript / generate_summary / generate_mindmap 内部遍历 streaming 生成器，保持向后兼容
+
+2. [transcription_pipeline.py](file:///y:/NewStore/AI/pat-funasr/app/pat_funasr_webui/fine_transcription/transcription_pipeline.py)
+   - 删除旧
+efine_transcript_chunked（闭包收集，流式名存实亡）和旧 generate_mindmap_full
+   - 步骤 3 LLM refine：迭代
+efine_transcript_streaming，每块前 yield progress(0.50~0.68, "🧠 LLM 优化 第 N/Tot 块中")，块后 yield llm_refine 推送累积润色文本；失败 yield warning + progress "跳过(空结果)"
+   - 步骤 4 纪要：迭代 generate_summary_streaming，每块前 progress(0.70~0.82) + 块后立即 yield 阶段性 summary 到 UI（不是等全部结束）
+   - 步骤 5 思维导图：迭代 generate_mindmap_streaming，每块前 progress(0.84~0.94) + 块后立即 yield 阶段性 mindmap
+
+3. [gradio_app.py](file:///y:/NewStore/AI/pat-funasr/app/pat_funasr_webui/gradio_app.py#L3739-L3953)
+   - 新增 warnings_log 列表 + _status_with_warnings()：progress / asr_chunk / llm_refine / summary / mindmap / error / final 全部 status 追加警告文本
+   - 新增 stage == "warning" 分支：[优化 1/5] / [纪要 2/3] / [思维导图 1/2] 格式标签，超 12 条自动截断，避免执行状态文本框撑爆
+   - summary / mindmap 阶段状态改为「📝 纪要生成中(阶段性结果)」「🗺️ 思维导图生成中(阶段性结果)」
+
+**验证**：
+- 3 文件 py_compile.compile(doraise=True) 通过
+- 熔断单元：坏 endpoint 连续失败 2 次 → 第 3 次 **elapsed=0.0s** 短路返回空串 ✅
+- 正常 LLM sanity：1.4s 返回 OK2 ✅
+- streaming 分块：21693 字文本 → refine 拆 5 块（start 1/5 事件正确触发）
+- 重启 Gradio PID 50732：HTTP 200 (643,124 bytes)，8000/7861 双端口 LISTENING ✅
+
+**未执行**：未 commit & push（等你确认）；未跑完 21693 字完整 streaming 冒烟（中途为了尽早重启 Gradio 而中断，分块 start 1/5 事件已验证发出，熔断与快速失败已独立断言通过）
+
+## 2026-08-23 15:15:49 +08:00
+
+### 用户
+
+检查一下项目，看看有哪些可以优化、升级，哪些有问题需要修正。
+
+### Codex
+
+判定为复杂项目审查。先只读盘点目录和 Git 状态，在 `todo.md` 追加审查范围、假设、步骤、输出路径与验收标准；等待用户确认后再正式审查。当前阶段不运行项目、不联网、不安装依赖、不修改业务代码，并保留工作区已有未提交修改。
+
+## 2026-08-23 项目审查执行确认
+
+### 用户
+
+执行。
+
+### Codex
+
+开始执行已登记的审查计划。用户未单独确认联网，因此先做离线审查；运行语法检查与现有测试以验证语法、导入及回归状态，不安装依赖、不调用外部服务、不修改业务代码，并将依赖最新版本标记为未联网核验。
+
+### 审查完成
+
+- 输出：`Docs/project-audit-20260823.md`。
+- 结论：1 个 P0、8 个 P1，以及依赖、测试、临时文件、文档、格式和架构方面的 P2/P3 改进项。
+- 验证：Python `compileall` 通过；项目 JSON 3/3 通过；全量测试 166 通过、1 失败、1 警告。
+- 关键复现：参数 400 被包装为 500；300 秒超时场景熔断第三次仍发请求；markmap 大小写 `</script>` 绕过且 iframe 无 sandbox。
+- 运行态：API 8000 与 Pat WebUI 7861 均来自当前工作区便携 Python，并仅监听 127.0.0.1。
+- 未执行：未联网、未升级/安装依赖、未构建 Docker、未调用真实模型/LLM、未修改业务代码、未执行 Git 写操作或部署。
+
+## 2026-08-23 16:05:43 +08:00
+
+### 用户
+
+先忽略或删除 Docker 镜像；为其他修正项制作规划文档，并分析多个前端 Tab 是否可合并后端接口/功能模块、会议精细转录说话人识别、一次性转写+说话人分离，以及多模型转录校对方案。
+
+### Codex
+
+将 Docker 设为本轮忽略项，不执行删除。已只读盘点 8 个前端 Tab 和 10 个后端路由，确认精细转录当前只调用普通转写接口，场景模板的 `diarization=True` 不会触发现有说话人分离端点。先在 `todo.md` 登记接口整合、模块复用、speaker 对齐和多模型校对的详细规划范围，等待用户确认后输出 `Docs/backend-consolidation-and-fine-transcription-plan-20260823.md`。
+
+## 2026-08-23 16:08:02 +08:00
+
+### 用户
+
+精细化选型需要把全部可选流程列在前端供用户选择；多模型转录也由用户自己选择模型。
+
+### Codex
+
+已将产品原则补入规划：所有流程阶段显式可选；采用“推荐预设 + 高级自定义”；用户指定主转录模型和校对模型；前端展示能力、资源和加载状态并做依赖联动；执行前展示完整 workflow 摘要；后端只校验和执行显式配置，不静默启用高成本步骤。
+
+## 2026-08-23 16:12:33 +08:00
+
+### 用户
+
+询问后端整合与精细转录工作到底按目标规划文档还是按 `todo.md` 执行。
+
+### Codex
+
+明确两者分工：`todo.md` 只负责登记范围、步骤和进度；`Docs/backend-consolidation-and-fine-transcription-plan-20260823.md` 是本专项正式规划交付物和后续开发依据。规划确认后，再将获批实施项同步回 `todo.md` 跟踪，避免两套计划冲突。
+
+## 2026-08-23 16:25:17 +08:00
+
+### 用户
+
+确认执行后端能力整合、精细转录、说话人识别和多模型校对的正式规划。
+
+### Codex
+
+已完成 `Docs/backend-consolidation-and-fine-transcription-plan-20260823.md`：盘点 8 个 Tab 与现有端点，确定“保留兼容/专用端点 + 共享服务 + 新增显式 workflow 编排层”；规划将前端逐步收敛为 4 个入口，并完整列出所有可选阶段、模型角色、依赖联动和运行前摘要。确认当前精细转录未调用 diarization，且前处理动态导入错误会被静默回退；给出全局 speaker 对齐、多模型时间轴校对、受约束 LLM、实施顺序、测试和验收标准。本轮未修改业务代码、数据库或 Docker。
+
+## 2026-08-23 16:31:12 +08:00
+
+### 用户
+
+要求转录模块增加实时状态窗口，持续反馈系统执行进度和报错信息；并重新整理当前较混乱的“模型与服务”模块。
+
+### Codex
+
+将两项需求登记为正式规划补充修订：转录状态中心采用总体进度、当前阶段/模型、追加式事件日志、错误码、重试/取消和日志导出；“模型与服务”拆分为服务概览、模型管理、运行资源、任务队列、诊断与日志五个区域。等待确认后修订正式规划文档，本阶段不修改业务代码。
+
+## 2026-08-23 16:35:28 +08:00
+
+### 用户
+
+确认执行文档修订，并要求随后直接开始开发、阶段性测试后继续，直至完成；创建持续目标。
+
+### Codex
+
+已创建持续开发目标。正式规划文档已补充转录实时状态中心、统一 job/stage event 协议、错误与重试规则，以及“模型与服务”五区信息架构。下一步按测试先行进入正确性修复和共享能力实施；不处理 Docker、不联网下载模型、不部署，数据库迁移如确有需要将单独确认。
+
+## 2026-08-23 17:31:40 +08:00
+
+### 用户
+
+要求按持续目标执行：更新文档后直接开发，阶段性测试并继续，直至完成。
+
+### Codex
+
+已完成非 Docker 范围的后端能力整合与精细转录首版开发：统一模型/上传/任务/事件/对齐/校对/产物能力，接入真实异步工作流；精细转录前端列出全部可选流程和模型角色并增加实时状态错误窗口；模型与服务页重组为五区。修复长音频重复、LLM 熔断计时、思维导图脚本注入/CDN、同步推理阻塞和临时目录 TTL。全量测试 212 项与 3 个子测试通过，compileall 通过；未执行 Docker、联网、模型下载、数据库迁移、部署或 Git 写操作，真实音频质量基线因仓库无标注语料待后续验收。
+
+## 2026-08-23 17:52:33 +08:00
+
+### Codex
+
+收尾核对发现仓库存在 65 分钟真实 AAC，补做 60 秒隔离端口真实工作流冒烟。首次任务在 diarization 阶段暴露便携运行时缺少 sklearn 导致 `ClusterBackend` 未定义；先增加失败测试，再加入 NumPy 余弦相似度与 K-Means 后备聚类，并让主模型、VAD、标点和 speaker 模型优先解析本地 ModelScope 缓存。复测完成 SenseVoice 主转录、Paraformer 校对、加权共识、Paraformer+CAM++ speaker 时间轴、对齐、17 条事件和 4 个产物；单说话人样本输出 speaker 0。全量回归更新为 214 项与 3 个子测试通过。首次旧加载逻辑刷新了 3 个 README 元数据文件；修复后复测日志无下载记录。多说话人质量指标仍需人工标注集。
+
+## 2026-08-23 18:14:02 +08:00
+
+### 用户
+
+要求对本轮开发结果再次进行代码审查。
+
+### Codex
+
+完成只读复核并重跑全量测试（214 passed，3 subtests passed）。发现当前仍有高优先级缺口：多模型校对只为每个主段取一个最大重叠 reviewer 段且按规范化文本全等聚合，真实产物 12/12 段均只选回主模型；若 speaker 嵌入少于 20，预设说话人数被忽略并固定输出 speaker 0；多个前端选项仅进入配置快照而未驱动算法；远程 API 产物下载读取后端绝对路径且状态接口泄露该路径；模型缺失时仍可能静默下载或执行模型 requirements；音字联动内联 JSON 未转义 `</script>`；事件产物缺少最后两条成功事件；CI 最小依赖遗漏 torch/scipy。另有 Paraformer 校对与 diarization 重复加载、LLM 校对结果与导出不一致、任务/事件不清理等次级问题。本轮未修改业务代码。
+
+## 2026-08-23 18:18:12 +08:00
+
+### 用户
+
+要求先提交当前已完成的基线，然后继续修复二次复核发现的问题。
+
+### Codex
+
+将先提交当前已通过回归与真实短音频冒烟的实现，不执行 push；随后更新 `todo.md`，按正确性、安全与远程模式、状态资源与 CI 三阶段继续开发和验证。

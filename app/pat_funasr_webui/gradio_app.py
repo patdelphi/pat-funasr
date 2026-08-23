@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 程序说明：
 Pat WebUI 前端入口。
@@ -33,6 +33,7 @@ import subprocess
 import importlib.util
 
 import numpy as np
+import requests
 
 CURRENT_DIR = Path(__file__).resolve().parent
 if str(CURRENT_DIR) not in sys.path:
@@ -82,10 +83,11 @@ from fine_transcription.audio_processor import (
 )
 from fine_transcription.scene_templates import SCENE_CHOICES, get_template
 from fine_transcription.transcription_pipeline import (
-    run_pipeline, format_transcript_text, format_summary_display, export_result,
+    run_pipeline, run_pipeline_streaming, format_transcript_text, format_summary_display, export_result,
 )
 from fine_transcription.audio_sync_js import get_audio_sync_html, get_markmap_html
 from fine_transcription.llm_config import get_llm_choices, get_default_llm_value, get_llm_by_value
+from workflow_ui import build_workflow_config, render_workflow_events
 
 DEFAULT_BASE_URL = "http://localhost:8000"
 DEFAULT_PREVIEW_FORMAT = "txt"
@@ -432,6 +434,30 @@ APP_CSS = """
   transform: scaleY(3);
   transform-origin: center center;
 }
+
+/* 修复 Gradio Audio 组件滚动条遮挡时间显示 */
+.gr-audio audio-container,
+.gr-audio .audio-container,
+.audio-container {
+    overflow: visible !important;
+    padding-bottom: 18px !important;
+}
+
+.gr-audio .time,
+.gr-audio .time-wrap,
+.audio-container .time {
+    z-index: 10 !important;
+    position: relative !important;
+}
+
+.gr-audio .slider,
+.gr-audio input[type="range"] {
+    z-index: 1 !important;
+}
+
+.ft-audio-player .audio-container {
+    padding-bottom: 20px !important;
+}
 """
 
 
@@ -605,6 +631,56 @@ def post_json(url: str, timeout: float) -> dict:
     )
     with open_url(request, timeout) as response:
         return json.loads(response.read().decode("utf-8", errors="replace"))
+
+
+def post_json_payload(url: str, payload: dict, timeout: float) -> dict:
+    """发送 JSON 请求并返回 JSON；用于工作流预校验。"""
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    request = urllib.request.Request(
+        url,
+        data=body,
+        method="POST",
+        headers={"Accept": "application/json", "Content-Type": "application/json"},
+    )
+    with open_url(request, timeout) as response:
+        return json.loads(response.read().decode("utf-8", errors="replace"))
+
+
+def submit_workflow_job(base_url: str, audio_path: str, config: dict, timeout: float) -> dict:
+    """以流式文件句柄提交工作流，避免前端一次性读取完整媒体。"""
+    with Path(audio_path).open("rb") as audio_stream:
+        response = requests.post(
+            f"{base_url.rstrip('/')}/v1/funasr/workflows",
+            files={"file": (Path(audio_path).name, audio_stream, "application/octet-stream")},
+            data={"workflow": json.dumps(config, ensure_ascii=False)},
+            timeout=max(float(timeout), 30.0),
+        )
+    if not response.ok:
+        raise RuntimeError(f"工作流提交失败({response.status_code})：{response.text[:500]}")
+    return response.json()
+
+
+def build_workflow_downloads(result: dict) -> dict[str, str | None]:
+    """从同机后端结果中提取已生成产物，并额外打包 ZIP 供一次下载。"""
+    outputs: dict[str, str | None] = {key: None for key in ("json", "txt", "srt", "vtt", "tsv", "all")}
+    artifact_paths: list[Path] = []
+    for artifact in result.get("artifacts") or []:
+        path = Path(str(artifact.get("path") or ""))
+        if not path.is_file():
+            continue
+        artifact_paths.append(path)
+        name = path.name.lower()
+        if name.startswith("transcript."):
+            suffix = path.suffix.lower().lstrip(".")
+            if suffix in outputs:
+                outputs[suffix] = str(path)
+    if artifact_paths:
+        archive_path = Path(tempfile.gettempdir()) / f"pat-funasr-workflow-{uuid.uuid4().hex}.zip"
+        with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            for path in artifact_paths:
+                archive.write(path, arcname=path.name)
+        outputs["all"] = str(archive_path)
+    return outputs
 
 
 def multipart_body(audio_path: Path, fields: dict[str, str]) -> tuple[bytes, str]:
@@ -1612,7 +1688,51 @@ def check_service(base_url: str, timeout: float) -> str:
     base_url = base_url.rstrip("/")
     health = request_json(f"{base_url}/health", timeout)
     models = request_json(f"{base_url}/v1/models", timeout)
-    return limit_raw_json_preview(json.dumps({"health": health, "models": models}, ensure_ascii=False, indent=2))
+    runtime = request_json(f"{base_url}/v1/runtime/status", timeout)
+    return limit_raw_json_preview(json.dumps({"health": health, "runtime": runtime, "models": models}, ensure_ascii=False, indent=2))
+
+
+def build_runtime_panels(base_url: str, timeout: float) -> tuple[str, str]:
+    """渲染运行资源与工作流队列两个独立面板。"""
+    runtime = request_json(f"{base_url.rstrip('/')}/v1/runtime/status", timeout)
+    resources = runtime.get("resources") or {}
+    cpu = resources.get("cpu") or {}
+    memory = resources.get("memory") or {}
+    gpu = resources.get("gpu") or {}
+    resource_lines = ["### 运行资源"]
+    resource_lines.append(
+        f"- CPU：{cpu.get('percent', 'unavailable')}% | 逻辑核心：{cpu.get('logical_count', 'unavailable')}"
+        if cpu.get("available") else f"- CPU：不可用（{cpu.get('reason', 'unknown')}）"
+    )
+    resource_lines.append(
+        f"- 内存：{memory.get('percent', 'unavailable')}% | 可用 {int(memory.get('available_bytes', 0)) // (1024 ** 2)} MiB"
+        if memory.get("available") else f"- 内存：不可用（{memory.get('reason', 'unknown')}）"
+    )
+    resource_lines.append(
+        f"- GPU：{gpu.get('device', '')} | 已分配 {int(gpu.get('allocated_bytes', 0)) // (1024 ** 2)} MiB / {int(gpu.get('total_bytes', 0)) // (1024 ** 2)} MiB"
+        if gpu.get("available") else f"- GPU：不可用（{gpu.get('reason', 'unknown')}）"
+    )
+    models = runtime.get("models") or {}
+    resource_lines.append(f"- 已加载模型：{', '.join(models.get('loaded') or []) or '无'}")
+
+    queue = runtime.get("workflow_queue") or {}
+    counts = queue.get("status_counts") or {}
+    queue_lines = [
+        "### 任务队列",
+        f"- 总任务：{queue.get('total', 0)} | 活跃：{queue.get('active', 0)}",
+        (
+            f"- 排队 {counts.get('queued', 0)} / 运行 {counts.get('running', 0)} / "
+            f"完成 {counts.get('completed', 0)} / 失败 {counts.get('failed', 0)} / 取消 {counts.get('cancelled', 0)}"
+        ),
+    ]
+    return "\n".join(resource_lines), "\n".join(queue_lines)
+
+
+def safe_build_runtime_panels(base_url: str, timeout: float) -> tuple[str, str]:
+    try:
+        return build_runtime_panels(base_url, timeout)
+    except Exception as error:
+        return f"### 运行资源\n\n加载失败：{error}", f"### 任务队列\n\n加载失败：{error}"
 
 
 def build_service_dashboard_snapshot(base_url: str, timeout: float, capability_filter: str) -> tuple[str, str, str, str, str]:
@@ -1620,7 +1740,8 @@ def build_service_dashboard_snapshot(base_url: str, timeout: float, capability_f
     base_url = base_url.rstrip("/")
     _, status_text, models = fetch_model_choices(base_url, timeout)
     health = request_json(f"{base_url}/health", timeout)
-    raw_json = limit_raw_json_preview(json.dumps({"health": health, "models": models}, ensure_ascii=False, indent=2))
+    runtime = request_json(f"{base_url}/v1/runtime/status", timeout)
+    raw_json = limit_raw_json_preview(json.dumps({"health": health, "runtime": runtime, "models": models}, ensure_ascii=False, indent=2))
     capability_markdown = render_model_capability_markdown(models, capability_filter=capability_filter)
     target_markdown = render_capability_target_markdown(models, capability_filter=capability_filter)
     overview_markdown = render_service_overview_markdown(
@@ -2388,6 +2509,22 @@ def set_service_tab_auto_refresh_active(active: bool) -> bool:
     return bool(active)
 
 
+def auto_refresh_runtime_panels_guard(
+    enabled: bool,
+    tab_active: bool,
+    base_url: str,
+    timeout: float,
+):
+    """仅在服务页激活时刷新资源与任务队列。"""
+    try:
+        import gradio as gr
+    except Exception:
+        return None, None
+    if not enabled or not tab_active:
+        return gr.update(), gr.update()
+    return safe_build_runtime_panels(base_url, timeout)
+
+
 def activate_and_refresh_service_tab(
     base_url: str,
     timeout: float,
@@ -2738,6 +2875,64 @@ def build_transcription_export_files(payload: dict) -> dict[str, str]:
     return exports
 
 
+def build_fine_export_files(payload: dict) -> dict[str, str]:
+    """
+    精细转录专属多格式导出：
+    - TXT : 完整包含 转写+纪要+思维导图
+    - JSON: payload 原样（含 summary/mindmap/refined_text）
+    - ZIP : 额外追加 transcript_refined.txt / summary.md / mindmap.json
+    SRT/VTT/TSV 与离线识别保持一致（按 segments）
+    """
+    import json as _json_mod
+
+    segments = payload.get("segments") or []
+    full_text = str(payload.get("text", "") or "")
+    refined_text = str(payload.get("refined_text", "") or "")
+    summary = payload.get("summary") or {}
+    mindmap = payload.get("mindmap") or {}
+    scene_name = str(payload.get("scene_name", "") or "")
+    elapsed = float(payload.get("elapsed") or 0)
+
+    # JSON：payload 全量（包含 summary/mindmap/refined_text）
+    json_text = _json_mod.dumps(payload, ensure_ascii=False, indent=2)
+
+    # TXT：使用 export_result(txt) 组合转写+纪要+思维导图
+    txt_export = export_result(payload, format="txt")
+
+    archive_bytes = diarization_renderers.render_fine_all_zip(
+        full_text=full_text,
+        refined_text=refined_text,
+        segments=segments,
+        json_payload=payload,
+        summary=summary,
+        mindmap=mindmap,
+        scene_name=scene_name,
+        elapsed=elapsed,
+    )
+    exports: dict[str, str] = {}
+    text_outputs = {
+        "json": json_text,
+        "txt": txt_export,
+        "srt": diarization_renderers.render_srt(segments),
+        "vtt": diarization_renderers.render_vtt(segments),
+        "tsv": diarization_renderers.render_tsv(segments),
+    }
+    for response_format, content in text_outputs.items():
+        output_path = (
+            Path(tempfile.gettempdir())
+            / f"pat-funasr-fine-{uuid.uuid4().hex}-{output_filename_for_format(response_format)}"
+        )
+        output_path.write_text(content, encoding="utf-8")
+        exports[response_format] = str(output_path)
+    archive_path = (
+        Path(tempfile.gettempdir())
+        / f"pat-funasr-fine-{uuid.uuid4().hex}-{output_filename_for_format('all')}"
+    )
+    archive_path.write_bytes(archive_bytes)
+    exports["all"] = str(archive_path)
+    return exports
+
+
 def format_streaming_preview_text(full_text: str, final_flag: bool) -> str:
     """把 streaming 全量文本整理为预览文本，合并过短句并按自然边界换行。"""
     _ = final_flag
@@ -2954,6 +3149,8 @@ def build_app(default_base_url: str, default_timeout: float):
     initial_capability_markdown = "### 模型能力看板\n\n点击“检查服务”加载。"
     initial_target_markdown = "### 使用建议\n\n点击“检查服务”加载。"
     initial_runtime_logs = read_runtime_logs(max_lines=120, max_bytes=256 * 1024, max_section_chars=8000)
+
+    fetched_model_choices = fetch_model_choices(default_base_url, default_timeout)
 
     with gr.Blocks(title="Pat-FunASR 语音识别") as demo:
         gr.Markdown("# Pat-FunASR WebUI")
@@ -3442,64 +3639,247 @@ def build_app(default_base_url: str, default_timeout: float):
                     with gr.Column(scale=1, min_width=340):
                         gr.Markdown("### 精细转录\n场景化 ASR + LLM 协同，产出精细文本/纪要/思维导图")
 
-                        ft_scene = gr.Dropdown(
-                            label="选择场景",
-                            choices=SCENE_CHOICES,
-                            value="general",
-                        )
-                        ft_scene_desc = gr.Markdown("")
+                        with gr.Row():
+                            ft_scene = gr.Dropdown(
+                                label="选择场景",
+                                choices=SCENE_CHOICES,
+                                value="general",
+                                scale=3,
+                            )
+                            ft_scene_btn = gr.Button("📋 场景详情", scale=1)
+
+                        # 场景详情弹窗（默认隐藏）
+                        ft_scene_modal = gr.Group(visible=False)
+                        with ft_scene_modal:
+                            gr.Markdown("### 场景详情（可编辑 Prompt）")
+                            ft_scene_name = gr.Textbox(label="场景名称", interactive=False)
+                            ft_scene_desc_text = gr.Textbox(label="描述", interactive=False, lines=2)
+                            ft_scene_prompt = gr.Textbox(
+                                label="LLM Prompt（可手工修改）",
+                                lines=10,
+                                max_lines=20,
+                                interactive=True,
+                            )
+                            ft_scene_hotwords_display = gr.Textbox(
+                                label="预设热词（只读）",
+                                interactive=False,
+                                lines=3,
+                            )
+                            ft_scene_close_btn = gr.Button("✅ 关闭", variant="secondary")
+
+                        # 词表管理弹窗按钮
+                        ft_hotword_btn = gr.Button("📝 管理词表")
+                        ft_hotwords_state = gr.State(value="")  # 存储自定义热词(弹窗内外中转)
+
+                        # 词表弹窗（默认隐藏）
+                        ft_hotword_modal = gr.Group(visible=False)
+                        with ft_hotword_modal:
+                            gr.Markdown("### 词表管理\n场景预设热词（只读）+ 自定义热词（可增删改）")
+                            ft_preset_hotwords = gr.Textbox(
+                                label="场景预设热词（只读）",
+                                interactive=False,
+                                lines=4,
+                            )
+                            ft_custom_hotwords = gr.Textbox(
+                                label="自定义热词（每行一个，会追加到预设词表）",
+                                placeholder="输入自定义热词，每行一个...\n例：\n项目名\n人名\n专业术语",
+                                lines=8,
+                                max_lines=15,
+                                interactive=True,
+                            )
+                            ft_hotword_close_btn = gr.Button("✅ 关闭", variant="secondary")
 
                         ft_audio = gr.Audio(
                             label="上传音频文件",
                             type="filepath",
+                            elem_classes=["ft-audio-player"],
                         )
 
-                        with gr.Accordion("词表编辑（每行一个热词）", open=False):
-                            ft_hotwords = gr.Textbox(
-                                label="专业词表（覆盖场景预设）",
-                                placeholder="输入自定义热词，每行一个...\n例：\n项目名\n人名\n专业术语",
-                                lines=5,
-                                max_lines=10,
+                        with gr.Accordion("1. 音频前处理", open=False):
+                            ft_enable_preprocess = gr.Checkbox(
+                                label="启用音频前处理",
+                                value=False,
+                            )
+                            with gr.Row():
+                                ft_noise_reduction = gr.Checkbox(label="降噪", value=True)
+                                ft_noise_strength = gr.Slider(label="降噪强度(dB)", minimum=0, maximum=48, value=8)
+                            with gr.Row():
+                                ft_sample_rate = gr.Dropdown(label="采样率", choices=[16000, 24000, 48000], value=16000)
+                                ft_loudnorm = gr.Checkbox(label="响度归一化", value=True)
+                            ft_silence_mode = gr.Radio(
+                                label="静音处理",
+                                choices=[("保留原始时间轴", "preserve_timeline"), ("裁剪静音（改变时间轴）", "trim_silence")],
+                                value="preserve_timeline",
                             )
 
-                        with gr.Accordion("ASR 参数", open=False):
+                        with gr.Accordion("2. VAD 与长音频分块", open=False):
+                            with gr.Row():
+                                ft_vad_enabled = gr.Checkbox(label="启用 VAD", value=True)
+                                ft_vad_preset = gr.Dropdown(
+                                    label="VAD 预设",
+                                    choices=["default", "anti_hallucination"],
+                                    value="default",
+                                )
+                            ft_chunk_enabled = gr.Checkbox(label="启用 FFmpeg 长音频分块", value=False)
+                            with gr.Row():
+                                ft_chunk_seconds = gr.Slider(label="每块秒数", minimum=30, maximum=1800, step=30, value=240)
+                                ft_overlap_seconds = gr.Slider(label="块间重叠秒数", minimum=0, maximum=120, step=1, value=10)
+
+                        with gr.Accordion("3. 转录模型与多模型校对", open=True):
                             ft_model = gr.Dropdown(
-                                label="ASR 模型",
+                                label="主转录模型",
                                 choices=asr_model_choices,
                                 value=default_model_value,
                             )
-                            ft_enable_preprocess = gr.Checkbox(
-                                label="启用音频前处理（降噪+重采样）",
-                                value=False,
+                            ft_transcription_mode = gr.Radio(
+                                label="转录模式",
+                                choices=[("单模型", "single_model"), ("多模型转录并校对", "multi_model")],
+                                value="single_model",
+                            )
+                            ft_reviewer_models = gr.Dropdown(
+                                label="校对模型（可多选，不能与主模型重复）",
+                                choices=asr_model_choices,
+                                value=[],
+                                multiselect=True,
+                            )
+                            with gr.Row():
+                                ft_primary_weight = gr.Slider(label="主模型权重", minimum=0.1, maximum=10, value=1.0)
+                                ft_reviewer_weight = gr.Slider(label="校对模型权重", minimum=0.1, maximum=10, value=1.0)
+                            with gr.Row():
+                                ft_execution = gr.Radio(label="执行方式", choices=[("串行", "serial"), ("并行", "parallel")], value="serial")
+                                ft_max_concurrency = gr.Slider(label="最大并发模型数", minimum=1, maximum=4, step=1, value=1)
+                            ft_failure_policy = gr.Dropdown(
+                                label="资源/模型失败策略",
+                                choices=[
+                                    ("停止并提示", "stop_and_ask"),
+                                    ("回退串行", "fallback_to_serial"),
+                                    ("跳过失败的校对模型", "skip_failed_reviewer"),
+                                ],
+                                value="stop_and_ask",
+                            )
+                            with gr.Row():
+                                ft_language = gr.Textbox(label="语言", value="auto")
+                                ft_use_itn = gr.Checkbox(label="启用 ITN", value=True)
+                                ft_punc_mode = gr.Radio(label="标点", choices=[("自动", "auto"), ("关闭", "disabled")], value="auto")
+
+                        with gr.Accordion("4. 时间戳与强制对齐", open=False):
+                            ft_timestamp_level = gr.Radio(
+                                label="时间戳粒度",
+                                choices=[("关闭", "off"), ("段级", "segment"), ("字词级", "word")],
+                                value="segment",
+                            )
+                            ft_forced_alignment = gr.Checkbox(label="启用强制对齐（需选择支持模型）", value=False)
+                            ft_aligner_model = gr.Textbox(
+                                label="对齐模型",
+                                value="Qwen/Qwen3-ForcedAligner-0.6B",
                             )
 
-                        with gr.Accordion("LLM 配置", open=True):
+                        with gr.Accordion("5. 说话人识别与时间轴对齐", open=True):
+                            ft_diarization_enabled = gr.Checkbox(label="启用说话人识别", value=True)
+                            ft_diarization_strategy = gr.Radio(
+                                label="策略",
+                                choices=[("独立识别后时间对齐（推荐）", "separate_align"), ("ASR 联合识别", "joint")],
+                                value="separate_align",
+                            )
+                            ft_diarization_asr_model = gr.Dropdown(
+                                label="说话人辅助 ASR 模型",
+                                choices=diarization_model_choices,
+                                value=choose_default_diarization_model(diarization_model_choices) or DEFAULT_DIARIZATION_MODEL,
+                            )
+                            with gr.Row():
+                                ft_speaker_model = gr.Dropdown(label="说话人模型", choices=["cam++"], value="cam++", allow_custom_value=True)
+                                ft_spk_mode = gr.Dropdown(label="分段模式", choices=["default", "vad_segment", "punc_segment"], value="punc_segment")
+                            with gr.Row():
+                                ft_preset_speaker_count = gr.Number(label="预设说话人数（留空自动）", value=None, precision=0)
+                                ft_global_speaker_clustering = gr.Checkbox(label="全局说话人聚类", value=True)
+
+                        with gr.Accordion("6. 多模型结果校对规则", open=False):
+                            ft_reconciliation_mode = gr.Radio(
+                                label="选择规则",
+                                choices=[("主模型优先", "primary_first"), ("用户权重共识", "weighted_consensus")],
+                                value="primary_first",
+                            )
+                            ft_disagreement_threshold = gr.Slider(label="分歧阈值", minimum=0, maximum=1, value=0.2)
+                            with gr.Row():
+                                ft_keep_alternatives = gr.Checkbox(label="保留候选文本", value=True)
+                                ft_uncertain_policy = gr.Radio(
+                                    label="不确定结果",
+                                    choices=[("保留主模型", "keep_primary"), ("标记人工复核", "flag_for_review")],
+                                    value="flag_for_review",
+                                )
+
+                        with gr.Accordion("7. LLM 后处理（每阶段独立选模型）", open=False):
                             ft_enable_llm = gr.Checkbox(
                                 label="启用 LLM 二次优化",
-                                value=True,
+                                value=False,
+                            )
+                            ft_llm_select = gr.Dropdown(
+                                label="校对 LLM",
+                                choices=get_llm_choices(),
+                                value=get_default_llm_value(),
                             )
                             ft_enable_summary = gr.Checkbox(
                                 label="生成纪要",
-                                value=True,
+                                value=False,
+                            )
+                            ft_summary_llm_select = gr.Dropdown(
+                                label="纪要 LLM",
+                                choices=get_llm_choices(),
+                                value=get_default_llm_value(),
                             )
                             ft_enable_mindmap = gr.Checkbox(
                                 label="生成思维导图",
-                                value=True,
+                                value=False,
                             )
-                            ft_llm_select = gr.Dropdown(
-                                label="LLM 模型（从 .env 配置读取）",
+                            ft_mindmap_llm_select = gr.Dropdown(
+                                label="思维导图 LLM",
                                 choices=get_llm_choices(),
                                 value=get_default_llm_value(),
                                 info="在 .env 文件中配置 LLM providers，复制 .env.sample 为 .env 修改",
                             )
 
-                        ft_run_btn = gr.Button("🚀 开始精细转录", variant="primary")
+                        with gr.Accordion("8. 翻译、情感与导出", open=False):
+                            ft_translation_enabled = gr.Checkbox(label="启用翻译", value=False)
+                            ft_translation_model = gr.Dropdown(
+                                label="翻译模型",
+                                choices=["nllb-200-distilled-600m", "nllb-200-distilled-1.3b"],
+                                value="nllb-200-distilled-600m",
+                            )
+                            with gr.Row():
+                                ft_source_lang = gr.Textbox(label="源语言代码", value="zho_Hans")
+                                ft_target_lang = gr.Textbox(label="目标语言代码", value="eng_Latn")
+                            ft_emotion_enabled = gr.Checkbox(label="启用情感识别", value=False)
+                            with gr.Row():
+                                ft_emotion_model = gr.Dropdown(
+                                    label="情感模型",
+                                    choices=emotion_model_choices,
+                                    value=choose_default_emotion_model(emotion_model_choices) or DEFAULT_EMOTION_MODEL,
+                                )
+                                ft_emotion_granularity = gr.Radio(label="情感粒度", choices=["utterance", "frame"], value="utterance")
+                            ft_export_formats = gr.CheckboxGroup(
+                                label="导出格式",
+                                choices=["json", "txt", "srt", "vtt", "tsv", "all"],
+                                value=["json", "txt", "srt"],
+                            )
+                            with gr.Row():
+                                ft_include_raw_candidates = gr.Checkbox(label="导出全部模型候选", value=True)
+                                ft_include_config_snapshot = gr.Checkbox(label="导出配置快照", value=True)
+
+                        ft_run_btn = gr.Button("🚀 提交精细转录工作流", variant="primary")
+                        ft_cancel_btn = gr.Button("取消当前任务", variant="stop")
+                        ft_legacy_run_btn = gr.Button("兼容旧管线", visible=False)
 
                     # 右列：结果展示
                     with gr.Column(scale=2, min_width=600):
                         ft_status = gr.Textbox(
-                            label="执行状态",
-                            lines=2,
+                            label="实时状态",
+                            lines=3,
+                            interactive=False,
+                        )
+                        ft_event_log = gr.Textbox(
+                            label="执行事件 / 报错日志（可复制）",
+                            lines=12,
+                            max_lines=24,
                             interactive=False,
                         )
 
@@ -3516,47 +3896,95 @@ def build_app(default_base_url: str, default_timeout: float):
                                 interactive=False,
                             )
 
-                        with gr.Accordion("会议纪要", open=False):
+                        with gr.Accordion("会议纪要", open=True):
                             ft_summary = gr.Markdown("")
 
-                        with gr.Accordion("思维导图", open=False):
+                        with gr.Accordion("思维导图", open=True):
                             ft_mindmap = gr.HTML(value="")
 
-                        with gr.Row():
-                            ft_export_format = gr.Dropdown(
-                                label="导出格式",
-                                choices=["md", "txt", "json"],
-                                value="md",
-                            )
-                            ft_export_btn = gr.Button("📥 导出", variant="secondary")
-                            ft_export_file = gr.File(label="下载", visible=False)
+                        with gr.Accordion("下载文件", open=False):
+                            with gr.Row():
+                                ft_download_json = gr.File(label="下载 JSON", visible=True)
+                                ft_download_txt = gr.File(label="下载 TXT", visible=True)
+                                ft_download_srt = gr.File(label="下载 SRT", visible=True)
+                            with gr.Row():
+                                ft_download_vtt = gr.File(label="下载 VTT", visible=True)
+                                ft_download_tsv = gr.File(label="下载 TSV", visible=True)
+                                ft_download_zip = gr.File(label="下载 ZIP", visible=True)
 
                         ft_result_state = gr.State(value=None)
 
-                # 场景描述更新
-                def _on_scene_change(scene_id):
-                    """场景切换时更新描述"""
+                # 场景详情弹窗：打开
+                def _on_open_scene_modal(scene_id):
+                    """打开场景详情弹窗，填充预设信息"""
                     t = get_template(scene_id)
                     if t:
-                        desc = f"**{t.name}** — {t.description}\n\n预设热词({len(t.hotwords)}个): {'、'.join(t.hotwords[:8])}{'...' if len(t.hotwords)>8 else ''}"
-                        return desc
-                    return ""
+                        hotwords_str = "\n".join(t.hotwords)
+                        return gr.update(visible=True), t.name, t.description, t.llm_prompt, hotwords_str
+                    return gr.update(visible=True), "", "", "", ""
 
-                ft_scene.change(
-                    fn=_on_scene_change,
+                ft_scene_btn.click(
+                    fn=_on_open_scene_modal,
                     inputs=[ft_scene],
-                    outputs=[ft_scene_desc],
+                    outputs=[ft_scene_modal, ft_scene_name, ft_scene_desc_text, ft_scene_prompt, ft_scene_hotwords_display],
                 )
 
-                # 执行精细转录
+                # 场景详情弹窗：关闭
+                ft_scene_close_btn.click(
+                    fn=lambda: gr.update(visible=False),
+                    outputs=[ft_scene_modal],
+                )
+
+                # 词表弹窗：打开（从 state 读取，填入弹窗内文本框）
+                def _on_open_hotword_modal(scene_id, hotwords_state):
+                    """打开词表弹窗，填充预设热词和已有自定义热词"""
+                    t = get_template(scene_id)
+                    preset_str = "\n".join(t.hotwords) if t else ""
+                    return gr.update(visible=True), preset_str, hotwords_state or ""
+
+                ft_hotword_btn.click(
+                    fn=_on_open_hotword_modal,
+                    inputs=[ft_scene, ft_hotwords_state],
+                    outputs=[ft_hotword_modal, ft_preset_hotwords, ft_custom_hotwords],
+                )
+
+                # 词表弹窗：关闭（把弹窗内编辑的值存回 state）
+                def _on_close_hotword_modal(custom_hotwords_text):
+                    """关闭词表弹窗，保存编辑后的自定义热词到 state"""
+                    return gr.update(visible=False), custom_hotwords_text or ""
+
+                ft_hotword_close_btn.click(
+                    fn=_on_close_hotword_modal,
+                    inputs=[ft_custom_hotwords],
+                    outputs=[ft_hotword_modal, ft_hotwords_state],
+                )
+
+                # 执行精细转录（流式：逐块 yield 中间结果；最终一次性补全下载文件）
                 def _on_run_pipeline(
                     audio_path, scene_id, model, enable_preprocess,
                     enable_llm, enable_summary, enable_mindmap,
                     custom_hotwords, llm_select, base_url,
+                    scene_prompt,
                 ):
-                    """精细转录执行按钮回调"""
+                    """精细转录执行按钮回调（流式生成器）
+
+                    Gradio 要求 outputs 的顺序与每次 yield 顺序一致，共 12 项：
+                    [status, sync_html, transcript, summary_md, mindmap_html, result_state,
+                     json_file, txt_file, srt_file, vtt_file, tsv_file, zip_file]
+                    """
+                    # 初始占位：保证输出数量一致
+                    def _empty_outputs(status_text, sync_html="", transcript="",
+                                       summary_md="", mindmap_html="", result_state=None,
+                                       json_file=None, txt_file=None, srt_file=None,
+                                       vtt_file=None, tsv_file=None, zip_file=None):
+                        return [
+                            status_text, sync_html, transcript, summary_md, mindmap_html, result_state,
+                            json_file, txt_file, srt_file, vtt_file, tsv_file, zip_file,
+                        ]
+
                     if not audio_path:
-                        return "❌ 请先上传音频文件", "", "", "", "", None, gr.update(visible=False)
+                        yield _empty_outputs("❌ 请先上传音频文件")
+                        return
                     # 从 .env 解析选中的 LLM 配置
                     llm_cfg_model = get_llm_by_value(llm_select)
                     if llm_cfg_model:
@@ -3567,8 +3995,21 @@ def build_app(default_base_url: str, default_timeout: float):
                         llm_url = "http://127.0.0.1:11434/v1"
                         llm_model = "qwen2.5:7b"
                         llm_api_key = "no-key"
+
+                    # 记录中间态：asr_chunk 时更新文本，LLM/summary/mindmap 到来时对应更新
+                    last_sync_html = get_audio_sync_html()
+                    last_transcript = ""
+                    last_summary_md = ""
+                    last_mindmap_html = ""
+                    last_result = None
+                    warnings_log: list = []  # 累积 LLM 失败警告，附在 status 末尾
+                    def _status_with_warnings(main: str) -> str:
+                        if not warnings_log:
+                            return main
+                        return main + "\n\n⚠️ 警告:\n" + "\n".join(f"- {w}" for w in warnings_log)
+
                     try:
-                        result = run_pipeline(
+                        for stage, payload in run_pipeline_streaming(
                             audio_path=audio_path,
                             scene_id=scene_id,
                             model=model,
@@ -3581,133 +4022,469 @@ def build_app(default_base_url: str, default_timeout: float):
                             llm_base_url=llm_url,
                             llm_model=llm_model,
                             llm_api_key=llm_api_key or "no-key",
-                        )
-                        # 格式化输出
-                        transcript_text = format_transcript_text(
-                            result.get("segments", []),
-                            result.get("refined_text", ""),
-                        )
-                        summary_md = format_summary_display(result.get("summary", {}))
-                        mindmap_data = result.get("mindmap", {})
-                        mindmap_html = get_markmap_html(
-                            __import__("json").dumps(mindmap_data, ensure_ascii=False)
-                        ) if mindmap_data else ""
+                            custom_prompt=scene_prompt if scene_prompt else None,
+                        ):
+                            if stage == "progress":
+                                prog = payload.get("progress", 0)
+                                desc = payload.get("desc", "")
+                                status = _status_with_warnings(
+                                    f"⏳ {desc} (进度 {int(prog * 100)}%)"
+                                )
+                                yield _empty_outputs(
+                                    status, sync_html=last_sync_html, transcript=last_transcript,
+                                    summary_md=last_summary_md, mindmap_html=last_mindmap_html,
+                                    result_state=last_result,
+                                )
+                                continue
 
-                        # 音字联动数据
-                        segments_json = __import__("json").dumps(
-                            result.get("segments", []), ensure_ascii=False
-                        )
-                        audio_url = result.get("audio_path", "")
-                        # 注入音频和转写数据到前端 JS
-                        sync_script = f"""
-                        <script>
-                        (function() {{
-                            if (window.__audioSync) {{
-                                window.__audioSync.setAudioSrc('{audio_url}');
-                                window.__audioSync.renderTranscript({segments_json});
-                            }}
-                        }})();
-                        </script>
-                        """
-                        # 覆盖音字联动区域
-                        sync_html = get_audio_sync_html() + sync_script
+                            if stage == "warning":
+                                # LLM 失败或熔断激活：累积警告，更新 status 让用户知道卡的原因
+                                msg = payload.get("message") or "未知警告"
+                                stage_name = {
+                                    "llm_refine": "优化",
+                                    "summary": "纪要",
+                                    "mindmap": "思维导图",
+                                }.get(payload.get("stage") or "", payload.get("stage") or "")
+                                chunk = payload.get("chunk"); total = payload.get("total")
+                                label = f"[{stage_name}"
+                                if chunk and total:
+                                    label += f" {chunk}/{total}"
+                                label += "]"
+                                warnings_log.append(f"{label} {msg}")
+                                # 超过 12 条则只保留首尾，避免状态框撑爆
+                                if len(warnings_log) > 12:
+                                    warnings_log[:] = warnings_log[:5] + [
+                                        f"...(已省略 {len(warnings_log)-10} 条)"
+                                    ] + warnings_log[-5:]
+                                status = _status_with_warnings("⏳ 继续执行（有部分 LLM 调用未返回）")
+                                yield _empty_outputs(
+                                    status, sync_html=last_sync_html, transcript=last_transcript,
+                                    summary_md=last_summary_md, mindmap_html=last_mindmap_html,
+                                    result_state=last_result,
+                                )
+                                continue
 
-                        status = f"✅ 完成 — 场景: {result.get('scene_name','')} | 耗时: {result.get('elapsed',0):.1f}s | ASR+LLM 协同"
+                            if stage == "asr_chunk":
+                                # ASR 分块完成：截至目前的合并结果，立即展示到文本框
+                                segments = payload.get("segments") or []
+                                raw_text = payload.get("text", "") or ""
+                                last_transcript = format_transcript_text(segments, "")
+                                # 音字联动注入（只有当没有 refined_text 时，显示原始 segments）
+                                segments_json = __import__("json").dumps(segments, ensure_ascii=False)
+                                sync_script = f"""
+                                <script>
+                                (function() {{
+                                    if (window.__audioSync) {{
+                                        window.__audioSync.setAudioSrc('{audio_path}');
+                                        window.__audioSync.renderTranscript({segments_json});
+                                    }}
+                                }})();
+                                </script>
+                                """
+                                last_sync_html = get_audio_sync_html() + sync_script
+                                status = _status_with_warnings(
+                                    f"🎙️ ASR 进行中 — 已识别 {len(segments)} 段 / {len(raw_text)} 字"
+                                )
+                                yield _empty_outputs(
+                                    status, sync_html=last_sync_html, transcript=last_transcript,
+                                    summary_md=last_summary_md, mindmap_html=last_mindmap_html,
+                                    result_state=last_result,
+                                )
+                                continue
 
-                        return status, sync_html, transcript_text, summary_md, mindmap_html, result, gr.update(visible=False)
+                            if stage == "llm_refine":
+                                # LLM 润色：每次分块都会推送累积文本（最后一次带 final=True）
+                                accumulated = payload.get("text", "")
+                                is_final = bool(payload.get("final", False))
+                                last_transcript = accumulated or last_transcript
+                                status = _status_with_warnings(
+                                    "🧠 LLM 优化中..." if not is_final else "✅ LLM 优化完成"
+                                )
+                                yield _empty_outputs(
+                                    status, sync_html=last_sync_html, transcript=last_transcript,
+                                    summary_md=last_summary_md, mindmap_html=last_mindmap_html,
+                                    result_state=last_result,
+                                )
+                                continue
+
+                            if stage == "summary":
+                                # 纪要生成（分块阶段也会推送 interim 结果）
+                                last_summary_md = format_summary_display(payload)
+                                status = _status_with_warnings("📝 纪要生成中(阶段性结果)")
+                                yield _empty_outputs(
+                                    status, sync_html=last_sync_html, transcript=last_transcript,
+                                    summary_md=last_summary_md, mindmap_html=last_mindmap_html,
+                                    result_state=last_result,
+                                )
+                                continue
+
+                            if stage == "mindmap":
+                                # 思维导图生成：无论是否为空，都给兜底显示，让用户"看得到"
+                                mindmap_data = payload or {}
+                                if mindmap_data:
+                                    mindmap_html = get_markmap_html(
+                                        __import__("json").dumps(mindmap_data, ensure_ascii=False)
+                                    )
+                                else:
+                                    mindmap_html = """
+                                    <div style="padding:16px; background:#fff8e1; border:1px dashed #ffca28; border-radius:8px; color:#b26a00;">
+                                      <b>思维导图尚未生成</b><br/>
+                                      可能原因：文本长度不足、LLM 未返回结构化 JSON、或当前场景未配置思维导图提示词。
+                                      <br/>请检查 .env 中 LLM provider 连通性，或重新执行。
+                                    </div>
+                                    """
+                                last_mindmap_html = mindmap_html
+                                status = _status_with_warnings("🗺️ 思维导图生成中(阶段性结果)")
+                                yield _empty_outputs(
+                                    status, sync_html=last_sync_html, transcript=last_transcript,
+                                    summary_md=last_summary_md, mindmap_html=last_mindmap_html,
+                                    result_state=last_result,
+                                )
+                                continue
+
+                            if stage == "error":
+                                msg = payload.get("message", "未知错误")
+                                yield _empty_outputs(
+                                    _status_with_warnings(f"❌ 执行失败: {msg}"),
+                                    sync_html=last_sync_html, transcript=last_transcript,
+                                    summary_md=last_summary_md, mindmap_html=last_mindmap_html,
+                                    result_state=last_result,
+                                )
+                                return
+
+                            if stage == "final":
+                                # 最终结果：格式化 + 生成下载文件（包含纪要/思维导图）
+                                result = payload
+                                transcript_text = format_transcript_text(
+                                    result.get("segments", []),
+                                    result.get("refined_text", ""),
+                                )
+                                summary_md = format_summary_display(result.get("summary", {}))
+                                mindmap_data = result.get("mindmap", {})
+                                if mindmap_data:
+                                    mindmap_html = get_markmap_html(
+                                        __import__("json").dumps(mindmap_data, ensure_ascii=False)
+                                    )
+                                else:
+                                    mindmap_html = last_mindmap_html or """
+                                    <div style="padding:16px; background:#fff8e1; border:1px dashed #ffca28; border-radius:8px; color:#b26a00;">
+                                      <b>思维导图尚未生成</b>
+                                    </div>
+                                    """
+                                # 音字联动
+                                segments_json = __import__("json").dumps(
+                                    result.get("segments", []), ensure_ascii=False
+                                )
+                                audio_url = result.get("audio_path", "") or audio_path
+                                sync_script = f"""
+                                <script>
+                                (function() {{
+                                    if (window.__audioSync) {{
+                                        window.__audioSync.setAudioSrc('{audio_url}');
+                                        window.__audioSync.renderTranscript({segments_json});
+                                    }}
+                                }})();
+                                </script>
+                                """
+                                sync_html = get_audio_sync_html() + sync_script
+                                status = _status_with_warnings(
+                                    f"✅ 完成 — 场景: {result.get('scene_name','')} | "
+                                    f"耗时: {result.get('elapsed',0):.1f}s | ASR+LLM 协同"
+                                )
+
+                                # 生成多格式导出文件（精细转录专属：TXT/JSON/ZIP 包含 转写+纪要+思维导图）
+                                export_payload = {
+                                    "text": result.get("raw_text", ""),
+                                    "segments": result.get("segments", []),
+                                    "refined_text": result.get("refined_text", ""),
+                                    "summary": result.get("summary", {}),
+                                    "mindmap": result.get("mindmap", {}),
+                                    "scene_name": result.get("scene_name", ""),
+                                    "elapsed": result.get("elapsed", 0),
+                                }
+                                exports = build_fine_export_files(export_payload)
+
+                                last_result = result
+                                yield [
+                                    status, sync_html, transcript_text, summary_md, mindmap_html, result,
+                                    exports.get("json"), exports.get("txt"), exports.get("srt"),
+                                    exports.get("vtt"), exports.get("tsv"), exports.get("all"),
+                                ]
+                                return
+
                     except Exception as e:
-                        return f"❌ 执行失败: {e}", "", "", "", "", None, gr.update(visible=False)
+                        yield _empty_outputs(
+                            f"❌ 执行失败: {e}", sync_html=last_sync_html, transcript=last_transcript,
+                            summary_md=last_summary_md, mindmap_html=last_mindmap_html,
+                            result_state=last_result,
+                        )
+                        return
+
+                workflow_value_keys = [
+                    "preprocess_enabled", "noise_reduction", "noise_strength", "sample_rate", "loudnorm", "silence_mode",
+                    "vad_enabled", "vad_preset", "chunk_enabled", "chunk_seconds", "overlap_seconds",
+                    "primary_model", "transcription_mode", "reviewer_models", "primary_weight", "reviewer_weight",
+                    "execution", "max_concurrency", "resource_failure_policy", "language", "use_itn", "punc_mode",
+                    "timestamp_level", "forced_alignment", "aligner_model",
+                    "diarization_enabled", "diarization_strategy", "diarization_asr_model", "speaker_model", "spk_mode",
+                    "preset_speaker_count", "global_speaker_clustering",
+                    "reconciliation_mode", "disagreement_threshold", "keep_alternatives", "uncertain_policy",
+                    "llm_proofread_enabled", "llm_proofread_selection", "summary_enabled", "summary_selection",
+                    "mindmap_enabled", "mindmap_selection",
+                    "translation_enabled", "translation_model", "source_lang", "target_lang",
+                    "emotion_enabled", "emotion_model", "emotion_granularity",
+                    "export_formats", "include_raw_candidates", "include_config_snapshot",
+                ]
+                workflow_value_components = [
+                    ft_enable_preprocess, ft_noise_reduction, ft_noise_strength, ft_sample_rate, ft_loudnorm, ft_silence_mode,
+                    ft_vad_enabled, ft_vad_preset, ft_chunk_enabled, ft_chunk_seconds, ft_overlap_seconds,
+                    ft_model, ft_transcription_mode, ft_reviewer_models, ft_primary_weight, ft_reviewer_weight,
+                    ft_execution, ft_max_concurrency, ft_failure_policy, ft_language, ft_use_itn, ft_punc_mode,
+                    ft_timestamp_level, ft_forced_alignment, ft_aligner_model,
+                    ft_diarization_enabled, ft_diarization_strategy, ft_diarization_asr_model, ft_speaker_model, ft_spk_mode,
+                    ft_preset_speaker_count, ft_global_speaker_clustering,
+                    ft_reconciliation_mode, ft_disagreement_threshold, ft_keep_alternatives, ft_uncertain_policy,
+                    ft_enable_llm, ft_llm_select, ft_enable_summary, ft_summary_llm_select,
+                    ft_enable_mindmap, ft_mindmap_llm_select,
+                    ft_translation_enabled, ft_translation_model, ft_source_lang, ft_target_lang,
+                    ft_emotion_enabled, ft_emotion_model, ft_emotion_granularity,
+                    ft_export_formats, ft_include_raw_candidates, ft_include_config_snapshot,
+                ]
+
+                def _workflow_outputs(
+                    status, event_log="", sync_html="", transcript="", summary_md="", mindmap_html="",
+                    state=None, json_file=None, txt_file=None, srt_file=None, vtt_file=None, tsv_file=None, zip_file=None,
+                ):
+                    return [
+                        status, event_log, sync_html, transcript, summary_md, mindmap_html, state,
+                        json_file, txt_file, srt_file, vtt_file, tsv_file, zip_file,
+                    ]
+
+                def _on_run_workflow(audio_path, api_base_url, request_timeout, scene_id, custom_hotwords, *component_values):
+                    """提交异步工作流并轮询追加式事件，直至完成、失败或取消。"""
+                    if not audio_path:
+                        yield _workflow_outputs("❌ 请先上传音频文件")
+                        return
+                    values = dict(zip(workflow_value_keys, component_values))
+                    values["preset_id"] = scene_id or "custom"
+                    values["hotword"] = str(custom_hotwords or "").replace("\n", ",")
+                    speaker_count = values.get("preset_speaker_count")
+                    if speaker_count in {"", 0, 0.0}:
+                        values["preset_speaker_count"] = None
+                    elif speaker_count is not None:
+                        values["preset_speaker_count"] = int(speaker_count)
+                    config = build_workflow_config(values)
+                    normalized_base_url = str(api_base_url or DEFAULT_BASE_URL).rstrip("/")
+                    try:
+                        validation = post_json_payload(
+                            f"{normalized_base_url}/v1/funasr/workflows/validate",
+                            config,
+                            request_timeout,
+                        )
+                        if not validation.get("valid"):
+                            messages = [
+                                f"{item.get('path', 'workflow')}: {item.get('message', '')} [{item.get('code', '')}]"
+                                for item in validation.get("errors") or []
+                            ]
+                            yield _workflow_outputs("❌ 工作流配置校验失败", "\n".join(messages))
+                            return
+                        warning_lines = [
+                            f"WARNING {item.get('path', '')}: {item.get('message', '')} ({item.get('code', '')})"
+                            for item in validation.get("warnings") or []
+                        ]
+                        submitted = submit_workflow_job(
+                            normalized_base_url,
+                            audio_path,
+                            config,
+                            request_timeout,
+                        )
+                        job_id = str(submitted["job_id"])
+                        state = {"job_id": job_id, "config": config}
+                        accumulated_events: list[dict] = []
+                        after_event_id = 0
+                        yield _workflow_outputs(
+                            f"⏳ 任务 {job_id} 已提交",
+                            "\n".join(warning_lines),
+                            get_audio_sync_html(),
+                            state=state,
+                        )
+
+                        while True:
+                            snapshot = request_json(
+                                f"{normalized_base_url}/v1/funasr/workflows/{urllib.parse.quote(job_id)}",
+                                request_timeout,
+                            )
+                            event_payload = request_json(
+                                f"{normalized_base_url}/v1/funasr/workflows/{urllib.parse.quote(job_id)}/events?after_event_id={after_event_id}",
+                                request_timeout,
+                            )
+                            new_events = list(event_payload.get("data") or [])
+                            if new_events:
+                                accumulated_events.extend(new_events)
+                                after_event_id = max(int(item.get("event_id", 0)) for item in accumulated_events)
+                            log_text = "\n".join(warning_lines + [render_workflow_events(accumulated_events)])
+                            progress = int(float(snapshot.get("progress") or 0) * 100)
+                            current_stage = snapshot.get("current_stage") or "workflow"
+                            current_model = snapshot.get("current_model") or ""
+                            model_text = f" | 模型: {current_model}" if current_model else ""
+                            status = str(snapshot.get("status") or "running")
+                            status_text = f"⏳ {progress}% | 阶段: {current_stage}{model_text} | 任务: {job_id}"
+                            if status not in {"completed", "failed", "cancelled"}:
+                                yield _workflow_outputs(
+                                    status_text,
+                                    log_text,
+                                    get_audio_sync_html(),
+                                    state=state,
+                                )
+                                time.sleep(0.5)
+                                continue
+
+                            if status != "completed":
+                                error = snapshot.get("error") or "任务未完成"
+                                yield _workflow_outputs(
+                                    f"❌ {status}: {error}",
+                                    log_text,
+                                    get_audio_sync_html(),
+                                    state=state,
+                                )
+                                return
+
+                            result = dict(snapshot.get("result") or {})
+                            state.update({"result": result, "status": status})
+                            segments = list(result.get("segments") or [])
+                            transcript_text = format_transcript_text(
+                                segments,
+                                str(result.get("refined_text") or ""),
+                            )
+                            summary_md = format_summary_display(result.get("summary") or {})
+                            mindmap = result.get("mindmap") or {}
+                            mindmap_html = (
+                                get_markmap_html(json.dumps(mindmap, ensure_ascii=False)) if mindmap else ""
+                            )
+                            sync_script = f"""
+                            <script>(function() {{
+                              if (window.__audioSync) {{
+                                window.__audioSync.setAudioSrc({json.dumps(str(audio_path))});
+                                window.__audioSync.renderTranscript({json.dumps(segments, ensure_ascii=False)});
+                              }}
+                            }})();</script>
+                            """
+                            downloads = build_workflow_downloads(result)
+                            yield _workflow_outputs(
+                                f"✅ 100% | 工作流完成 | 任务: {job_id}",
+                                log_text,
+                                get_audio_sync_html() + sync_script,
+                                transcript_text,
+                                summary_md,
+                                mindmap_html,
+                                state,
+                                downloads.get("json"),
+                                downloads.get("txt"),
+                                downloads.get("srt"),
+                                downloads.get("vtt"),
+                                downloads.get("tsv"),
+                                downloads.get("all"),
+                            )
+                            return
+                    except Exception as error:
+                        yield _workflow_outputs(f"❌ 工作流执行失败：{error}")
+
+                def _cancel_workflow(api_base_url, request_timeout, state):
+                    job_id = state.get("job_id") if isinstance(state, dict) else ""
+                    if not job_id:
+                        return "当前没有可取消的工作流任务"
+                    try:
+                        post_json(
+                            f"{str(api_base_url or DEFAULT_BASE_URL).rstrip('/')}/v1/funasr/workflows/{urllib.parse.quote(job_id)}/cancel",
+                            request_timeout,
+                        )
+                        return f"已向任务 {job_id} 发送取消请求"
+                    except Exception as error:
+                        return f"取消任务失败：{error}"
 
                 ft_run_btn.click(
+                    fn=_on_run_workflow,
+                    inputs=[ft_audio, base_url, timeout, ft_scene, ft_hotwords_state, *workflow_value_components],
+                    outputs=[
+                        ft_status, ft_event_log, ft_audio_sync, ft_transcript, ft_summary, ft_mindmap,
+                        ft_result_state, ft_download_json, ft_download_txt, ft_download_srt,
+                        ft_download_vtt, ft_download_tsv, ft_download_zip,
+                    ],
+                )
+                ft_cancel_btn.click(
+                    fn=_cancel_workflow,
+                    inputs=[base_url, timeout, ft_result_state],
+                    outputs=[ft_status],
+                )
+
+                ft_legacy_run_btn.click(
                     fn=_on_run_pipeline,
                     inputs=[
                         ft_audio, ft_scene, ft_model, ft_enable_preprocess,
                         ft_enable_llm, ft_enable_summary, ft_enable_mindmap,
-                        ft_hotwords, ft_llm_select, base_url,
+                        ft_hotwords_state, ft_llm_select, base_url,
+                        ft_scene_prompt,
                     ],
-                    outputs=[ft_status, ft_audio_sync, ft_transcript, ft_summary, ft_mindmap, ft_result_state, ft_export_file],
-                )
-
-                # 导出
-                def _on_export(result_state, fmt):
-                    """导出精细转录结果"""
-                    if not result_state:
-                        return gr.update(visible=False)
-                    try:
-                        content = export_result(result_state, format=fmt)
-                        import tempfile
-                        suffix = ".json" if fmt == "json" else (".md" if fmt == "md" else ".txt")
-                        tmp = tempfile.NamedTemporaryFile(
-                            mode="w", suffix=suffix, delete=False, encoding="utf-8"
-                        )
-                        tmp.write(content)
-                        tmp.close()
-                        return gr.update(visible=True, value=tmp.name)
-                    except Exception as e:
-                        return gr.update(visible=False)
-
-                ft_export_btn.click(
-                    fn=_on_export,
-                    inputs=[ft_result_state, ft_export_format],
-                    outputs=[ft_export_file],
+                    outputs=[
+                        ft_status, ft_audio_sync, ft_transcript, ft_summary, ft_mindmap, ft_result_state,
+                        ft_download_json, ft_download_txt, ft_download_srt,
+                        ft_download_vtt, ft_download_tsv, ft_download_zip,
+                    ],
                 )
 
             with gr.Tab("服务与调试") as service_tab:
-                gr.Markdown("用于查看服务运行状态、模型加载方式、语言覆盖、能力分布、调试返回与运行日志。建议需要时再开启日志自动刷新。")
-                with gr.Row():
+                gr.Markdown("模型与服务控制台：按总览、模型、资源、任务和诊断五个区域集中管理。")
+                with gr.Accordion("1. 服务总览", open=True):
                     gr.Markdown(f"- API：`{default_base_url}`\n- UI：默认 `7861/7862/7863` 自动择空闲端口")
-                with gr.Row():
-                    log_max_lines = gr.Slider(
-                        label="日志行数",
-                        minimum=50,
-                        maximum=2000,
-                        step=50,
-                        value=120,
+                    with gr.Row():
+                        check_button = gr.Button("检查服务", variant="secondary")
+                        auto_refresh_logs = gr.Checkbox(label="自动刷新状态与日志(可能影响性能)", value=True)
+                    service_overview = gr.Markdown(initial_overview_markdown)
+                    capability_target = gr.Markdown(initial_target_markdown)
+
+                with gr.Accordion("2. 模型管理与能力", open=True):
+                    with gr.Row():
+                        refresh_models_button = gr.Button("刷新模型列表", variant="secondary")
+                        capability_filter = gr.Dropdown(
+                            label="能力筛选",
+                            choices=CAPABILITY_FILTER_CHOICES,
+                            value="all",
+                        )
+                    model_status = gr.Textbox(label="模型摘要", value=model_status_text, interactive=False)
+                    service_capability = gr.Markdown(initial_capability_markdown)
+
+                with gr.Accordion("3. 运行资源", open=True):
+                    runtime_resources = gr.Markdown("### 运行资源\n\n点击“检查服务”加载。")
+                    service_raw_json = gr.Textbox(label="服务 / 资源原始状态", lines=10, max_lines=20)
+
+                with gr.Accordion("4. 工作流任务队列", open=True):
+                    workflow_queue_panel = gr.Markdown("### 任务队列\n\n点击“检查服务”加载。")
+
+                with gr.Accordion("5. 诊断与日志", open=False):
+                    with gr.Row():
+                        log_max_lines = gr.Slider(label="日志行数", minimum=50, maximum=2000, step=50, value=120)
+                        log_max_kb = gr.Slider(label="单文件读取上限(KB)", minimum=64, maximum=2048, step=64, value=256)
+                        log_max_section_chars = gr.Slider(
+                            label="单段显示上限(字符)", minimum=2000, maximum=40000, step=2000, value=8000,
+                        )
+                    with gr.Row():
+                        refresh_logs_button = gr.Button("刷新运行日志", variant="secondary")
+                        download_logs_button = gr.Button("打包下载运行日志", variant="secondary")
+                    runtime_logs = gr.Textbox(
+                        label="运行日志", value=initial_runtime_logs, lines=18, max_lines=30, interactive=False,
                     )
-                    log_max_kb = gr.Slider(
-                        label="单文件读取上限(KB)",
-                        minimum=64,
-                        maximum=2048,
-                        step=64,
-                        value=256,
-                    )
-                    log_max_section_chars = gr.Slider(
-                        label="单段显示上限(字符)",
-                        minimum=2000,
-                        maximum=40000,
-                        step=2000,
-                        value=8000,
-                    )
-                    auto_refresh_logs = gr.Checkbox(label="自动刷新服务与调试(可能影响性能)", value=True)
-                with gr.Row():
-                    refresh_models_button = gr.Button("刷新模型列表", variant="secondary")
-                    check_button = gr.Button("检查服务", variant="secondary")
-                    refresh_logs_button = gr.Button("刷新运行日志", variant="secondary")
-                    download_logs_button = gr.Button("打包下载运行日志", variant="secondary")
-                model_status = gr.Textbox(label="模型摘要", value=model_status_text, interactive=False)
-                capability_filter = gr.Dropdown(
-                    label="能力筛选",
-                    choices=CAPABILITY_FILTER_CHOICES,
-                    value="all",
-                )
-                service_overview = gr.Markdown(initial_overview_markdown)
-                capability_target = gr.Markdown(initial_target_markdown)
-                service_capability = gr.Markdown(initial_capability_markdown)
-                service_raw_json = gr.Textbox(label="服务状态 / 调试输出", lines=10, max_lines=20)
-                runtime_logs = gr.Textbox(
-                    label="运行日志",
-                    value=initial_runtime_logs,
-                    lines=18,
-                    max_lines=30,
-                    interactive=False,
-                )
-                runtime_logs_archive = gr.File(label="日志下载", visible=True)
+                    runtime_logs_archive = gr.File(label="日志下载", visible=True)
                 runtime_log_timer = gr.Timer(value=5.0)
 
         check_button.click(
             fn=safe_check_with_capabilities,
             inputs=[base_url, timeout, capability_filter],
             outputs=[service_raw_json, service_overview, service_capability, capability_target],
+        )
+        check_button.click(
+            fn=safe_build_runtime_panels,
+            inputs=[base_url, timeout],
+            outputs=[runtime_resources, workflow_queue_panel],
         )
         capability_filter.change(
             fn=safe_render_capabilities,
@@ -3744,6 +4521,11 @@ def build_app(default_base_url: str, default_timeout: float):
             inputs=[auto_refresh_logs, service_tab_active, base_url, timeout, capability_filter, log_max_lines, log_max_kb, log_max_section_chars],
             outputs=[model_status, service_raw_json, service_overview, service_capability, capability_target, runtime_logs],
         )
+        runtime_log_timer.tick(
+            fn=auto_refresh_runtime_panels_guard,
+            inputs=[auto_refresh_logs, service_tab_active, base_url, timeout],
+            outputs=[runtime_resources, workflow_queue_panel],
+        )
         offline_tab.select(
             fn=lambda: set_service_tab_auto_refresh_active(False),
             outputs=[service_tab_active],
@@ -3776,6 +4558,11 @@ def build_app(default_base_url: str, default_timeout: float):
                 capability_target,
                 runtime_logs,
             ],
+        )
+        service_tab.select(
+            fn=safe_build_runtime_panels,
+            inputs=[base_url, timeout],
+            outputs=[runtime_resources, workflow_queue_panel],
         )
         media_file.change(
             fn=update_media_preview,

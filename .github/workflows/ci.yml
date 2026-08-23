@@ -1,0 +1,27 @@
+﻿# 程序说明：Pat-FunASR 非 Docker 代码质量门禁，执行语法检查与自动化测试。
+name: non-docker-ci
+
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+
+jobs:
+  test:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install test dependencies
+        shell: pwsh
+        run: python -m pip install -r "Docs/requirements-ci.txt"
+      - name: Compile Python sources
+        shell: pwsh
+        run: python -m compileall -q "app" "scripts" "tests"
+      - name: Run tests
+        shell: pwsh
+        run: python -m pytest -q

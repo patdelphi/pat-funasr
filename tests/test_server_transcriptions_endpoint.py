@@ -1,4 +1,4 @@
-"""
+﻿"""
 程序说明：
 测试 "app/openai_api/server.py" 的 "/v1/audio/transcriptions" 参数透传行为。
 
@@ -183,6 +183,35 @@ class TestServerTranscriptionsEndpoint(unittest.TestCase):
             [(0.1, 1.5), (1.52, 2.1)],
         )
         self.assertTrue(self._captured_generate_kwargs["output_timestamp"])
+
+    def test_transcriptions_rejects_models_without_offline_asr_capability(self):
+        for model in (
+            "paraformer-zh-streaming",
+            "emotion2vec-plus-large",
+            "nllb-200-distilled-600m",
+        ):
+            with self.subTest(model=model):
+                resp = self.client.post(
+                    "/v1/audio/transcriptions",
+                    data={"model": model, "response_format": "json"},
+                    files={"file": ("demo.wav", b"\x00\x00", "audio/wav")},
+                )
+                self.assertEqual(resp.status_code, 400)
+        self.assertIsNone(self._captured_generate_kwargs)
+
+    def test_runtime_parameter_error_remains_http_400(self):
+        def invalid_load_model(_model_name: str, **_kwargs):
+            raise ValueError("invalid runtime option")
+
+        self.server.load_model = invalid_load_model
+        resp = self.client.post(
+            "/v1/audio/transcriptions",
+            data={"model": "paraformer", "response_format": "json"},
+            files={"file": ("demo.wav", b"\x00\x00", "audio/wav")},
+        )
+
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.json()["detail"], "invalid runtime option")
 
 
 if __name__ == "__main__":

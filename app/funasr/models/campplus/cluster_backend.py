@@ -1,16 +1,74 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 # -*- encoding: utf-8 -*-
 # Copyright FunASR (https://github.com/alibaba-damo-academy/FunASR). All Rights Reserved.
 #  MIT License  (https://opensource.org/licenses/MIT)
 # Modified from 3D-Speaker (https://github.com/alibaba-damo-academy/3D-Speaker)
 
+"""
+程序说明：
+提供 CAM++ 说话人嵌入聚类；scikit-learn 不可用时使用 NumPy 后备实现，
+确保便携运行时仍能完成基础说话人分离。
+"""
+
 import scipy
 import torch
-import sklearn
 import numpy as np
 
-from sklearn.cluster._kmeans import k_means
-from sklearn.cluster import HDBSCAN
+try:
+    import sklearn
+    from sklearn.cluster._kmeans import k_means as sklearn_k_means
+    from sklearn.cluster import HDBSCAN as sklearn_hdbscan
+except ImportError:
+    sklearn = None
+    sklearn_k_means = None
+    sklearn_hdbscan = None
+
+
+def _as_numpy(value):
+    """将 CPU Tensor 或数组转换为 NumPy 数组。"""
+    if isinstance(value, torch.Tensor):
+        return value.detach().cpu().numpy()
+    return np.asarray(value)
+
+
+def _cosine_similarity(X):
+    """不依赖 sklearn 的余弦相似度矩阵。"""
+    values = _as_numpy(X).astype(np.float64, copy=False)
+    norms = np.linalg.norm(values, axis=1, keepdims=True)
+    normalized = values / np.maximum(norms, np.finfo(np.float64).eps)
+    return np.matmul(normalized, normalized.T)
+
+
+def _numpy_k_means(X, cluster_count, max_iterations=100):
+    """确定性 NumPy K-Means，仅作为缺少 sklearn 时的聚类后备。"""
+    values = _as_numpy(X).astype(np.float64, copy=False)
+    sample_count = values.shape[0]
+    cluster_count = max(1, min(int(cluster_count), sample_count))
+
+    # 首个中心取范数最大的样本，其余中心使用最远点初始化，避免随机结果。
+    first_index = int(np.argmax(np.linalg.norm(values, axis=1)))
+    center_indexes = [first_index]
+    min_distances = np.sum((values - values[first_index]) ** 2, axis=1)
+    while len(center_indexes) < cluster_count:
+        next_index = int(np.argmax(min_distances))
+        center_indexes.append(next_index)
+        candidate_distances = np.sum((values - values[next_index]) ** 2, axis=1)
+        min_distances = np.minimum(min_distances, candidate_distances)
+
+    centers = values[center_indexes].copy()
+    labels = np.zeros(sample_count, dtype=np.int64)
+    for _ in range(max_iterations):
+        distances = np.sum((values[:, None, :] - centers[None, :, :]) ** 2, axis=2)
+        next_labels = np.argmin(distances, axis=1)
+        if np.array_equal(next_labels, labels):
+            labels = next_labels
+            break
+        labels = next_labels
+        for cluster_index in range(cluster_count):
+            members = values[labels == cluster_index]
+            if len(members):
+                centers[cluster_index] = members.mean(axis=0)
+    return labels
 
 
 class SpectralCluster:
@@ -64,7 +122,10 @@ class SpectralCluster:
             Args:
                 X: TODO.
             """
-        M = sklearn.metrics.pairwise.cosine_similarity(X, X)
+        if sklearn is not None:
+            M = sklearn.metrics.pairwise.cosine_similarity(X, X)
+        else:
+            M = _cosine_similarity(X)
         return M
 
     def p_pruning(self, A):
@@ -128,8 +189,10 @@ class SpectralCluster:
                 emb: TODO.
                 k: TODO.
             """
-        _, labels, _ = k_means(emb, k)
-        return labels
+        if sklearn_k_means is not None:
+            _, labels, _ = sklearn_k_means(emb, k)
+            return labels
+        return _numpy_k_means(emb, k)
 
     def getEigenGaps(self, eig_vals):
         """Geteigengaps.
@@ -183,7 +246,9 @@ class UmapHdbscan:
             n_components=min(self.n_components, X.shape[0] - 2),
             metric=self.metric,
         ).fit_transform(X)
-        labels = HDBSCAN(
+        if sklearn_hdbscan is None:
+            raise RuntimeError("HDBSCAN requires scikit-learn")
+        labels = sklearn_hdbscan(
             min_samples=self.min_samples,
             min_cluster_size=self.min_cluster_size,
             allow_single_cluster=True,
@@ -226,8 +291,11 @@ class ClusterBackend(torch.nn.Module):
         if X.shape[0] < 2048 or k is not None:
             # unexpected corner case
             labels = self.spectral_cluster(X, k)
-        else:
+        elif sklearn_hdbscan is not None:
             labels = self.umap_hdbscan_cluster(X)
+        else:
+            # 便携运行时未安装 sklearn 时继续使用谱聚类，避免运行期 NameError。
+            labels = self.spectral_cluster(X, k)
 
         if k is None and "merge_thr" in self.model_config:
             labels = self.merge_by_cos(labels, X, self.model_config["merge_thr"])

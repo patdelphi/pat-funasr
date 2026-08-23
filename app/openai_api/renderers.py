@@ -1,4 +1,4 @@
-"""
+﻿"""
 程序说明：
 提供转写结果的“输出渲染器”（纯后处理），将统一的 segments 结构渲染为：
 txt / json / srt / vtt / tsv，并支持 all(zip) 打包输出。
@@ -178,4 +178,112 @@ def render_all_zip(
         zf.writestr("output.srt", srt)
         zf.writestr("output.vtt", vtt)
         zf.writestr("output.json", js)
+    return mem.getvalue()
+
+
+def render_fine_all_zip(
+    *,
+    full_text: str,
+    refined_text: str = "",
+    segments: List[Dict[str, Any]],
+    json_payload: Dict[str, Any],
+    summary: Optional[Dict[str, Any]] = None,
+    mindmap: Optional[Dict[str, Any]] = None,
+    scene_name: str = "",
+    elapsed: float = 0.0,
+    max_line_width: Optional[int] = None,
+) -> bytes:
+    """
+    精细转录打包 ZIP：除基础 5 件套外，额外追加：
+      transcript_refined.txt  /  summary.md  /  mindmap.json
+    并把基础 output.txt 改为包含完整导出（纪要+思维导图）的版本
+    """
+    import json as _json_mod
+
+    seg_txt = render_txt(segments, max_line_width=max_line_width)
+    tsv = render_tsv(segments)
+    srt = render_srt(segments, max_line_width=max_line_width)
+    vtt = render_vtt(segments, max_line_width=max_line_width)
+    js = render_json_pretty(json_payload)
+
+    # ---- 完整 TXT（包含 转写 + 纪要 + 思维导图）----
+    sep = "=" * 60
+    complete_lines: List[str] = []
+    complete_lines.append(f"精细转录结果 - {scene_name or ''}")
+    if elapsed:
+        complete_lines.append(f"耗时: {elapsed:.1f}s")
+    complete_lines.append(sep)
+    complete_lines.append("")
+    if refined_text:
+        complete_lines.append("【优化后文本】")
+        complete_lines.append(refined_text)
+    elif full_text:
+        complete_lines.append("【原始转写】")
+        complete_lines.append(full_text)
+    else:
+        complete_lines.append("【按段落转写】")
+        complete_lines.append(seg_txt)
+    if summary:
+        complete_lines.append("")
+        complete_lines.append(sep)
+        complete_lines.append("【纪要】")
+        complete_lines.append(_json_mod.dumps(summary, ensure_ascii=False, indent=2))
+    if mindmap:
+        complete_lines.append("")
+        complete_lines.append(sep)
+        complete_lines.append("【思维导图】")
+        complete_lines.append(_json_mod.dumps(mindmap, ensure_ascii=False, indent=2))
+    complete_txt = "\n".join(complete_lines) + "\n"
+
+    mem = io.BytesIO()
+    with zipfile.ZipFile(mem, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("output.txt", complete_txt)
+        zf.writestr("transcript_segments.txt", seg_txt)
+        if refined_text:
+            zf.writestr("transcript_refined.txt", refined_text)
+        zf.writestr("output.tsv", tsv)
+        zf.writestr("output.srt", srt)
+        zf.writestr("output.vtt", vtt)
+        zf.writestr("output.json", js)
+        if summary:
+            # summary 也输出一份可读 Markdown
+            summary_lines: List[str] = [f"# 纪要 - {scene_name or ''}", ""]
+            field_labels = {
+                "participants": "参会人员", "summary": "概要",
+                "deadlines": "截止日期", "decisions": "决策",
+                "action_items": "行动项", "follow_ups": "后续跟进",
+                "notes": "备注", "topics": "讨论主题",
+                "key_insights": "关键洞察", "pain_points": "痛点",
+                "suggestions": "建议", "conclusion": "结论",
+                "action_items": "行动项",
+            }
+            if summary.get("aggregated"):
+                for i, part in enumerate(summary.get("parts") or []):
+                    summary_lines.append(f"## 第 {i + 1} 段")
+                    for k, v in part.items():
+                        label = field_labels.get(k, k)
+                        if isinstance(v, list):
+                            summary_lines.append(f"**{label}:**")
+                            for it in v:
+                                summary_lines.append(f"- {it}")
+                        else:
+                            summary_lines.append(f"**{label}:** {v}")
+                    summary_lines.append("")
+            else:
+                for k, v in summary.items():
+                    label = field_labels.get(k, k)
+                    if isinstance(v, list):
+                        summary_lines.append(f"**{label}:**")
+                        for it in v:
+                            summary_lines.append(f"- {it}")
+                    elif isinstance(v, dict):
+                        summary_lines.append(f"**{label}:**")
+                        for dk, dv in v.items():
+                            summary_lines.append(f"- {dk}: {dv}")
+                    else:
+                        summary_lines.append(f"**{label}:** {v}")
+                    summary_lines.append("")
+            zf.writestr("summary.md", "\n".join(summary_lines).strip() + "\n")
+        if mindmap:
+            zf.writestr("mindmap.json", _json_mod.dumps(mindmap, ensure_ascii=False, indent=2) + "\n")
     return mem.getvalue()
