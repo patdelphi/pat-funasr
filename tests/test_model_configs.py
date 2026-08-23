@@ -188,6 +188,20 @@ class TestModelConfigs(unittest.TestCase):
         self.assertIs(results[1], loaded_model)
         self.assertEqual(len(calls), 1)
 
+    def test_missing_local_model_does_not_leave_single_flight_waiter(self):
+        server = _load_server_module()
+        server.MODEL_LOAD_EVENTS.clear()
+
+        with mock.patch.object(
+            server,
+            "_resolve_runtime_models_to_local",
+            side_effect=server.ModelNotDownloadedError("missing"),
+        ):
+            with self.assertRaises(server.ModelNotDownloadedError):
+                server.load_model("sensevoice")
+
+        self.assertEqual(server.MODEL_LOAD_EVENTS, {})
+
 
 if __name__ == "__main__":
     unittest.main()

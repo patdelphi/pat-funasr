@@ -67,7 +67,11 @@ def write_workflow_artifacts(
 
     render_map = {
         "json": lambda: renderers.render_json_pretty(payload),
-        "txt": lambda: renderers.render_txt(segments),
+        "txt": lambda: (
+            renderers.render_txt(segments)
+            if "".join(str(item.get("text") or "") for item in segments) == full_text
+            else full_text.strip() + ("\n" if full_text.strip() else "")
+        ),
         "srt": lambda: renderers.render_srt(segments),
         "vtt": lambda: renderers.render_vtt(segments),
         "tsv": lambda: renderers.render_tsv(segments),
@@ -97,3 +101,22 @@ def _artifact(path: Path, fmt: str) -> dict[str, Any]:
         "path": str(resolved),
         "size_bytes": resolved.stat().st_size,
     }
+
+
+def refresh_events_artifact(snapshot: dict[str, Any]) -> None:
+    """任务进入终态后重写事件产物，确保包含导出成功和任务完成事件。"""
+    artifacts = (snapshot.get("result") or {}).get("artifacts") or []
+    artifact = next(
+        (item for item in artifacts if item.get("name") == "events.jsonl"),
+        None,
+    )
+    if artifact is None:
+        return
+    path = Path(str(artifact.get("path") or "")).resolve()
+    if path.name != "events.jsonl" or not path.parent.is_dir():
+        return
+    event_text = "".join(
+        json.dumps(item, ensure_ascii=False) + "\n"
+        for item in snapshot.get("events") or []
+    )
+    _write_text(path, event_text)

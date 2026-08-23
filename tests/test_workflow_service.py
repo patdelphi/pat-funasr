@@ -135,6 +135,48 @@ class TestWorkflowConfig(unittest.TestCase):
         self.assertIn("TRANSLATION_LANGUAGES_IDENTICAL", codes)
         self.assertIn("MODEL_NOT_FOUND", codes)
 
+    def test_rejects_workflow_options_that_are_not_implemented(self):
+        config = parse_workflow_config(
+            {
+                "transcription": {"primary": {"model": "primary"}},
+                "timestamps": {"level": "word", "forced_alignment": False},
+                "diarization": {
+                    "enabled": True,
+                    "strategy": "joint",
+                    "asr_model": "reviewer",
+                    "global_speaker_clustering": False,
+                },
+            }
+        )
+
+        errors, _warnings = validate_workflow_config(config, MODEL_CAPABILITIES)
+        codes = {item["code"] for item in errors}
+
+        self.assertIn("WORD_TIMESTAMPS_REQUIRE_ALIGNMENT", codes)
+        self.assertIn("DIARIZATION_STRATEGY_UNSUPPORTED", codes)
+        self.assertIn("GLOBAL_SPEAKER_CLUSTERING_REQUIRED", codes)
+
+    def test_whole_text_proofread_cannot_claim_to_preserve_timestamps(self):
+        config = parse_workflow_config(
+            {
+                "transcription": {"primary": {"model": "primary"}},
+                "llm_proofread": {
+                    "enabled": True,
+                    "provider_profile_id": "local",
+                    "model": "proof",
+                    "scope": "all",
+                    "preserve_timestamps": True,
+                },
+            }
+        )
+
+        errors, _warnings = validate_workflow_config(config, MODEL_CAPABILITIES)
+
+        self.assertIn(
+            "LLM_SCOPE_CANNOT_PRESERVE_TIMESTAMPS",
+            {item["code"] for item in errors},
+        )
+
 
 class TestWorkflowJobManager(unittest.TestCase):
     def test_events_are_append_only_and_progress_is_monotonic(self):
@@ -237,6 +279,102 @@ class TestWorkflowJobManager(unittest.TestCase):
                 manager.wait_for_terminal(job_id, timeout=2)
         finally:
             release.set()
+            manager.shutdown(wait=True)
+
+    def test_public_snapshot_hides_artifact_paths(self):
+        manager = WorkflowJobManager(max_workers=1)
+        try:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                source = Path(tmpdir) / "audio.wav"
+                source.write_bytes(b"audio")
+                job_id = manager.submit(
+                    config={},
+                    source_path=str(source),
+                    runner=lambda _context: {
+                        "artifacts": [
+                            {
+                                "name": "transcript.json",
+                                "format": "json",
+                                "path": str(Path(tmpdir) / "secret" / "transcript.json"),
+                            }
+                        ]
+                    },
+                )
+                manager.wait_for_terminal(job_id, timeout=2)
+
+                public = manager.get_snapshot(job_id)
+                private = manager.get_snapshot(job_id, include_internal=True)
+
+            self.assertNotIn("path", public["result"]["artifacts"][0])
+            self.assertIn("path", private["result"]["artifacts"][0])
+        finally:
+            manager.shutdown(wait=True)
+
+    def test_incremental_events_do_not_require_full_snapshot(self):
+        manager = WorkflowJobManager(max_workers=1)
+        try:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                source = Path(tmpdir) / "audio.wav"
+                source.write_bytes(b"audio")
+
+                def runner(context):
+                    context.emit(level="info", stage="one", message="one")
+                    context.emit(level="info", stage="two", message="two")
+                    return {}
+
+                job_id = manager.submit(config={}, source_path=str(source), runner=runner)
+                manager.wait_for_terminal(job_id, timeout=2)
+                incremental = manager.get_events(job_id, after_event_id=2)
+
+            self.assertTrue(incremental["events"])
+            self.assertTrue(all(item["event_id"] > 2 for item in incremental["events"]))
+        finally:
+            manager.shutdown(wait=True)
+
+    def test_failed_job_redacts_paths_and_tokens(self):
+        manager = WorkflowJobManager(max_workers=1)
+        try:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                source = Path(tmpdir) / "audio.wav"
+                source.write_bytes(b"audio")
+                job_id = manager.submit(
+                    config={},
+                    source_path=str(source),
+                    runner=lambda _context: (_ for _ in ()).throw(
+                        RuntimeError(r"C:\secret\audio.wav token=abc123 Bearer xyz789")
+                    ),
+                )
+                snapshot = manager.wait_for_terminal(job_id, timeout=2)
+
+            self.assertNotIn("C:\\secret", snapshot["error"])
+            self.assertNotIn("abc123", snapshot["error"])
+            self.assertNotIn("xyz789", snapshot["error"])
+            self.assertIn("[REDACTED", snapshot["error"])
+        finally:
+            manager.shutdown(wait=True)
+
+    def test_terminal_jobs_are_pruned_by_ttl(self):
+        manager = WorkflowJobManager(max_workers=1, terminal_ttl_s=60)
+        try:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                source = Path(tmpdir) / "audio.wav"
+                source.write_bytes(b"audio")
+                job_id = manager.submit(
+                    config={},
+                    source_path=str(source),
+                    runner=lambda _context: {},
+                )
+                snapshot = manager.wait_for_terminal(job_id, timeout=2)
+                updated = __import__("datetime").datetime.fromisoformat(
+                    snapshot["updated_at"]
+                ).timestamp()
+
+                removed = manager.prune_terminal_jobs(now=updated + 61)
+
+            self.assertEqual(removed, 1)
+            with self.assertRaises(KeyError):
+                manager.get_snapshot(job_id)
+        finally:
             manager.shutdown(wait=True)
 
 

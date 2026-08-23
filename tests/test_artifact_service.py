@@ -75,6 +75,49 @@ class TestArtifactService(unittest.TestCase):
             )
             self.assertIn("events.jsonl", names)
 
+    def test_refresh_events_artifact_writes_terminal_events(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            events_path = Path(tmpdir) / "events.jsonl"
+            events_path.write_text("old", encoding="utf-8")
+            snapshot = {
+                "events": [
+                    {"event_id": 1, "message": "正在导出"},
+                    {"event_id": 2, "message": "导出完成"},
+                    {"event_id": 3, "message": "任务完成"},
+                ],
+                "result": {
+                    "artifacts": [
+                        {"name": "events.jsonl", "path": str(events_path)}
+                    ]
+                },
+            }
+
+            artifact_service.refresh_events_artifact(snapshot)
+
+            lines = events_path.read_text(encoding="utf-8-sig").splitlines()
+            self.assertEqual(len(lines), 3)
+            self.assertEqual(json.loads(lines[-1])["message"], "任务完成")
+
+    def test_txt_uses_final_text_when_whole_text_proofread_changed_it(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            artifact_service.write_workflow_artifacts(
+                output_dir=tmpdir,
+                result={
+                    "text": "校对后的最终文本",
+                    "refined_text": "校对后的最终文本",
+                    "segments": [{"text": "原始文本", "start": 0, "end": 1}],
+                },
+                config={},
+                events=[],
+                formats=["txt"],
+                include_raw_candidates=False,
+                include_config_snapshot=False,
+            )
+
+            output = (Path(tmpdir) / "transcript.txt").read_text(encoding="utf-8-sig")
+
+        self.assertEqual(output.strip(), "校对后的最终文本")
+
 
 if __name__ == "__main__":
     unittest.main()

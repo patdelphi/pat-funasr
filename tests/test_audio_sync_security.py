@@ -15,7 +15,10 @@ _WEBUI_DIR = _ROOT / "app" / "pat_funasr_webui"
 if str(_WEBUI_DIR) not in sys.path:
     sys.path.insert(0, str(_WEBUI_DIR))
 
-from fine_transcription.audio_sync_js import get_markmap_html  # noqa: E402
+from fine_transcription.audio_sync_js import (  # noqa: E402
+    get_markmap_html,
+    json_for_inline_script,
+)
 
 
 class TestAudioSyncSecurity(unittest.TestCase):
@@ -32,6 +35,17 @@ class TestAudioSyncSecurity(unittest.TestCase):
     def test_invalid_json_returns_safe_message(self):
         output = get_markmap_html("{invalid")
         self.assertIn("思维导图数据无效", output)
+
+    def test_inline_json_cannot_close_script_element(self):
+        output = json_for_inline_script(
+            [{"text": "</script><script>alert(1)</script>&\u2028"}]
+        )
+
+        self.assertNotIn("</script", output.lower())
+        self.assertNotIn("<", output)
+        self.assertNotIn("&", output)
+        self.assertIn("\\u003c/script\\u003e", output)
+        self.assertIn("\\u2028", output)
 
 
 if __name__ == "__main__":

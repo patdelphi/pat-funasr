@@ -202,6 +202,10 @@ def _run_transcriptions(
                 )
             except Exception as exc:
                 handle_failure(item, exc)
+    reviewer_order = {
+        item.model: index for index, item in enumerate(transcription.reviewers)
+    }
+    reviewers.sort(key=lambda item: reviewer_order.get(str(item.get("model") or ""), len(reviewer_order)))
     return primary, reviewers
 
 
@@ -211,6 +215,7 @@ def _run_llm_stages(
     config: WorkflowConfig,
     result: dict[str, Any],
 ) -> None:
+    result.setdefault("original_text", str(result.get("text") or ""))
     for stage_name, progress, output_key in (
         ("llm_proofread", 0.78, "refined_text"),
         ("summary", 0.82, "summary"),
@@ -229,7 +234,36 @@ def _run_llm_stages(
             message=f"{stage_name} 开始执行",
             model=stage_config.model,
         )
-        result[output_key] = runtime.llm_stage(stage_name, str(result.get("text") or ""), stage_config)
+        if stage_name == "llm_proofread" and stage_config.scope == "segments":
+            refined_parts: list[str] = []
+            segments = list(result.get("segments") or [])
+            for segment in segments:
+                context.raise_if_cancelled()
+                refined = str(
+                    runtime.llm_stage(
+                        stage_name,
+                        str(segment.get("text") or ""),
+                        stage_config,
+                    )
+                    or ""
+                )
+                segment["text"] = refined or str(segment.get("text") or "")
+                refined_parts.append(str(segment["text"]))
+            result["refined_text"] = "".join(refined_parts)
+            result["text"] = result["refined_text"]
+        else:
+            if stage_config.scope == "original":
+                stage_input = str(result.get("original_text") or "")
+            elif stage_config.scope in {"all", "refined"}:
+                stage_input = str(result.get("refined_text") or result.get("text") or "")
+            else:
+                stage_input = "".join(
+                    str(item.get("text") or "") for item in result.get("segments") or []
+                )
+            stage_output = runtime.llm_stage(stage_name, stage_input, stage_config)
+            result[output_key] = stage_output
+            if stage_name == "llm_proofread":
+                result["text"] = str(stage_output or result.get("text") or "")
         _emit_stage(
             context,
             stage=stage_name,
@@ -273,6 +307,9 @@ def run_workflow(context: WorkflowRunContext, runtime: WorkflowRuntime) -> dict[
         primary,
         reviewers,
         mode=config.reconciliation.mode,
+        disagreement_threshold=config.reconciliation.disagreement_threshold,
+        keep_alternatives=config.reconciliation.keep_alternatives,
+        uncertain_policy=config.reconciliation.uncertain_policy,
     )
     result: dict[str, Any] = {
         **reconciled,
@@ -291,7 +328,26 @@ def run_workflow(context: WorkflowRunContext, runtime: WorkflowRuntime) -> dict[
             message="正在生成独立说话人时间轴",
             model=config.diarization.speaker_model,
         )
-        diarization = runtime.diarize(source_path, config.diarization)
+        diarization = next(
+            (
+                item["diarization"]
+                for item in (primary, *reviewers)
+                if str(item.get("model") or "") == config.diarization.asr_model
+                and isinstance(item.get("diarization"), dict)
+            ),
+            None,
+        )
+        if diarization is None:
+            diarization = runtime.diarize(source_path, config.diarization)
+        else:
+            _emit_stage(
+                context,
+                stage="diarization",
+                progress=0.7,
+                message="复用已完成转录模型的说话人结果，避免重复加载与推理",
+                level="info",
+                model=config.diarization.asr_model,
+            )
         result["diarization"] = diarization
         result["segments"] = alignment_service.align_speakers_to_segments(
             result["segments"],
@@ -321,6 +377,19 @@ def run_workflow(context: WorkflowRunContext, runtime: WorkflowRuntime) -> dict[
         _emit_stage(context, stage="emotion", progress=0.92, message="正在识别情感", model=config.emotion.model)
         result["emotion"] = runtime.emotion(source_path, config.emotion)
         _emit_stage(context, stage="emotion", progress=0.94, message="情感识别完成", level="success", model=config.emotion.model)
+
+    if config.timestamps.level == "off":
+        for segment in result.get("segments") or []:
+            for key in (
+                "start",
+                "end",
+                "speaker_candidates",
+                "speaker_uncertain",
+                "alignment_quality",
+            ):
+                segment.pop(key, None)
+        result.pop("words", None)
+    result["timestamp_level"] = config.timestamps.level
 
     context.raise_if_cancelled()
     _emit_stage(context, stage="export", progress=0.96, message="正在生成导出产物")

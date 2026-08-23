@@ -1,4 +1,4 @@
-"""
+﻿"""
 程序说明：
 测试 "Pat WebUI" 的说话人分离导出文件生成逻辑（unittest）。
 
@@ -853,56 +853,173 @@ class TestPatWebUiDiarizationExports(unittest.TestCase):
         self.assertEqual(calls, [])
         self.assertIn("模型加载失败", update[1])
 
-    def test_build_app_registers_microphone_stream_as_non_generator(self):
+    def test_build_app_registers_system_microphone_button_without_queue(self):
         demo, created_loops = build_demo_with_tracked_loops("http://127.0.0.1:8000", 1)
         try:
-            microphone_component = next(
+            microphone_button = next(
                 component
                 for component in demo.config.get("components", [])
-                if component.get("props", {}).get("label") == "Gradio 麦克风"
+                if component.get("type") == "button"
+                and component.get("props", {}).get("value") == "开始录制并识别"
             )
-            microphone_id = microphone_component["id"]
-            stream_dependency = next(
+            microphone_button_id = microphone_button["id"]
+            click_dependency = next(
                 dependency
                 for dependency in demo.config.get("dependencies", [])
-                if (microphone_id, "stream") in dependency.get("targets", [])
+                if (microphone_button_id, "click") in dependency.get("targets", [])
             )
-            stream_function = demo.fns[stream_dependency["id"]]
+            click_function = demo.fns[click_dependency["id"]]
 
-            self.assertEqual(microphone_component["props"]["sources"], ["microphone"])
-            self.assertTrue(microphone_component["props"]["streaming"])
-            self.assertNotIn("format", microphone_component["props"])
-            self.assertFalse(stream_function.types_generator)
+            self.assertFalse(click_dependency["queue"])
+            self.assertFalse(click_function.types_generator)
         finally:
             if hasattr(demo, "close"):
                 demo.close()
             close_created_loops(created_loops)
 
-    def test_build_app_installs_hidden_native_microphone_device_bridge(self):
+    def test_build_app_consolidates_navigation_into_four_top_level_tabs(self):
+        """顶层导航必须按规划收敛，原有能力只能作为子栏目存在。"""
         demo, created_loops = build_demo_with_tracked_loops("http://127.0.0.1:8000", 1)
         try:
-            bridge = next(
+            config = demo.get_config_file()
+            components = {component["id"]: component for component in config["components"]}
+
+            def tab_labels(tabs_node):
+                return [
+                    components[child["id"]].get("props", {}).get("label")
+                    for child in tabs_node.get("children", [])
+                    if components[child["id"]].get("type") == "tabitem"
+                ]
+
+            root_tabs = next(
+                child
+                for child in config["layout"].get("children", [])
+                if components[child["id"]].get("type") == "tabs"
+            )
+            self.assertEqual(
+                tab_labels(root_tabs),
+                ["转录工作台", "实时识别", "媒体与文本工具", "模型与服务"],
+            )
+
+            top_level_nodes = {
+                components[child["id"]]["props"]["label"]: child
+                for child in root_tabs["children"]
+            }
+            transcription_tabs = next(
+                child
+                for child in top_level_nodes["转录工作台"].get("children", [])
+                if components[child["id"]].get("type") == "tabs"
+            )
+            media_tabs = next(
+                child
+                for child in top_level_nodes["媒体与文本工具"].get("children", [])
+                if components[child["id"]].get("type") == "tabs"
+            )
+            streaming_tabs = next(
+                child
+                for child in top_level_nodes["实时识别"].get("children", [])
+                if components[child["id"]].get("type") == "tabs"
+            )
+            self.assertEqual(tab_labels(transcription_tabs), ["快速转录", "会议精细转录", "说话人时间轴"])
+            self.assertEqual(tab_labels(media_tabs), ["音频处理", "跨语言翻译", "情感识别"])
+            self.assertEqual(tab_labels(streaming_tabs), ["文件流式识别", "Mic 实时识别"])
+
+            def descendant_ids(node):
+                ids = {node["id"]}
+                for child in node.get("children", []):
+                    ids.update(descendant_ids(child))
+                return ids
+
+            media_component_ids = descendant_ids(top_level_nodes["媒体与文本工具"])
+            streaming_child_nodes = {
+                components[child["id"]]["props"]["label"]: child
+                for child in streaming_tabs["children"]
+            }
+            streaming_file_component_ids = descendant_ids(streaming_child_nodes["文件流式识别"])
+            streaming_mic_component_ids = descendant_ids(streaming_child_nodes["Mic 实时识别"])
+            self.assertFalse(
+                any(
+                    components[component_id].get("type") == "audio"
+                    and "microphone" in components[component_id].get("props", {}).get("sources", [])
+                    for component_id in streaming_file_component_ids
+                )
+            )
+            self.assertFalse(
+                any(
+                    components[component_id].get("type") == "audio"
+                    and "microphone" in components[component_id].get("props", {}).get("sources", [])
+                    for component_id in streaming_mic_component_ids
+                )
+            )
+            streaming_mic_labels = {
+                components[component_id].get("props", {}).get("label")
+                for component_id in streaming_mic_component_ids
+            }
+            streaming_mic_buttons = {
+                components[component_id].get("props", {}).get("value")
+                for component_id in streaming_mic_component_ids
+                if components[component_id].get("type") == "button"
+            }
+            self.assertIn("系统输入设备", streaming_mic_labels)
+            self.assertIn("系统麦克风信号", streaming_mic_labels)
+            self.assertIn("开始录制并识别", streaming_mic_buttons)
+            audio_tool_components = [
+                components[component_id]
+                for component_id in media_component_ids
+                if components[component_id].get("type") == "audio"
+            ]
+            audio_upload = next(
+                component for component in audio_tool_components
+                if component.get("props", {}).get("label") == "上传音频文件"
+            )
+            audio_output = next(
+                component for component in audio_tool_components
+                if component.get("props", {}).get("label") == "处理后音频预览"
+            )
+            self.assertEqual(audio_upload["props"]["sources"], ["upload"])
+            self.assertFalse(audio_output["props"]["editable"])
+            expected_tabs = {
+                "转录工作台", "实时识别", "媒体与文本工具", "模型与服务",
+                "快速转录", "会议精细转录", "说话人时间轴",
+                "音频处理", "跨语言翻译", "情感识别",
+                "文件流式识别", "Mic 实时识别",
+            }
+            for component in components.values():
+                label = component.get("props", {}).get("label")
+                if component.get("type") == "tabitem" and label in expected_tabs:
+                    self.assertFalse(component["props"]["render_children"])
+            streaming_tab_id = next(
+                component_id
+                for component_id, component in components.items()
+                if component.get("type") == "tabitem"
+                and component.get("props", {}).get("label") == "实时识别"
+            )
+            streaming_select_dependencies = [
+                dependency
+                for dependency in config["dependencies"]
+                if any(
+                    target[0] == streaming_tab_id and target[1] == "select"
+                    for target in dependency.get("targets", [])
+                )
+            ]
+            self.assertEqual(streaming_select_dependencies, [])
+            for dependency in config["dependencies"]:
+                outputs = dependency.get("outputs", [])
+                self.assertEqual(outputs, list(dict.fromkeys(outputs)))
+        finally:
+            if hasattr(demo, "close"):
+                demo.close()
+            close_created_loops(created_loops)
+
+    def test_build_app_does_not_install_global_microphone_device_bridge(self):
+        demo, created_loops = build_demo_with_tracked_loops("http://127.0.0.1:8000", 1)
+        try:
+            bridges = [
                 component
                 for component in demo.config.get("components", [])
                 if component.get("props", {}).get("elem_id") == "pat-mic-device-bridge"
-            )
-            bridge_js = bridge["props"]["js_on_load"]
-
-            self.assertEqual(bridge["type"], "html")
-            self.assertEqual(bridge["props"]["visible"], "hidden")
-            self.assertIn('select[aria-label="Select input device"]', bridge_js)
-            self.assertIn('addEventListener("change"', bridge_js)
-            self.assertIn("__patOriginalGetUserMedia", bridge_js)
-            self.assertIn("existingAudio.deviceId", bridge_js)
-            self.assertIn('deviceId === "default"', bridge_js)
-            self.assertIn('data-pat-mic-device-bridge', bridge_js)
-            self.assertIn("echoCancellation", bridge_js)
-            self.assertIn("noiseSuppression", bridge_js)
-            self.assertIn("autoGainControl", bridge_js)
-            self.assertIn("channelCount", bridge_js)
-            self.assertIn('deviceId !== "default"', bridge_js)
-            self.assertIn('track.addEventListener("mute"', bridge_js)
-            self.assertIn('track.addEventListener("ended"', bridge_js)
+            ]
+            self.assertEqual(bridges, [])
         finally:
             if hasattr(demo, "close"):
                 demo.close()
@@ -936,7 +1053,7 @@ class TestPatWebUiDiarizationExports(unittest.TestCase):
             self.assertIn("停止文件识别", button_values)
             self.assertIn("生成结果下载", button_values)
             self.assertIn("生成 Mic 结果下载", button_values)
-            self.assertNotIn("开始录制并识别", button_values)
+            self.assertIn("开始录制并识别", button_values)
             self.assertIn("timer", component_types)
         finally:
             if hasattr(demo, "close"):
@@ -1014,10 +1131,11 @@ class TestPatWebUiDiarizationExports(unittest.TestCase):
             self.assertEqual(textbox_values["分块大小(chunk_size)"], "0,30,15")
             self.assertIn("编码器回看帧数(encoder_chunk_look_back)", labels)
             self.assertIn("解码器回看帧数(decoder_chunk_look_back)", labels)
-            self.assertIn("Gradio 麦克风", labels)
+            self.assertIn("系统输入设备", labels)
             self.assertIn("麦克风识别状态", labels)
+            self.assertIn("系统麦克风信号", labels)
             self.assertIn("Mic 流式输出", labels)
-            self.assertNotIn("麦克风设备", labels)
+            self.assertNotIn("Gradio 麦克风", labels)
             html_values = [
                 str(component.get("props", {}).get("value", ""))
                 for component in demo.config.get("components", [])

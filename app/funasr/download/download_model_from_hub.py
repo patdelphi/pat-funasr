@@ -1,9 +1,17 @@
-import logging
+﻿import logging
 import os
 import json
 from omegaconf import OmegaConf, DictConfig
 
 from funasr.download.name_maps_from_hub import name_maps_ms, name_maps_hf, name_maps_openai
+
+
+def model_requirements_install_allowed(kwargs):
+    """仅在调用方或环境变量明确授权时安装模型附带依赖。"""
+    explicit = kwargs.get("allow_model_requirements_install")
+    if explicit is not None:
+        return bool(explicit)
+    return os.environ.get("FUNASR_ALLOW_MODEL_REQUIREMENTS_INSTALL", "").strip() == "1"
 
 
 def download_model(**kwargs):
@@ -100,14 +108,23 @@ def download_from_ms(**kwargs):
     if isinstance(kwargs, DictConfig):
         kwargs = OmegaConf.to_container(kwargs, resolve=True)
     logging.warning(f'trust_remote_code: {kwargs.get("trust_remote_code", False)}')
-    if os.path.exists(os.path.join(model_or_path, "requirements.txt")) and kwargs.get(
-        "trust_remote_code", False
+    allow_requirements_install = model_requirements_install_allowed(kwargs)
+    kwargs.pop("allow_model_requirements_install", None)
+    if (
+        os.path.exists(os.path.join(model_or_path, "requirements.txt"))
+        and kwargs.get("trust_remote_code", False)
+        and allow_requirements_install
     ):
         requirements = os.path.join(model_or_path, "requirements.txt")
         print(f"Detect model requirements, begin to install it: {requirements}")
         from funasr.utils.install_model_requirements import install_requirements
 
         install_requirements(requirements)
+    elif os.path.exists(os.path.join(model_or_path, "requirements.txt")):
+        logging.warning(
+            "Skip model requirements installation; set "
+            "FUNASR_ALLOW_MODEL_REQUIREMENTS_INSTALL=1 only after explicit review"
+        )
     if kwargs.get("trust_remote_code", False):
         from funasr.utils.dynamic_import import import_module_from_path
 
@@ -177,14 +194,23 @@ def download_from_hf(**kwargs):
     if isinstance(kwargs, DictConfig):
         kwargs = OmegaConf.to_container(kwargs, resolve=True)
     logging.warning(f'trust_remote_code: {kwargs.get("trust_remote_code", False)}')
-    if os.path.exists(os.path.join(model_or_path, "requirements.txt")) and kwargs.get(
-        "trust_remote_code", False
+    allow_requirements_install = model_requirements_install_allowed(kwargs)
+    kwargs.pop("allow_model_requirements_install", None)
+    if (
+        os.path.exists(os.path.join(model_or_path, "requirements.txt"))
+        and kwargs.get("trust_remote_code", False)
+        and allow_requirements_install
     ):
         requirements = os.path.join(model_or_path, "requirements.txt")
         print(f"Detect model requirements, begin to install it: {requirements}")
         from funasr.utils.install_model_requirements import install_requirements
 
         install_requirements(requirements)
+    elif os.path.exists(os.path.join(model_or_path, "requirements.txt")):
+        logging.warning(
+            "Skip model requirements installation; set "
+            "FUNASR_ALLOW_MODEL_REQUIREMENTS_INSTALL=1 only after explicit review"
+        )
     return kwargs
 
 

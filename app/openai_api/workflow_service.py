@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import copy
+import re
 import threading
 import time
 import uuid
@@ -22,6 +23,20 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
+
+
+def _safe_error_message(error: Exception) -> str:
+    """脱敏异常中的绝对路径、认证头和常见密钥字段。"""
+    message = str(error) or error.__class__.__name__
+    message = re.sub(r"(?i)bearer\s+[A-Za-z0-9._~+/-]+", "Bearer [REDACTED]", message)
+    message = re.sub(
+        r"(?i)(api[_-]?key|token|authorization|cookie)\s*[:=]\s*[^\s,;]+",
+        r"\1=[REDACTED]",
+        message,
+    )
+    message = re.sub(r"[A-Za-z]:\\[^\r\n,;]+", "[REDACTED_PATH]", message)
+    message = re.sub(r"(?<![A-Za-z0-9])/(?:[^\s,;]+/)*[^\s,;]+", "[REDACTED_PATH]", message)
+    return message[:1000]
 
 
 class _StrictModel(BaseModel):
@@ -92,8 +107,8 @@ class LLMStageConfig(_StrictModel):
     enabled: bool = False
     provider_profile_id: str = ""
     model: str = ""
-    scope: str = "all"
-    template_id: str = ""
+    scope: Literal["all", "segments", "original", "refined"] = "all"
+    template_id: Literal["default", "strict", "meeting"] = "default"
     preserve_timestamps: bool = True
     preserve_speakers: bool = True
 
@@ -217,6 +232,14 @@ def validate_workflow_config(
                     f"模型 {item.model} 不支持离线转录",
                 )
             )
+        elif capabilities.get("downloaded") is False:
+            errors.append(
+                _issue(
+                    "MODEL_NOT_DOWNLOADED",
+                    f"{path}.model",
+                    f"模型 {item.model} 尚未下载；请先执行明确的下载操作",
+                )
+            )
 
     if config.diarization.enabled:
         capabilities = model_capabilities.get(config.diarization.asr_model)
@@ -234,6 +257,14 @@ def validate_workflow_config(
                     "MODEL_CAPABILITY_MISMATCH",
                     "diarization.asr_model",
                     f"模型 {config.diarization.asr_model} 不支持说话人分离",
+                )
+            )
+        elif capabilities.get("downloaded") is False:
+            errors.append(
+                _issue(
+                    "MODEL_NOT_DOWNLOADED",
+                    "diarization.asr_model",
+                    f"说话人辅助模型 {config.diarization.asr_model} 尚未下载",
                 )
             )
         if config.timestamps.level == "off":
@@ -273,6 +304,32 @@ def validate_workflow_config(
                 )
             )
 
+    if config.timestamps.level == "word" and not config.timestamps.forced_alignment:
+        errors.append(
+            _issue(
+                "WORD_TIMESTAMPS_REQUIRE_ALIGNMENT",
+                "timestamps.forced_alignment",
+                "字词级时间戳必须启用支持模型的强制对齐",
+            )
+        )
+
+    if config.diarization.enabled and config.diarization.strategy != "separate_align":
+        errors.append(
+            _issue(
+                "DIARIZATION_STRATEGY_UNSUPPORTED",
+                "diarization.strategy",
+                "统一工作流当前只支持独立说话人识别后按时间轴对齐",
+            )
+        )
+    if config.diarization.enabled and not config.diarization.global_speaker_clustering:
+        errors.append(
+            _issue(
+                "GLOBAL_SPEAKER_CLUSTERING_REQUIRED",
+                "diarization.global_speaker_clustering",
+                "当前工作流对整段音频执行全局聚类，不能关闭该选项",
+            )
+        )
+
     if transcription.execution == "parallel" and transcription.max_concurrency > 1:
         warnings.append(
             _issue(
@@ -292,6 +349,19 @@ def validate_workflow_config(
                     f"启用 {stage_name} 后必须选择 provider profile 和模型",
                 )
             )
+    if (
+        config.llm_proofread.enabled
+        and config.llm_proofread.scope == "all"
+        and config.llm_proofread.preserve_timestamps
+        and config.timestamps.level != "off"
+    ):
+        errors.append(
+            _issue(
+                "LLM_SCOPE_CANNOT_PRESERVE_TIMESTAMPS",
+                "llm_proofread.scope",
+                "整篇校对无法可靠映射回时间段；请选择逐段校对或关闭时间戳保留",
+            )
+        )
 
     if config.translation.enabled:
         capabilities = model_capabilities.get(config.translation.model)
@@ -309,6 +379,14 @@ def validate_workflow_config(
                     "MODEL_CAPABILITY_MISMATCH",
                     "translation.model",
                     f"模型 {config.translation.model} 不支持翻译",
+                )
+            )
+        elif capabilities.get("downloaded") is False:
+            errors.append(
+                _issue(
+                    "MODEL_NOT_DOWNLOADED",
+                    "translation.model",
+                    f"翻译模型 {config.translation.model} 尚未下载",
                 )
             )
         if not config.translation.source_lang or not config.translation.target_lang:
@@ -344,6 +422,14 @@ def validate_workflow_config(
                     "MODEL_CAPABILITY_MISMATCH",
                     "emotion.model",
                     f"模型 {config.emotion.model} 不支持情感识别",
+                )
+            )
+        elif capabilities.get("downloaded") is False:
+            errors.append(
+                _issue(
+                    "MODEL_NOT_DOWNLOADED",
+                    "emotion.model",
+                    f"情感模型 {config.emotion.model} 尚未下载",
                 )
             )
         if config.emotion.model == "sensevoice" and config.emotion.granularity != "utterance":
@@ -395,9 +481,19 @@ class WorkflowJobManager:
 
     TERMINAL_STATUSES = {"completed", "failed", "cancelled"}
 
-    def __init__(self, *, max_workers: int = 1):
+    def __init__(
+        self,
+        *,
+        max_workers: int = 1,
+        terminal_callback: Callable[[dict[str, Any]], None] | None = None,
+        terminal_ttl_s: int = 24 * 3600,
+        max_terminal_jobs: int = 100,
+    ):
         self._lock = threading.RLock()
         self._jobs: dict[str, dict[str, Any]] = {}
+        self._terminal_callback = terminal_callback
+        self._terminal_ttl_s = max(60, int(terminal_ttl_s))
+        self._max_terminal_jobs = max(1, int(max_terminal_jobs))
         self._executor = ThreadPoolExecutor(
             max_workers=max(1, int(max_workers)),
             thread_name_prefix="pat-workflow",
@@ -466,7 +562,6 @@ class WorkflowJobManager:
             context.raise_if_cancelled()
             with self._lock:
                 job = self._jobs[job_id]
-                job["status"] = "completed"
                 job["result"] = result or {}
             context.emit(
                 level="success",
@@ -475,34 +570,49 @@ class WorkflowJobManager:
                 progress=1.0,
                 message="任务完成",
             )
+            self._run_terminal_callback(job_id)
+            with self._lock:
+                self._jobs[job_id]["status"] = "completed"
         except WorkflowCancelled as exc:
+            safe_message = _safe_error_message(exc)
             with self._lock:
                 job = self._jobs[job_id]
                 job["status"] = "cancelled"
-                job["error"] = str(exc)
+                job["error"] = safe_message
             context.emit(
                 level="warning",
                 stage="workflow",
                 stage_status="cancelled",
                 progress=None,
-                message=str(exc),
+                message=safe_message,
                 error_code="WORKFLOW_CANCELLED",
                 retryable=False,
             )
         except Exception as exc:
+            safe_message = _safe_error_message(exc)
             with self._lock:
                 job = self._jobs[job_id]
                 job["status"] = "failed"
-                job["error"] = str(exc)
+                job["error"] = safe_message
             context.emit(
                 level="error",
                 stage="workflow",
                 stage_status="error",
                 progress=None,
-                message=str(exc),
+                message=safe_message,
                 error_code="WORKFLOW_FAILED",
                 retryable=False,
             )
+            self._run_terminal_callback(job_id)
+
+    def _run_terminal_callback(self, job_id: str) -> None:
+        if self._terminal_callback is None:
+            return
+        try:
+            self._terminal_callback(self.get_snapshot(job_id, include_internal=True))
+        except Exception:
+            # 终态回调只负责补充审计产物，不能反向改变已完成任务状态。
+            return
 
     def _get_private(self, job_id: str) -> dict[str, Any]:
         with self._lock:
@@ -566,21 +676,76 @@ class WorkflowJobManager:
         job["current_model"] = str(model or "")
         return copy.deepcopy(item)
 
-    def get_snapshot(self, job_id: str) -> dict[str, Any]:
+    def get_snapshot(
+        self,
+        job_id: str,
+        *,
+        include_internal: bool = False,
+        include_events: bool = True,
+    ) -> dict[str, Any]:
+        """返回任务快照；公开快照移除服务端文件系统路径。"""
         with self._lock:
             if job_id not in self._jobs:
                 raise KeyError(job_id)
             job = self._jobs[job_id]
-            return {
+            snapshot = {
                 key: copy.deepcopy(value)
                 for key, value in job.items()
                 if key not in {"cancel_event", "future", "next_event_id", "source_path"}
             }
+        if not include_internal:
+            for artifact in (snapshot.get("result") or {}).get("artifacts") or []:
+                if isinstance(artifact, dict):
+                    artifact.pop("path", None)
+        if not include_events:
+            snapshot.pop("events", None)
+        return snapshot
 
     def list_snapshots(self) -> list[dict[str, Any]]:
         with self._lock:
             job_ids = list(self._jobs.keys())
-        return [self.get_snapshot(job_id) for job_id in reversed(job_ids)]
+        return [
+            self.get_snapshot(job_id, include_events=False)
+            for job_id in reversed(job_ids)
+        ]
+
+    def get_events(self, job_id: str, *, after_event_id: int = 0) -> dict[str, Any]:
+        """只复制调用方需要的增量事件，避免轮询时反复复制完整历史。"""
+        with self._lock:
+            if job_id not in self._jobs:
+                raise KeyError(job_id)
+            job = self._jobs[job_id]
+            events = [
+                copy.deepcopy(event)
+                for event in job["events"]
+                if int(event.get("event_id", 0)) > int(after_event_id)
+            ]
+            return {"status": job["status"], "events": events}
+
+    def prune_terminal_jobs(self, *, now: float | None = None) -> int:
+        """按 TTL 和数量上限清理终态任务的进程内快照。"""
+        current_time = float(time.time() if now is None else now)
+        with self._lock:
+            terminal = [
+                (job_id, job)
+                for job_id, job in self._jobs.items()
+                if job.get("status") in self.TERMINAL_STATUSES
+            ]
+            terminal.sort(key=lambda item: str(item[1].get("updated_at") or ""))
+            removable: set[str] = set()
+            for job_id, job in terminal:
+                try:
+                    updated = datetime.fromisoformat(str(job.get("updated_at"))).timestamp()
+                except Exception:
+                    updated = current_time
+                if current_time - updated > self._terminal_ttl_s:
+                    removable.add(job_id)
+            remaining = [item for item in terminal if item[0] not in removable]
+            overflow = max(0, len(remaining) - self._max_terminal_jobs)
+            removable.update(job_id for job_id, _job in remaining[:overflow])
+            for job_id in removable:
+                self._jobs.pop(job_id, None)
+            return len(removable)
 
     def queue_summary(self) -> dict[str, Any]:
         """返回任务队列状态计数，供运行面板和健康检查复用。"""

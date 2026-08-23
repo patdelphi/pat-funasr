@@ -15,7 +15,11 @@ _WEBUI_DIR = _ROOT / "app" / "pat_funasr_webui"
 if str(_WEBUI_DIR) not in sys.path:
     sys.path.insert(0, str(_WEBUI_DIR))
 
-from workflow_ui import build_workflow_config, render_workflow_events  # noqa: E402
+from workflow_ui import (  # noqa: E402
+    build_workflow_config,
+    render_workflow_event_panel,
+    render_workflow_events,
+)
 
 
 class TestWorkflowUi(unittest.TestCase):
@@ -32,6 +36,8 @@ class TestWorkflowUi(unittest.TestCase):
                 "speaker_model": "cam++",
                 "llm_proofread_enabled": True,
                 "llm_proofread_selection": "2|proof-model",
+                "llm_proofread_scope": "segments",
+                "llm_proofread_template_id": "strict",
                 "translation_enabled": True,
                 "translation_model": "nllb-200-distilled-600m",
                 "source_lang": "zho_Hans",
@@ -46,6 +52,8 @@ class TestWorkflowUi(unittest.TestCase):
         )
         self.assertEqual(config["llm_proofread"]["provider_profile_id"], "2")
         self.assertEqual(config["llm_proofread"]["model"], "proof-model")
+        self.assertEqual(config["llm_proofread"]["scope"], "segments")
+        self.assertEqual(config["llm_proofread"]["template_id"], "strict")
         self.assertEqual(config["translation"]["target_lang"], "eng_Latn")
 
     def test_event_renderer_keeps_errors_and_stage_progress(self):
@@ -59,6 +67,17 @@ class TestWorkflowUi(unittest.TestCase):
         self.assertIn("transcription.primary", text)
         self.assertIn("ERROR", text)
         self.assertIn("MODEL_ERROR", text)
+
+    def test_event_panel_has_controls_and_escapes_messages(self):
+        panel = render_workflow_event_panel(
+            [{"event_id": 1, "level": "error", "message": "</script><img onerror=x>"}]
+        )
+
+        self.assertIn("暂停/继续滚动", panel)
+        self.assertIn("仅警告/错误", panel)
+        self.assertIn("下载日志", panel)
+        self.assertNotIn("</script><img", panel)
+        self.assertIn("&lt;/script&gt;", panel)
 
 
 if __name__ == "__main__":

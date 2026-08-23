@@ -4,6 +4,20 @@
 提供 Gradio HTML 组件所需的 JS/CSS，实现点击文字跳转音频 + 播放时高亮当前文字
 """
 
+import json
+
+
+def json_for_inline_script(value) -> str:
+    """序列化内联脚本数据，防止不可信文本提前闭合 script 标签。"""
+    return (
+        json.dumps(value, ensure_ascii=False)
+        .replace("&", "\\u0026")
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("\u2028", "\\u2028")
+        .replace("\u2029", "\\u2029")
+    )
+
 
 def get_audio_sync_html() -> str:
     """

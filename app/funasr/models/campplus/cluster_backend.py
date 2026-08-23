@@ -287,6 +287,9 @@ class ClusterBackend(torch.nn.Module):
         k = params["oracle_num"] if "oracle_num" in params else None
         assert len(X.shape) == 2, "modelscope error: the shape of input should be [N, C]"
         if X.shape[0] < 20:
+            if k is not None:
+                # 短音频样本不足以稳定估算人数，但用户明确指定人数时仍应遵守。
+                return _numpy_k_means(X, k)
             return np.zeros(X.shape[0], dtype="int")
         if X.shape[0] < 2048 or k is not None:
             # unexpected corner case

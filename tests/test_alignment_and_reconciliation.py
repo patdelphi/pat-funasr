@@ -57,6 +57,31 @@ class TestSpeakerAlignment(unittest.TestCase):
 
 
 class TestReconciliation(unittest.TestCase):
+    def test_aggregates_all_overlapping_reviewer_segments(self):
+        primary = {
+            "model": "primary",
+            "weight": 1.0,
+            "segments": [{"start": 0.0, "end": 2.0, "text": "项目明天上线"}],
+        }
+        reviewer = {
+            "model": "reviewer",
+            "weight": 2.0,
+            "segments": [
+                {"start": 0.0, "end": 0.8, "text": "项目"},
+                {"start": 0.8, "end": 2.0, "text": "明日上线"},
+            ],
+        }
+
+        result = reconcile_transcriptions(
+            primary,
+            [reviewer],
+            mode="weighted_consensus",
+            disagreement_threshold=0.1,
+        )
+
+        self.assertEqual(result["segments"][0]["text"], "项目明日上线")
+        self.assertEqual(result["segments"][0]["candidates"][1]["text"], "项目明日上线")
+
     def test_primary_first_keeps_primary_and_records_alternative(self):
         primary = {
             "model": "primary",
@@ -68,7 +93,12 @@ class TestReconciliation(unittest.TestCase):
             "weight": 0.8,
             "segments": [{"start": 0.0, "end": 1.0, "text": "项目明日上线"}],
         }
-        result = reconcile_transcriptions(primary, [reviewer], mode="primary_first")
+        result = reconcile_transcriptions(
+            primary,
+            [reviewer],
+            mode="primary_first",
+            disagreement_threshold=0.1,
+        )
         segment = result["segments"][0]
         self.assertEqual(segment["text"], "项目明天上线")
         self.assertTrue(segment["uncertain"])
@@ -112,6 +142,69 @@ class TestReconciliation(unittest.TestCase):
         }
         result = reconcile_transcriptions(primary, [reviewer], mode="weighted_consensus")
         self.assertFalse(result["segments"][0]["uncertain"])
+
+    def test_disagreement_threshold_treats_minor_difference_as_agreement(self):
+        primary = {
+            "model": "primary",
+            "segments": [{"start": 0.0, "end": 1.0, "text": "项目明天上线"}],
+        }
+        reviewer = {
+            "model": "reviewer",
+            "segments": [{"start": 0.0, "end": 1.0, "text": "项目明日上线"}],
+        }
+
+        relaxed = reconcile_transcriptions(primary, [reviewer], disagreement_threshold=0.2)
+        strict = reconcile_transcriptions(primary, [reviewer], disagreement_threshold=0.1)
+
+        self.assertFalse(relaxed["segments"][0]["uncertain"])
+        self.assertTrue(strict["segments"][0]["uncertain"])
+
+    def test_keep_primary_policy_overrides_conflicting_weighted_consensus(self):
+        primary = {
+            "model": "primary",
+            "weight": 1.0,
+            "segments": [{"start": 0.0, "end": 1.0, "text": "主模型文本"}],
+        }
+        reviewers = [
+            {
+                "model": "reviewer-a",
+                "weight": 1.0,
+                "segments": [{"start": 0.0, "end": 1.0, "text": "完全不同内容"}],
+            },
+            {
+                "model": "reviewer-b",
+                "weight": 1.0,
+                "segments": [{"start": 0.0, "end": 1.0, "text": "完全不同内容"}],
+            },
+        ]
+
+        result = reconcile_transcriptions(
+            primary,
+            reviewers,
+            mode="weighted_consensus",
+            disagreement_threshold=0.2,
+            uncertain_policy="keep_primary",
+        )
+
+        segment = result["segments"][0]
+        self.assertEqual(segment["text"], "主模型文本")
+        self.assertTrue(segment["uncertain"])
+        self.assertEqual(segment["decision_rule"], "keep_primary_on_disagreement")
+
+    def test_can_hide_alternatives_but_keeps_candidate_audit(self):
+        primary = {
+            "model": "primary",
+            "segments": [{"start": 0.0, "end": 1.0, "text": "主文本"}],
+        }
+        reviewer = {
+            "model": "reviewer",
+            "segments": [{"start": 0.0, "end": 1.0, "text": "其他文本"}],
+        }
+
+        result = reconcile_transcriptions(primary, [reviewer], keep_alternatives=False)
+
+        self.assertEqual(result["segments"][0]["alternatives"], [])
+        self.assertEqual(len(result["segments"][0]["candidates"]), 2)
 
 
 if __name__ == "__main__":

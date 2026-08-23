@@ -112,6 +112,7 @@ class TestServerWorkflowEndpoints(unittest.TestCase):
             time.sleep(0.01)
 
         self.assertEqual(status_payload["status"], "completed")
+        self.assertNotIn("path", json.dumps(status_payload.get("result") or {}))
         events_resp = self.client.get(f"/v1/funasr/workflows/{job_id}/events")
         self.assertEqual(events_resp.status_code, 200)
         events = events_resp.json()["data"]
@@ -178,8 +179,12 @@ class TestServerWorkflowEndpoints(unittest.TestCase):
             snapshot = self.server.WORKFLOW_MANAGER.wait_for_terminal(job_id, timeout=3)
             self.assertEqual(snapshot["status"], "completed")
             self.assertEqual(snapshot["result"]["text"], "测试完成。")
+            private_snapshot = self.server.WORKFLOW_MANAGER.get_snapshot(
+                job_id,
+                include_internal=True,
+            )
             artifact = next(
-                item for item in snapshot["result"]["artifacts"]
+                item for item in private_snapshot["result"]["artifacts"]
                 if item["name"] == "transcript.json"
             )
             artifact_root = Path(artifact["path"]).parent.parent

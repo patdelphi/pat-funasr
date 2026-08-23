@@ -24,3 +24,18 @@ def test_cluster_backend_without_sklearn_can_cluster(monkeypatch):
 
     assert labels.shape == (20,)
     assert len(set(labels.tolist())) == 2
+
+
+def test_short_embedding_sequence_respects_oracle_speaker_count():
+    """短音频仍必须遵守用户明确指定的说话人数。"""
+    from funasr.models.campplus import cluster_backend
+
+    embeddings = torch.tensor(
+        [[1.0, 0.0]] * 5 + [[0.0, 1.0]] * 5,
+        dtype=torch.float32,
+    )
+
+    labels = cluster_backend.ClusterBackend()(embeddings, oracle_num=2)
+
+    assert labels.shape == (10,)
+    assert len(set(labels.tolist())) == 2

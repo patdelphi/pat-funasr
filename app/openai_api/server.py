@@ -216,7 +216,10 @@ MAX_STREAM_CHUNK_BYTES = int(
 WORKFLOW_TEMP_ROOT = Path(tempfile.gettempdir()) / "pat-funasr-workflows"
 WORKFLOW_TEMP_TTL_S = int(os.environ.get("FUNASR_WORKFLOW_TEMP_TTL_S", str(24 * 3600)))
 WORKFLOW_MANAGER = workflow_service.WorkflowJobManager(
-    max_workers=int(os.environ.get("FUNASR_WORKFLOW_MAX_WORKERS", "1"))
+    max_workers=int(os.environ.get("FUNASR_WORKFLOW_MAX_WORKERS", "1")),
+    terminal_callback=artifact_service.refresh_events_artifact,
+    terminal_ttl_s=int(os.environ.get("FUNASR_WORKFLOW_JOB_TTL_S", str(24 * 3600))),
+    max_terminal_jobs=int(os.environ.get("FUNASR_WORKFLOW_MAX_TERMINAL_JOBS", "100")),
 )
 
 
@@ -392,6 +395,45 @@ def _loaded_model_names() -> list[str]:
     return sorted({str(key).split("::", 1)[0] for key in MODEL_REGISTRY})
 
 
+class ModelNotDownloadedError(RuntimeError):
+    """模型或其运行依赖未在本地缓存中找到。"""
+
+
+def _model_cache_roots() -> list[Path]:
+    roots = [
+        _PROJECT_ROOT / "workspace" / "models",
+        Path.home() / ".cache" / "modelscope" / "hub" / "models",
+    ]
+    configured_cache = os.environ.get("MODELSCOPE_CACHE", "").strip()
+    if configured_cache:
+        roots.insert(0, Path(configured_cache))
+    return roots
+
+
+def _resolve_runtime_models_to_local(cfg: dict) -> dict:
+    """把模型及依赖解析为本地路径；缺失时拒绝静默下载。"""
+    missing: list[str] = []
+    for key in ("model", "vad_model", "punc_model", "spk_model", "forced_aligner"):
+        configured_model = str(cfg.get(key) or "").strip()
+        if not configured_model:
+            continue
+        if os.path.exists(configured_model):
+            cfg[key] = str(Path(configured_model).resolve())
+            continue
+        local_path = resolve_local_model_path(configured_model, _model_cache_roots())
+        if local_path is None:
+            missing.append(f"{key}={configured_model}")
+            continue
+        cfg[key] = str(local_path)
+        logger.info("Using local %s: %s", key, local_path)
+    if missing:
+        raise ModelNotDownloadedError(
+            "模型文件未下载，已阻止联网加载：" + ", ".join(missing)
+        )
+    cfg["check_latest"] = False
+    return cfg
+
+
 def _model_load_state(model_name: str) -> dict:
     """返回模型加载状态；ready 以缓存为最终依据。"""
     if model_name not in MODEL_CONFIGS:
@@ -436,6 +478,8 @@ def load_model(
         spk_model=spk_model,
         forced_aligner=forced_aligner,
     )
+    # 在登记 single-flight 事件前完成本地解析，避免缺失模型留下永不唤醒的等待者。
+    cfg = _resolve_runtime_models_to_local(cfg)
     registry_key = build_model_registry_key(model_name, cfg)
 
     is_loader = False
@@ -462,40 +506,17 @@ def load_model(
             error = MODEL_LOAD_ERRORS.get(registry_key) or "unknown model load error"
         raise RuntimeError(f"Model '{model_name}' load failed: {error}")
 
-    # 优先解析本地缓存，避免已下载模型仍访问模型站点检查元数据。
+    # 服务请求只允许加载本地模型；下载必须通过独立、显式操作完成。
     model_id = cfg["model"]
-    if cfg.get("hub", "ms") in {"ms", "modelscope"} and cfg.get("type") != "translation":
-        cache_roots = [
-            _PROJECT_ROOT / "workspace" / "models",
-            Path.home() / ".cache" / "modelscope" / "hub" / "models",
-        ]
-        configured_cache = os.environ.get("MODELSCOPE_CACHE", "").strip()
-        if configured_cache:
-            cache_roots.insert(0, Path(configured_cache))
-        for key in ("model", "vad_model", "punc_model", "spk_model", "forced_aligner"):
-            configured_model = str(cfg.get(key) or "").strip()
-            if not configured_model or os.path.exists(configured_model):
-                continue
-            local_path = resolve_local_model_path(configured_model, cache_roots)
-            if local_path is not None:
-                cfg[key] = str(local_path)
-                logger.info("Using local %s: %s", key, local_path)
-        cfg["check_latest"] = False
 
     logger.info(f"Loading model '{model_name}' on {cfg['device']}...")
     MODEL_LOAD_STATUS[model_name] = {"state": "loading", "error": None, "updated_at": time.time()}
     t0 = time.time()
     try:
         if cfg.get("type") == "translation":
-            hub_val = cfg.get("hub", "ms")
             device_val = cfg.get("device", DEVICE)
             
-            if hub_val == "ms":
-                from modelscope.hub.snapshot_download import snapshot_download
-                logger.info(f"Downloading {model_id} from ModelScope...")
-                model_dir = snapshot_download(model_id)
-            else:
-                model_dir = model_id
+            model_dir = model_id
 
             # 屏蔽 "Torch was not compiled with flash attention" 警告（自动回退到标准 SDPA，不影响功能）
             import warnings
@@ -503,8 +524,8 @@ def load_model(
 
             from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
             logger.info(f"Loading tokenizer & Seq2Seq model from {model_dir}...")
-            tokenizer = AutoTokenizer.from_pretrained(model_dir)
-            model_obj = AutoModelForSeq2SeqLM.from_pretrained(model_dir)
+            tokenizer = AutoTokenizer.from_pretrained(model_dir, local_files_only=True)
+            model_obj = AutoModelForSeq2SeqLM.from_pretrained(model_dir, local_files_only=True)
             if device_val != "cpu":
                 model_obj = model_obj.to(device_val)
 
@@ -1116,6 +1137,7 @@ def build_generate_kwargs(
     batch_size_s: Optional[int],
     batch_size_threshold_s: Optional[int],
     vad_max_single_segment_time: Optional[int],
+    timestamp_level: str = "segment",
 ):
     """构建传给 FunASR generate() 的白名单参数。"""
     generate_kwargs = {"input": tmp_path, "batch_size": 1}
@@ -1134,9 +1156,9 @@ def build_generate_kwargs(
         if int(batch_size_threshold_s) <= 0:
             raise ValueError("batch_size_threshold_s must be > 0")
         generate_kwargs["batch_size_threshold_s"] = int(batch_size_threshold_s)
-    if model in {"paraformer", "fun-asr-nano"}:
+    if timestamp_level != "off" and model in {"paraformer", "fun-asr-nano"}:
         generate_kwargs["sentence_timestamp"] = True
-    if model in {"qwen3-asr", "qwen3-asr-0.6b"}:
+    if timestamp_level != "off" and model in {"qwen3-asr", "qwen3-asr-0.6b"}:
         generate_kwargs["output_timestamp"] = True
     return vad_presets.apply_vad_controls(
         generate_kwargs=generate_kwargs,
@@ -1246,6 +1268,20 @@ def _workflow_transcribe_model(
 ) -> dict:
     """复用模型加载、参数白名单和分段器执行工作流中的一次 ASR。"""
     load_kwargs = {"punc_mode": model_config.punc_mode}
+    reuse_for_diarization = (
+        config.diarization.enabled
+        and model_config.model == config.diarization.asr_model
+        and not config.segmentation.chunk_enabled
+    )
+    effective_spk_mode = ""
+    if reuse_for_diarization:
+        effective_spk_mode = resolve_diarization_spk_mode(
+            config.diarization.asr_model,
+            config.diarization.spk_mode,
+        )
+        load_kwargs["spk_model"] = config.diarization.speaker_model
+        if model_config.model == "sensevoice" and effective_spk_mode == "vad_segment":
+            load_kwargs["punc_mode"] = "disabled"
     if (
         config.timestamps.forced_alignment
         and MODEL_CAPABILITIES.get(model_config.model, {}).get("forced_alignment", False)
@@ -1270,6 +1306,7 @@ def _workflow_transcribe_model(
         chunk_dirs = {str(Path(path).parent) for path, _offset in chunks}
 
     all_segments: list[list[dict]] = []
+    all_words: list[dict] = []
     offsets: list[float] = []
     total_duration = 0.0
     try:
@@ -1286,7 +1323,20 @@ def _workflow_transcribe_model(
                 batch_size_s=None,
                 batch_size_threshold_s=None,
                 vad_max_single_segment_time=None,
+                timestamp_level=config.timestamps.level,
             )
+            if reuse_for_diarization:
+                generate_kwargs.update(
+                    {
+                        "spk_mode": effective_spk_mode,
+                        "return_spk_res": True,
+                        "output_timestamp": True,
+                    }
+                )
+                if config.diarization.preset_speaker_count is not None:
+                    generate_kwargs["preset_spk_num"] = int(
+                        config.diarization.preset_speaker_count
+                    )
             try:
                 generated = asr_model.generate(**generate_kwargs)
             except KeyError as exc:
@@ -1313,6 +1363,21 @@ def _workflow_transcribe_model(
                     }
                 ]
             all_segments.append(segments)
+            if config.timestamps.level == "word":
+                for word in result0.get("timestamps") or []:
+                    if not isinstance(word, dict):
+                        continue
+                    start = word.get("start_time", word.get("start"))
+                    end = word.get("end_time", word.get("end"))
+                    if start is None or end is None:
+                        continue
+                    all_words.append(
+                        {
+                            "word": str(word.get("text") or word.get("word") or ""),
+                            "start": round(float(start) + offset, 3),
+                            "end": round(float(end) + offset, 3),
+                        }
+                    )
             offsets.append(offset)
             total_duration = max(total_duration, offset + duration_s)
             progress_callback(index, len(chunks), f"分块 {index}/{len(chunks)} 转录完成")
@@ -1332,7 +1397,7 @@ def _workflow_transcribe_model(
             offsets,
             overlap_seconds=config.segmentation.overlap_seconds,
         )
-    return {
+    output = {
         "model": model_config.model,
         "weight": model_config.weight,
         "language": model_config.language,
@@ -1340,7 +1405,43 @@ def _workflow_transcribe_model(
         "text": "".join(str(item.get("text") or "") for item in merged_segments),
         "segments": merged_segments,
         "chunks": len(chunks),
+        "timestamp_level": config.timestamps.level,
     }
+    if config.timestamps.level == "word":
+        deduplicated_words: list[dict] = []
+        seen_words: set[tuple] = set()
+        for word in sorted(all_words, key=lambda item: (item["start"], item["end"])):
+            key = (word["word"], word["start"], word["end"])
+            if key not in seen_words:
+                seen_words.add(key)
+                deduplicated_words.append(word)
+        output["words"] = deduplicated_words
+    if reuse_for_diarization:
+        diarization_segments = [
+            {
+                key: value
+                for key, value in segment.items()
+                if key in {"start", "end", "speaker", "text"}
+            }
+            for segment in merged_segments
+            if segment.get("speaker") is not None
+        ]
+        output["diarization"] = {
+            "text": output["text"],
+            "segments": diarization_segments,
+            "speakers": sorted(
+                {
+                    item.get("speaker")
+                    for item in diarization_segments
+                    if item.get("speaker") is not None
+                }
+            ),
+            "model": model_config.model,
+            "spk_model": config.diarization.speaker_model,
+            "spk_mode": effective_spk_mode,
+            "duration": output["duration"],
+        }
+    return output
 
 
 def _workflow_preprocess(source_path: str, preprocess_config, output_dir: str) -> str:
@@ -1418,14 +1519,30 @@ def _workflow_llm_stage(stage_name: str, text: str, stage_config):
         "api_key": llm_config.api_key or "no-key",
         "model": selected_model,
     }
+    template_id = str(stage_config.template_id or "default")
     if stage_name == "llm_proofread":
-        prompt = "只校正错别字、同音词、标点和断句，不增删事实，不输出说明。"
+        prompts = {
+            "default": "只校正错别字、同音词、标点和断句，不增删事实，不输出说明。",
+            "strict": "严格逐句校正错别字、同音词、标点和断句；保留原意、数字、专名和语气，不补充内容，不输出说明。",
+            "meeting": "校正会议转写中的错别字、专名、标点和断句；保留每项事实、数字、决定和行动项，不输出说明。",
+        }
+        prompt = prompts[template_id]
         return refine_transcript(text, prompt, **common)
     if stage_name == "summary":
-        prompt = "根据转写生成结构化 JSON 纪要，包含 summary、decisions、action_items 和 notes。"
+        prompts = {
+            "default": "根据转写生成结构化 JSON 摘要，包含 summary、decisions、action_items 和 notes。",
+            "strict": "仅依据转写生成结构化 JSON 摘要；不推测缺失信息，包含 summary、decisions、action_items 和 notes。",
+            "meeting": "根据会议转写生成结构化 JSON 纪要，包含 summary、decisions、action_items 和 notes。",
+        }
+        prompt = prompts[template_id]
         return generate_summary(text, prompt, **common)
     if stage_name == "mindmap":
-        prompt = "根据转写生成 JSON 思维导图，格式为 title 与 children，禁止输出 JSON 之外的内容。"
+        prompts = {
+            "default": "根据转写生成 JSON 思维导图，格式为 title 与 children，禁止输出 JSON 之外的内容。",
+            "strict": "仅依据转写生成 JSON 思维导图，格式为 title 与 children，不补充未知事实，禁止输出 JSON 之外的内容。",
+            "meeting": "根据会议转写按议题、决定和行动项生成 JSON 思维导图，格式为 title 与 children，禁止输出 JSON 之外的内容。",
+        }
+        prompt = prompts[template_id]
         return generate_mindmap(text, prompt, **common)
     raise RuntimeError(f"未知 LLM 阶段：{stage_name}")
 
@@ -1978,10 +2095,7 @@ async def validate_workflow(payload: dict):
                 "normalized": None,
             }
         )
-    errors, warnings = workflow_service.validate_workflow_config(
-        config,
-        MODEL_CAPABILITIES,
-    )
+    errors, warnings = _validate_workflow_with_local_models(config)
     return JSONResponse(
         {
             "valid": not errors,
@@ -1999,10 +2113,7 @@ async def submit_workflow(
 ):
     """提交显式精细转录工作流，返回异步任务 ID。"""
     config = _parse_workflow_payload(workflow)
-    errors, warnings = workflow_service.validate_workflow_config(
-        config,
-        MODEL_CAPABILITIES,
-    )
+    errors, warnings = _validate_workflow_with_local_models(config)
     if errors:
         raise HTTPException(
             status_code=400,
@@ -2044,6 +2155,7 @@ async def submit_workflow(
 @app.get("/v1/funasr/workflows")
 async def list_workflows():
     """列出当前进程内工作流任务，供模型与服务页展示队列。"""
+    WORKFLOW_MANAGER.prune_terminal_jobs()
     return JSONResponse({"object": "list", "data": WORKFLOW_MANAGER.list_snapshots()})
 
 
@@ -2051,7 +2163,9 @@ async def list_workflows():
 async def get_workflow(job_id: str):
     """获取任务和完整事件快照。"""
     try:
-        return JSONResponse(WORKFLOW_MANAGER.get_snapshot(job_id))
+        return JSONResponse(
+            WORKFLOW_MANAGER.get_snapshot(job_id, include_events=False)
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=f"Workflow job not found: {job_id}") from exc
 
@@ -2060,20 +2174,18 @@ async def get_workflow(job_id: str):
 async def get_workflow_events(job_id: str, after_event_id: int = 0):
     """获取指定事件之后的追加日志；前端可轮询，后续可复用为 SSE 数据源。"""
     try:
-        snapshot = WORKFLOW_MANAGER.get_snapshot(job_id)
+        event_snapshot = WORKFLOW_MANAGER.get_events(
+            job_id,
+            after_event_id=after_event_id,
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=f"Workflow job not found: {job_id}") from exc
-    events = [
-        event
-        for event in snapshot.get("events", [])
-        if int(event.get("event_id", 0)) > int(after_event_id)
-    ]
     return JSONResponse(
         {
             "object": "list",
             "job_id": job_id,
-            "status": snapshot["status"],
-            "data": events,
+            "status": event_snapshot["status"],
+            "data": event_snapshot["events"],
         }
     )
 
@@ -2091,7 +2203,7 @@ async def cancel_workflow(job_id: str):
 async def download_workflow_artifact(job_id: str, artifact_name: str):
     """下载任务声明的产物；仅允许访问结果清单中的精确文件。"""
     try:
-        snapshot = WORKFLOW_MANAGER.get_snapshot(job_id)
+        snapshot = WORKFLOW_MANAGER.get_snapshot(job_id, include_internal=True)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=f"Workflow job not found: {job_id}") from exc
     if Path(artifact_name).name != artifact_name:
@@ -2107,83 +2219,38 @@ async def download_workflow_artifact(job_id: str, artifact_name: str):
 
 
 def _is_model_downloaded(model_name: str) -> bool:
-    """检查模型是否已下载到本地 workspace/models 缓存。"""
+    """使用统一缓存解析器检查模型主文件是否已下载。"""
     if model_name not in MODEL_CONFIGS:
         return False
-    cfg = MODEL_CONFIGS[model_name]
-    model_id = cfg.get("model", "")
-    
-    # FunASR 别名到 ModelScope 实际模型 ID 的映射
-    ALIAS_MAP = {
-        'paraformer-zh': 'iic/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-online',
-        'paraformer-en': 'iic/speech_paraformer-large-vad-punc_asr_nat-en-16k-common-vocab10020',
-        'paraformer-zh-streaming': 'iic/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-online',
-        'fsmn-vad': 'iic/speech_fsmn_vad_zh-cn-16k-common-pytorch',
-        'ct-punc': 'iic/punc_ct-transformer_cn-en-common-vocab471067-large',
-    }
-    
-    def _has_model_files(path: str) -> bool:
-        """检查目录是否包含实际模型文件（不只是 .mdl 元数据）。"""
-        if not os.path.isdir(path):
-            return False
-        files = os.listdir(path)
-        model_indicators = {'config.yaml', 'configuration.json', 'model.pt', 'model.bin', 'pytorch_model.bin', 'tokenizer.json', 'model.safetensors'}
-        # 精确匹配常见权重文件
-        if model_indicators & set(files):
-            return True
-        # 检查 safetensors 分片文件（如 model-00001-of-00002.safetensors）
-        if any(f.endswith('.safetensors') for f in files):
-            return True
-        return False
-    
-    def _check_model_in_cache(cache_dir: str, model_id: str) -> bool:
-        """在指定缓存目录中检查模型。"""
-        # 1. 直接路径
-        model_path = os.path.join(cache_dir, model_id.replace('/', os.sep))
-        if _has_model_files(model_path):
-            return True
-        
-        # 2. damo/ 前缀路径
-        damo_path = os.path.join(cache_dir, 'damo', model_id)
-        if _has_model_files(damo_path):
-            return True
-        
-        # 3. 别名映射路径
-        alias_id = ALIAS_MAP.get(model_id)
-        if alias_id:
-            alias_path = os.path.join(cache_dir, alias_id.replace('/', os.sep))
-            if _has_model_files(alias_path):
-                return True
-        
-        # 4. Qwen 模型路径格式（点号替换为三个下划线）
-        if '.' in model_id:
-            alt_model_id = model_id.replace('.', '___')
-            alt_path = os.path.join(cache_dir, alt_model_id.replace('/', os.sep))
-            if _has_model_files(alt_path):
-                return True
-        
-        return False
-    
     try:
-        import os
-        # 检查 workspace/models/models 目录（ModelScope 缓存结构）
-        cache_dir = os.path.join(str(_PROJECT_ROOT), 'workspace', 'models', 'models')
-        if os.path.isdir(cache_dir) and _check_model_in_cache(cache_dir, model_id):
-            return True
-        
-        # 回退到 workspace/models 目录
-        cache_dir = os.path.join(str(_PROJECT_ROOT), 'workspace', 'models')
-        if os.path.isdir(cache_dir) and _check_model_in_cache(cache_dir, model_id):
-            return True
-        
-        # 检查 ModelScope 全局缓存（~/.cache/modelscope/hub/models）
-        cache_dir = os.path.join(os.path.expanduser('~'), '.cache', 'modelscope', 'hub', 'models')
-        if os.path.isdir(cache_dir) and _check_model_in_cache(cache_dir, model_id):
-            return True
-        
-        return False
+        return resolve_local_model_path(
+            str(MODEL_CONFIGS[model_name].get("model") or ""),
+            _model_cache_roots(),
+        ) is not None
     except Exception:
         return False
+
+
+def _validate_workflow_with_local_models(config):
+    """校验工作流能力与本地模型状态，不触发任何下载。"""
+    capabilities = get_model_capabilities()
+    for model_name, model_capabilities in capabilities.items():
+        model_capabilities["downloaded"] = _is_model_downloaded(model_name)
+    errors, warnings = workflow_service.validate_workflow_config(config, capabilities)
+    if config.diarization.enabled:
+        speaker_path = resolve_local_model_path(
+            config.diarization.speaker_model,
+            _model_cache_roots(),
+        )
+        if speaker_path is None:
+            errors.append(
+                {
+                    "code": "MODEL_NOT_DOWNLOADED",
+                    "path": "diarization.speaker_model",
+                    "message": f"说话人模型 {config.diarization.speaker_model} 尚未下载",
+                }
+            )
+    return errors, warnings
 
 
 @app.get("/v1/models")

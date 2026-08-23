@@ -5,20 +5,29 @@
 
 from __future__ import annotations
 
+import html
 from typing import Any
 
 
-def _llm_stage(enabled: bool, selection: str | None) -> dict[str, Any]:
+def _llm_stage(
+    enabled: bool,
+    selection: str | None,
+    *,
+    scope: str,
+    template_id: str,
+    preserve_timestamps: bool = True,
+    preserve_speakers: bool = True,
+) -> dict[str, Any]:
     value = str(selection or "")
     profile_id, model = (value.split("|", 1) + [""])[:2] if "|" in value else (value, "")
     return {
         "enabled": bool(enabled),
         "provider_profile_id": profile_id,
         "model": model,
-        "scope": "all",
-        "template_id": "default",
-        "preserve_timestamps": True,
-        "preserve_speakers": True,
+        "scope": scope,
+        "template_id": template_id,
+        "preserve_timestamps": bool(preserve_timestamps),
+        "preserve_speakers": bool(preserve_speakers),
     }
 
 
@@ -98,14 +107,22 @@ def build_workflow_config(values: dict[str, Any]) -> dict[str, Any]:
         "llm_proofread": _llm_stage(
             bool(values.get("llm_proofread_enabled", False)),
             values.get("llm_proofread_selection"),
+            scope=str(values.get("llm_proofread_scope") or "segments"),
+            template_id=str(values.get("llm_proofread_template_id") or "default"),
+            preserve_timestamps=bool(values.get("llm_proofread_preserve_timestamps", True)),
+            preserve_speakers=bool(values.get("llm_proofread_preserve_speakers", True)),
         ),
         "summary": _llm_stage(
             bool(values.get("summary_enabled", False)),
             values.get("summary_selection"),
+            scope=str(values.get("summary_scope") or "refined"),
+            template_id=str(values.get("summary_template_id") or "meeting"),
         ),
         "mindmap": _llm_stage(
             bool(values.get("mindmap_enabled", False)),
             values.get("mindmap_selection"),
+            scope=str(values.get("mindmap_scope") or "refined"),
+            template_id=str(values.get("mindmap_template_id") or "meeting"),
         ),
         "translation": {
             "enabled": bool(values.get("translation_enabled", False)),
@@ -141,3 +158,69 @@ def render_workflow_events(events: list[dict[str, Any]]) -> str:
             f"{event.get('message', '')}{code}"
         )
     return "\n".join(lines)
+
+
+def render_workflow_event_panel(
+    events: list[dict[str, Any]],
+    warnings: list[str] | None = None,
+) -> str:
+    """渲染可暂停滚动、筛选、复制和下载的实时事件面板。"""
+    rows: list[str] = []
+    for warning in warnings or []:
+        rows.append(
+            '<div class="pat-workflow-event" data-level="warning">'
+            f"{html.escape(str(warning))}</div>"
+        )
+    for event in events:
+        level = str(event.get("level") or "info").lower()
+        text = render_workflow_events([event])
+        rows.append(
+            f'<div class="pat-workflow-event" data-level="{html.escape(level)}">'
+            f"{html.escape(text)}</div>"
+        )
+    content = "".join(rows) or '<div class="pat-workflow-empty">等待任务事件...</div>'
+    return f"""
+<div id="pat-workflow-event-panel">
+  <div class="pat-workflow-toolbar">
+    <button type="button" onclick="window.__patWorkflowLog.togglePause()">暂停/继续滚动</button>
+    <button type="button" onclick="window.__patWorkflowLog.toggleErrors()">仅警告/错误</button>
+    <button type="button" onclick="window.__patWorkflowLog.copy()">复制</button>
+    <button type="button" onclick="window.__patWorkflowLog.download()">下载日志</button>
+    <span id="pat-workflow-log-mode"></span>
+  </div>
+  <div id="pat-workflow-event-scroll">{content}</div>
+</div>
+<style>
+#pat-workflow-event-panel{{border:1px solid #d8d8e5;border-radius:8px;background:#111827;color:#e5e7eb}}
+.pat-workflow-toolbar{{display:flex;gap:6px;align-items:center;padding:8px;border-bottom:1px solid #374151;flex-wrap:wrap}}
+.pat-workflow-toolbar button{{font-size:12px;padding:4px 8px;border-radius:5px;background:#374151;color:#fff;border:0;cursor:pointer}}
+#pat-workflow-event-scroll{{height:300px;overflow:auto;padding:8px;font:12px/1.55 ui-monospace,Consolas,monospace;white-space:pre-wrap}}
+.pat-workflow-event{{padding:2px 0;border-bottom:1px solid #1f2937}}
+.pat-workflow-event[data-level="warning"]{{color:#fbbf24}}
+.pat-workflow-event[data-level="error"]{{color:#f87171}}
+.pat-workflow-empty{{color:#9ca3af}}
+</style>
+<script>
+(function(){{
+  const state = window.__patWorkflowLogState || (window.__patWorkflowLogState={{paused:false,errorsOnly:false}});
+  function apply(){{
+    const box=document.getElementById('pat-workflow-event-scroll');
+    if(!box)return;
+    box.querySelectorAll('.pat-workflow-event').forEach(row=>{{
+      const level=row.dataset.level;
+      row.style.display=(!state.errorsOnly||level==='warning'||level==='error')?'':'none';
+    }});
+    const mode=document.getElementById('pat-workflow-log-mode');
+    if(mode)mode.textContent=(state.paused?'已暂停滚动':'自动滚动')+' / '+(state.errorsOnly?'仅异常':'全部级别');
+    if(!state.paused)box.scrollTop=box.scrollHeight;
+  }}
+  window.__patWorkflowLog={{
+    togglePause(){{state.paused=!state.paused;apply();}},
+    toggleErrors(){{state.errorsOnly=!state.errorsOnly;apply();}},
+    copy(){{const box=document.getElementById('pat-workflow-event-scroll');if(box)navigator.clipboard.writeText(box.innerText);}},
+    download(){{const box=document.getElementById('pat-workflow-event-scroll');if(!box)return;const blob=new Blob([box.innerText],{{type:'text/plain;charset=utf-8'}});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='workflow-events.log';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);}}
+  }};
+  apply();
+}})();
+</script>
+""".strip()
