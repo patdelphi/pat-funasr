@@ -1664,6 +1664,10 @@ async def transcribe(
     ncpu: Optional[int] = Form(default=None),
     log_level: Optional[str] = Form(default=None),
     disable_pbar: Optional[bool] = Form(default=None),
+    # 长音频分块控制（可选，默认自动判断：>5min 自动启用）
+    chunk_enabled: Optional[bool] = Form(default=None),
+    chunk_seconds: Optional[int] = Form(default=None),
+    overlap_seconds: Optional[int] = Form(default=None),
 ):
     """
     OpenAI-compatible audio transcription endpoint.
@@ -1803,16 +1807,21 @@ async def transcribe(
                 },
             )
 
-            # 长音频自动分块：>5 分钟时 ffmpeg 切片逐块 ASR 后合并，避免模型处理超长音频丢失内容
-            auto_chunk = duration_s > 300
+            # 长音频分块：默认 >5min 自动启用，可通过 chunk_enabled 显式控制
+            _chunk_seconds = chunk_seconds if chunk_seconds is not None else 240
+            _overlap = overlap_seconds if overlap_seconds is not None else 10
+            if chunk_enabled is not None:
+                auto_chunk = chunk_enabled  # 显式覆盖
+            else:
+                auto_chunk = duration_s > 300  # 默认：>5min 自动
             if auto_chunk:
                 from pat_funasr_webui.fine_transcription.transcription_pipeline import (
                     _split_audio_ffmpeg,
                     _merge_chunk_segments,
                 )
 
-                chunks = _split_audio_ffmpeg(tmp_path, chunk_seconds=240, overlap_seconds=10)
-                logger.info(f"Auto chunk: duration={duration_s:.1f}s → {len(chunks)} chunks (240s/块, 10s 重叠)")
+                chunks = _split_audio_ffmpeg(tmp_path, chunk_seconds=_chunk_seconds, overlap_seconds=_overlap)
+                logger.info(f"Auto chunk: duration={duration_s:.1f}s → {len(chunks)} chunks ({_chunk_seconds}s/块, {_overlap}s 重叠)")
                 all_segs: list[list[dict]] = []
                 offsets: list[float] = []
                 total_text_parts: list[str] = []
@@ -1837,7 +1846,7 @@ async def transcribe(
                     offsets.append(offset)
                     total_text_parts.append(clean_text(c0.get("text", "")))
                 # 合并：去重 + 按时间排序
-                segments = _merge_chunk_segments(all_segs, offsets, overlap_seconds=10)
+                segments = _merge_chunk_segments(all_segs, offsets, overlap_seconds=_overlap)
                 # 合并全文：去重窗口内的文本只保留第一次
                 merged_text_parts: list[str] = []
                 seen_text: dict[str, float] = {}

@@ -76,7 +76,7 @@ class TranscriptionConfig(_StrictModel):
     mode: Literal["single_model", "multi_model"] = "single_model"
     primary: ModelRunConfig = Field(default_factory=ModelRunConfig)
     reviewers: list[ModelRunConfig] = Field(default_factory=list)
-    execution: Literal["serial", "parallel"] = "serial"
+    execution: Literal["serial", "parallel"] = "parallel"
     max_concurrency: int = Field(default=1, ge=1, le=8)
     resource_failure_policy: Literal[
         "stop_and_ask", "fallback_to_serial", "skip_failed_reviewer"

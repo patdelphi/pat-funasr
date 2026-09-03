@@ -108,6 +108,85 @@ def _run_transcriptions(
     config: WorkflowConfig,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     transcription = config.transcription
+
+    # 默认 execution=parallel 且有 reviewers 时，primary + reviewers 一起并行
+    if (
+        transcription.mode == "multi_model"
+        and transcription.reviewers
+        and transcription.execution == "parallel"
+    ):
+        all_models = [transcription.primary, *transcription.reviewers]
+        workers = min(transcription.max_concurrency or 2, len(all_models))
+
+        # 并行执行，按原始索引收集结果
+        indexed_results: dict[int, dict[str, Any] | None] = {}
+        failed_reviewers: list[tuple[int, Exception]] = []
+
+        def _submit_model(item: ModelRunConfig, stage: str, p_start: float, p_end: float) -> dict[str, Any]:
+            return _run_one_model(context, runtime, source_path, config, item, stage, p_start, p_end)
+
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="pat-asr") as executor:
+            futures = {
+                executor.submit(
+                    _submit_model,
+                    item,
+                    "transcription.primary" if i == 0 else "transcription.reviewers",
+                    0.12,
+                    0.58,
+                ): i
+                for i, item in enumerate(all_models)
+            }
+            for future in as_completed(futures):
+                idx = futures[future]
+                item = all_models[idx]
+                try:
+                    indexed_results[idx] = future.result()
+                except Exception as exc:
+                    if item is transcription.primary:
+                        raise  # primary 失败直接抛出
+                    # reviewer 失败，先记录
+                    if transcription.resource_failure_policy == "skip_failed_reviewer":
+                        _emit_stage(
+                            context,
+                            stage="transcription.reviewers",
+                            progress=0.58,
+                            message=f"校对模型 {item.model} 失败，已按策略跳过：{exc}",
+                            level="warning",
+                            model=item.model,
+                            error_code="REVIEWER_SKIPPED",
+                            retryable=True,
+                        )
+                        indexed_results[idx] = None
+                    elif transcription.resource_failure_policy == "fallback_to_serial":
+                        failed_reviewers.append((idx, exc))
+                    else:
+                        raise
+
+        # fallback_to_serial: 失败的 reviewer 串行重试
+        for idx, exc in failed_reviewers:
+            item = all_models[idx]
+            _emit_stage(
+                context,
+                stage="transcription.reviewers",
+                progress=0.58,
+                message=f"并行 {item.model} 失败，回退串行重试：{exc}",
+                level="warning",
+                model=item.model,
+                error_code="REVIEWER_SERIAL_RETRY",
+                retryable=True,
+            )
+            result = _run_one_model(
+                context, runtime, source_path, config, item,
+                "transcription.reviewers", 0.12, 0.58,
+            )
+            indexed_results[idx] = result
+
+        # 按原始顺序排列
+        primary = indexed_results[0]
+        reviewers = [indexed_results[i] for i in range(1, len(all_models)) if indexed_results.get(i)]
+        return primary, reviewers
+
+    # 串行：先 primary 再 reviewers（原有逻辑）
     primary = _run_one_model(
         context,
         runtime,

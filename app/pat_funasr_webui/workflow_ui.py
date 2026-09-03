@@ -80,7 +80,7 @@ def build_workflow_config(values: dict[str, Any]) -> dict[str, Any]:
                 for model in reviewer_models
                 if model and model != primary_model
             ],
-            "execution": str(values.get("execution") or "serial"),
+            "execution": str(values.get("execution") or "parallel"),
             "max_concurrency": int(values.get("max_concurrency") or 1),
             "resource_failure_policy": str(values.get("resource_failure_policy") or "stop_and_ask"),
         },

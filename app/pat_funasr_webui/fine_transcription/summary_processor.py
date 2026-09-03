@@ -1,151 +1,36 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 纪要+思维导图 LLM 生成模块
 使用 requests 调用 OpenAI 兼容接口(支持 Ollama/OpenAI/Claude)
-优化点：
-  - timeout 拆分为 connect / read 两段：连接失败 10s 内快速失败，避免长音频场景每块空等 5min
-  - 连续失败熔断：同一 (base_url, model) 连续 2 次失败（超时/非200/空响应/网络异常）
-    后直接短路返回空串，持续 5min 后自动重试，避免分块 LLM 场景下 N 块都等满超时
+
+注：LLM 客户端已下沉到 app/openai_api/llm_client.py，
+本模块从公共模块导入 call_llm，保持向后兼容。
+新代码直接 import app.openai_api.llm_client.call_llm 即可。
 """
 import json
 import logging
 import time
-from typing import Optional, Tuple, Dict, Any
+from typing import Optional, List, Tuple, Any, Dict
 
-import requests
+# 从公共 LLM 客户端模块导入（熔断 + fallback 链在此模块实现）
+from openai_api.llm_client import (  # noqa: E402
+    call_llm,
+    build_fallback_chain,
+    _fuse_state,  # 暴露给旧测试和外部代码访问熔断状态
+    _FUSE_TRIP_AFTER_FAILS,  # 暴露给旧代码引用
+    _FUSE_DURATION_SECONDS,  # 暴露给旧代码引用
+    _FUSE_PASS_RESULT,  # 暴露给旧代码引用
+)
+# 向后兼容：旧测试 mock summary_processor.requests.post
+from openai_api import llm_client as _llm_client_mod  # noqa: E402
+requests = _llm_client_mod.requests  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
-# 默认 LLM 配置
-_DEFAULT_BASE_URL = "http://127.0.0.1:11434/v1"  # Ollama 默认地址
-_DEFAULT_MODEL = "qwen2.5:7b"
-_DEFAULT_TIMEOUT_CONNECT = 10   # TCP 连接阶段快速失败：10s（网络不通/ DNS 错 10s 就退出）
-_DEFAULT_TIMEOUT_READ = 300     # 响应读取阶段 5min（大推理允许慢）
+# 保留这些常量供旧代码引用（已下沉到 llm_client，这里只是别名）
+_DEFAULT_BASE_URL = 'http://127.0.0.1:11434/v1'
+_DEFAULT_MODEL = 'qwen2.5:7b'
 
-# ---- 熔断状态（进程内全局） ----
-# key: (base_url.rstrip('/'), model)
-# value: {'fail_streak': int,  'open_until': 0.0,  'last_reason': str}
-_fuse_state: Dict[Tuple[str, str], Dict[str, Any]] = {}
-_FUSE_TRIP_AFTER_FAILS = 2   # 连续失败 2 次 → 熔断
-_FUSE_DURATION_SECONDS = 300  # 熔断持续 5 分钟
-_FUSE_PASS_RESULT = ""        # 熔断期间返回值（空串，与异常分支保持一致）
-
-
-def call_llm(
-    prompt: str,
-    system_prompt: str = "",
-    base_url: str = _DEFAULT_BASE_URL,
-    api_key: str = "no-key",
-    model: str = _DEFAULT_MODEL,
-    temperature: float = 0.3,
-    timeout: int = _DEFAULT_TIMEOUT_READ,
-    connect_timeout: int = _DEFAULT_TIMEOUT_CONNECT,
-) -> str:
-    """
-    调用 LLM（OpenAI 兼容接口）
-    - timeout: 响应读取超时秒数（默认 300s）
-    - connect_timeout: 建连超时秒数（默认 10s），DNS 不通/防火墙拒绝时快速失败
-    - 内置连续失败熔断：同 (base_url, model) 失败 2 次后 5min 内直接返回空串
-    返回模型输出文本，异常时返回空字符串
-    """
-    # ---- 熔断判断 ----
-    key = (base_url.rstrip("/"), model)
-    state = _fuse_state.get(key)
-    now = time.time()
-    if state is not None and state["open_until"] > now:
-        remain_sec = int(state["open_until"] - now)
-        reason = state.get("last_reason") or "连续失败"
-        logger.warning("LLM 熔断激活[%s/%s] 剩余%ds，跳过调用。原因: %s",
-                       base_url, model, remain_sec, reason)
-        return _FUSE_PASS_RESULT
-    # 熔断过期，重置失败计数
-    if state is not None and state["open_until"] and state["open_until"] <= now:
-        state["open_until"] = 0.0
-        state["fail_streak"] = 0
-
-    def _mark_fail(reason: str):
-        s = _fuse_state.setdefault(key, {"fail_streak": 0, "open_until": 0.0, "last_reason": ""})
-        s["fail_streak"] = int(s.get("fail_streak") or 0) + 1
-        s["last_reason"] = reason
-        failure_time = time.time()
-        if s["fail_streak"] >= _FUSE_TRIP_AFTER_FAILS and s["open_until"] <= failure_time:
-            # 慢请求可能已运行数分钟，熔断窗口必须从实际失败时刻开始。
-            s["open_until"] = failure_time + _FUSE_DURATION_SECONDS
-            logger.warning("LLM 熔断触发[%s/%s]：连续失败 %d 次，5min 内跳过后续调用。最近原因: %s",
-                           base_url, model, s["fail_streak"], reason)
-
-    def _mark_ok():
-        s = _fuse_state.get(key)
-        if s is not None:
-            s["fail_streak"] = 0
-            s["open_until"] = 0.0
-
-    try:
-        timeout_tuple = (connect_timeout, timeout)
-        resp = requests.post(
-            f"{base_url.rstrip('/')}/chat/completions",
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": model,
-                "messages": [
-                    {"role": "system", "content": system_prompt or "你是一个专业转写助手。"},
-                    {"role": "user", "content": prompt},
-                ],
-                "temperature": temperature,
-                # 增大输出 token 额度，避免长文本优化/纪要/思维导图生成时被截断
-                "max_tokens": 8192,
-                # 关闭推理模式（dashscope qwen3 系列有效，避免 reasoning_tokens
-                # 耗尽 max_tokens 导致 content 为空；其他 OpenAI 兼容 API 忽略此字段）
-                "enable_thinking": False,
-            },
-            timeout=timeout_tuple,
-        )
-        if resp.status_code != 200:
-            _mark_fail(f"HTTP {resp.status_code}: {resp.text[:200]}")
-            logger.error("LLM 调用失败 [%s/%s] status=%s body=%s",
-                         base_url, model, resp.status_code, resp.text[:300])
-            return ""
-        data = resp.json()
-        content = (
-            data.get("choices", [{}])[0]
-            .get("message", {})
-            .get("content", "")
-            .strip()
-        )
-        if not content:
-            _mark_fail("空响应 content")
-            logger.error("LLM 返回空内容 [%s/%s]", base_url, model)
-            return ""
-        _mark_ok()
-        return content
-    except requests.exceptions.ConnectTimeout:
-        reason = f"连接超时({connect_timeout}s)"
-        _mark_fail(reason)
-        logger.error("LLM %s [%s/%s]", reason, base_url, model)
-        return ""
-    except requests.exceptions.ReadTimeout:
-        reason = f"响应超时({timeout}s)"
-        _mark_fail(reason)
-        logger.error("LLM %s [%s/%s]", reason, base_url, model)
-        return ""
-    except requests.exceptions.Timeout:
-        reason = f"调用超时({connect_timeout}s+{timeout}s)"
-        _mark_fail(reason)
-        logger.error("LLM %s [%s/%s]", reason, base_url, model)
-        return ""
-    except requests.exceptions.RequestException as e:
-        reason = f"网络错误:{e.__class__.__name__}"
-        _mark_fail(reason)
-        logger.error("LLM %s [%s/%s] %s", reason, base_url, model, e)
-        return ""
-    except Exception as e:
-        reason = f"异常:{e.__class__.__name__}:{e}"
-        _mark_fail(reason)
-        logger.exception("LLM 调用未知异常 [%s/%s]", base_url, model)
-        return ""
 
 
 def chunk_text(text: str, chunk_size: int = 5000, overlap: int = 1000) -> list[str]:
