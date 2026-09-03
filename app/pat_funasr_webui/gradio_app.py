@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 程序说明：
 Pat WebUI 前端入口。
@@ -3318,7 +3318,7 @@ def build_app(default_base_url: str, default_timeout: float):
                                             choices=["default", "anti_hallucination"],
                                             value="default",
                                         )
-                                    ft_chunk_enabled = gr.Checkbox(label="启用 FFmpeg 长音频分块", value=False)
+                                    ft_chunk_enabled = gr.Checkbox(label="启用 FFmpeg 长音频分块", value=True)
                                     with gr.Row():
                                         ft_chunk_seconds = gr.Slider(label="每块秒数", minimum=30, maximum=1800, step=30, value=240)
                                         ft_overlap_seconds = gr.Slider(label="块间重叠秒数", minimum=0, maximum=120, step=1, value=10)
@@ -3423,8 +3423,12 @@ def build_app(default_base_url: str, default_timeout: float):
                                     with gr.Row():
                                         ft_llm_scope = gr.Radio(
                                             label="校对范围",
-                                            choices=[("逐时间段", "segments"), ("整篇（不保留时间映射）", "all")],
-                                            value="segments",
+                                            choices=[
+                                                ("全文拼接（推荐，快 10×）", "refined"),
+                                                ("逐时间段（保留段映射，慢）", "segments"),
+                                                ("整篇（不保留时间映射）", "all"),
+                                            ],
+                                            value="refined",
                                         )
                                         ft_llm_template = gr.Dropdown(
                                             label="校对模板",
@@ -4550,21 +4554,7 @@ def build_app(default_base_url: str, default_timeout: float):
             inputs=[auto_refresh_logs, service_tab_active, base_url, timeout],
             outputs=[runtime_resources, workflow_queue_panel],
         )
-        # 嵌套父 Tab 只负责导航，避免父子 select 事件互相等待；状态在具体功能页切换时更新。
-        for feature_tab in (
-            offline_tab,
-            fine_transcription_tab,
-            diarization_tab,
-            audio_tool_tab,
-            translation_tab,
-            emotion_tab,
-        ):
-            feature_tab.select(
-                fn=lambda: set_service_tab_auto_refresh_active(False),
-                outputs=[service_tab_active],
-                queue=False,
-                show_progress="hidden",
-            )
+        # 业务导航 Tab 只负责前端切换，不绑定后端 select 回调，避免切换栏目时进入请求队列。
         for service_feature_tab in (
             service_overview_tab,
             service_models_tab,

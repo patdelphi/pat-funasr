@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 ASR + LLM 协同精细转录管线
 串联：音频前处理 → ASR 转写(分块流式) → LLM 二次优化 → 纪要 → 思维导图
@@ -169,7 +169,9 @@ def _merge_chunk_segments(
             is_dup = False
             if approx_key in seen_map:
                 for prev_start in seen_map[approx_key]:
-                    if abs(start_sec - prev_start) <= max(overlap_seconds * 2, 30):
+                    # 去重窗口严格限制为 2×overlap，避免误删远距离的真重复
+                    # （如"对对对""是的"等口语在 30 秒内多次出现）
+                    if abs(start_sec - prev_start) <= overlap_seconds * 2:
                         is_dup = True
                         break
             if is_dup:

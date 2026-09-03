@@ -1,4 +1,4 @@
-﻿"""
+"""
 程序说明：
 精细转录工作流前端适配器，负责配置组装和实时事件文本渲染。
 """
@@ -54,7 +54,7 @@ def build_workflow_config(values: dict[str, Any]) -> dict[str, Any]:
         "segmentation": {
             "vad_enabled": bool(values.get("vad_enabled", True)),
             "vad_preset": str(values.get("vad_preset") or "default"),
-            "chunk_enabled": bool(values.get("chunk_enabled", False)),
+            "chunk_enabled": bool(values.get("chunk_enabled", True)),
             "chunk_seconds": int(values.get("chunk_seconds") or 240),
             "overlap_seconds": int(values.get("overlap_seconds") or 10),
         },
@@ -107,7 +107,9 @@ def build_workflow_config(values: dict[str, Any]) -> dict[str, Any]:
         "llm_proofread": _llm_stage(
             bool(values.get("llm_proofread_enabled", False)),
             values.get("llm_proofread_selection"),
-            scope=str(values.get("llm_proofread_scope") or "segments"),
+            # scope=segments 会逐段调 LLM，2600+ 段需 45 分钟；
+            # scope=refined 全文拼接后内部按 6000 字/块流式处理，3-5 分钟完成。
+            scope=str(values.get("llm_proofread_scope") or "refined"),
             template_id=str(values.get("llm_proofread_template_id") or "default"),
             preserve_timestamps=bool(values.get("llm_proofread_preserve_timestamps", True)),
             preserve_speakers=bool(values.get("llm_proofread_preserve_speakers", True)),

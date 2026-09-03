@@ -1,4 +1,4 @@
-﻿"""
+"""
 程序说明：
 执行精细转录显式工作流，串联前处理、多模型 ASR、说话人对齐、校对和导出。
 
@@ -209,6 +209,49 @@ def _run_transcriptions(
     return primary, reviewers
 
 
+def _redistribute_refined_to_segments(
+    segments: list[dict],
+    refined_text: str,
+) -> None:
+    """
+    把 scope=refined/all 模式下 LLM 校对后的全文，按原始 segments[i].text 的字符长度比例，
+    近似拆分回填到每个 segments[i].text。
+    适用场景：LLM 仅做错别字/标点修正，前后字符数变化很小（<1%），比例切分误差 1-2 个字。
+    """
+    if not segments or not refined_text:
+        return
+    # 1) 计算每个 segment 在全文中的位置（按原始 text 长度）
+    original_parts: list[str] = []
+    lengths: list[int] = []
+    for seg in segments:
+        t = str(seg.get("text") or "")
+        original_parts.append(t)
+        lengths.append(len(t))
+    total_orig = sum(lengths)
+    if total_orig <= 0:
+        return
+    refined = refined_text
+    total_refined = len(refined)
+
+    # 2) 逐段按比例截取；最后一段吸纳剩余字符，防止舍入漏字。
+    orig_cursor = 0
+    ref_cursor = 0
+    seg_count = len(segments)
+    for idx, (seg, length) in enumerate(zip(segments, lengths)):
+        if idx == seg_count - 1:
+            piece = refined[ref_cursor:]
+        else:
+            orig_end = orig_cursor + length
+            # 比例映射：refined 结束位置 ≈ total_refined × (orig_end/total_orig)
+            # 取整，不超过字符串长度。
+            ref_end = int(round(total_refined * orig_end / total_orig))
+            ref_end = max(ref_cursor, min(ref_end, total_refined))
+            piece = refined[ref_cursor:ref_end]
+            ref_cursor = ref_end
+            orig_cursor = orig_end
+        seg["text"] = piece
+
+
 def _run_llm_stages(
     context: WorkflowRunContext,
     runtime: WorkflowRuntime,
@@ -263,7 +306,15 @@ def _run_llm_stages(
             stage_output = runtime.llm_stage(stage_name, stage_input, stage_config)
             result[output_key] = stage_output
             if stage_name == "llm_proofread":
-                result["text"] = str(stage_output or result.get("text") or "")
+                refined_text = str(stage_output or result.get("text") or "")
+                result["text"] = refined_text
+                # scope=refined/all 时：把校对结果按原 segments 长度比例回填到 segments[i].text，
+                # 保证导出的 SRT/TXT（基于 segments）内容与 result.text 一致。
+                # 校对只做错别字/标点修正，字符数变化通常 <1%，比例切分足够精确。
+                if stage_config.scope != "segments":
+                    segments = result.get("segments") or []
+                    if segments and refined_text:
+                        _redistribute_refined_to_segments(segments, refined_text)
         _emit_stage(
             context,
             stage=stage_name,

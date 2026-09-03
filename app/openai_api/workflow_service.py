@@ -1,4 +1,4 @@
-﻿"""
+"""
 程序说明：
 精细转录工作流配置、任务队列和实时状态事件服务。
 
@@ -55,7 +55,10 @@ class PreprocessConfig(_StrictModel):
 class SegmentationConfig(_StrictModel):
     vad_enabled: bool = True
     vad_preset: str = "default"
-    chunk_enabled: bool = False
+    # 默认启用音频分块：长音频（如 2h+ 录音）不分块时 ASR 模型一次性处理
+    # 会导致大量内容丢失（模型处理超长音频能力有限），分块后每块独立 ASR
+    # 可显著提升识别完整度。短音频（< chunk_seconds）分块后仍为 1 块，无副作用。
+    chunk_enabled: bool = True
     chunk_seconds: int = Field(default=240, ge=10, le=3600)
     overlap_seconds: int = Field(default=10, ge=0, le=300)
 

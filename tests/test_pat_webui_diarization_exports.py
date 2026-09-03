@@ -1,4 +1,4 @@
-﻿"""
+"""
 程序说明：
 测试 "Pat WebUI" 的说话人分离导出文件生成逻辑（unittest）。
 
@@ -1013,6 +1013,25 @@ class TestPatWebUiDiarizationExports(unittest.TestCase):
                 )
             ]
             self.assertEqual(streaming_select_dependencies, [])
+            non_service_tab_labels = {
+                "转录工作台", "实时识别", "媒体与文本工具",
+                "快速转录", "会议精细转录", "说话人时间轴",
+                "音频处理", "跨语言翻译", "情感识别",
+                "文件流式识别", "Mic 实时识别",
+            }
+            for component_id, component in components.items():
+                if (
+                    component.get("type") == "tabitem"
+                    and component.get("props", {}).get("label") in non_service_tab_labels
+                ):
+                    self.assertFalse(
+                        any(
+                            target[0] == component_id and target[1] == "select"
+                            for dependency in config["dependencies"]
+                            for target in dependency.get("targets", [])
+                        ),
+                        msg=f"业务导航 Tab 不得绑定后端 select 回调: {component.get('props', {}).get('label')}",
+                    )
             service_tab_id = next(
                 component_id
                 for component_id, component in components.items()
