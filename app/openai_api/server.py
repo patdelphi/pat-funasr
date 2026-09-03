@@ -535,27 +535,65 @@ def load_model(
                     self.model = model
                     self.device = device
 
+                def _translate_one(self, t: str, source_lang: str, target_lang: str, num_beams: int, max_length: int) -> str:
+                    """翻译单段文本（≤500 字），NLLB max_length=512 硬限制"""
+                    self.tokenizer.src_lang = source_lang
+                    inputs = self.tokenizer(t, return_tensors="pt")
+                    if self.device != "cpu":
+                        inputs = {k: v.to(self.device) for k, v in inputs.items()}
+                    target_lang_id = self.tokenizer.convert_tokens_to_ids(target_lang)
+                    gen_out = self.model.generate(
+                        **inputs,
+                        forced_bos_token_id=target_lang_id,
+                        max_length=max_length,
+                        num_beams=num_beams,
+                    )
+                    decoded = self.tokenizer.batch_decode(gen_out, skip_special_tokens=True)
+                    return decoded[0] if decoded else ""
+
                 def translate(self, text, source_lang: str, target_lang: str, num_beams: int = 5, max_length: int = 512):
+                    """翻译文本：自动长文本分块（≤500字/块，按句号/感叹号/问号/换行切分），避免 NLLB max_length=512 截断"""
+                    import re as _re
                     is_list = isinstance(text, list)
                     texts = text if is_list else [text]
-                    
                     outputs = []
                     for t in texts:
-                        self.tokenizer.src_lang = source_lang
-                        inputs = self.tokenizer(t, return_tensors="pt")
-                        if self.device != "cpu":
-                            inputs = {k: v.to(self.device) for k, v in inputs.items()}
-                        
-                        target_lang_id = self.tokenizer.convert_tokens_to_ids(target_lang)
-                        gen_out = self.model.generate(
-                            **inputs,
-                            forced_bos_token_id=target_lang_id,
-                            max_length=max_length,
-                            num_beams=num_beams,
-                        )
-                        decoded = self.tokenizer.batch_decode(gen_out, skip_special_tokens=True)
-                        outputs.append(decoded[0] if decoded else "")
-                    
+                        if not t:
+                            outputs.append("")
+                            continue
+                        # 短文本直接走
+                        if len(t) <= 500:
+                            outputs.append(self._translate_one(t, source_lang, target_lang, num_beams, max_length))
+                            continue
+                        # 长文本：按换行/句号切分，累计 ≤500 字成一块
+                        raw_parts = t.split("\n")
+                        chunks: list[str] = []
+                        cur = ""
+                        for part in raw_parts:
+                            # 换行内的句子再按。！？切分
+                            sentences = _re.split(r"(?<=[。！？!?\.])\s*", part.strip())
+                            for s in sentences:
+                                if not s:
+                                    continue
+                                if len(cur) + len(s) > 500:
+                                    if cur:
+                                        chunks.append(cur)
+                                    # 单句超 500 字直接放一块（NLLB 会截断但不影响整体）
+                                    if len(s) > 500:
+                                        chunks.append(s)
+                                        cur = ""
+                                    else:
+                                        cur = s
+                                else:
+                                    cur += s
+                            cur += "\n"
+                        if cur.strip():
+                            chunks.append(cur.strip())
+                        # 逐块翻译
+                        translated_parts = []
+                        for chunk in chunks:
+                            translated_parts.append(self._translate_one(chunk, source_lang, target_lang, num_beams, max_length))
+                        outputs.append("\n".join(translated_parts))
                     return outputs if is_list else outputs[0]
 
             model = NLLBTranslationModel(tokenizer, model_obj, device_val)
@@ -1549,49 +1587,15 @@ def _workflow_llm_stage(stage_name: str, text: str, stage_config):
 
 def _workflow_translate(text: str, translation_config):
     """
-    翻译全文：NLLB max_length=512，超长文本会极慢且截断。
-    按句号/换行分割成 ≤500 字的块，逐块翻译后拼接。
+    翻译全文：NLLB translate 内部已自动按 ≤500 字分块（按句号/感叹号/问号/换行切分），
+    直接传全文即可，短文本自动透传，避免 max_length=512 截断。
     """
     model_obj = load_model(translation_config.model)
-    if not text:
-        return ""
-    # 单块短文本直接翻译
-    if len(text) <= 500:
-        return model_obj.translate(text, translation_config.source_lang, translation_config.target_lang)
-
-    # 长文本分块：按换行/句号切分，每块累计 ≤500 字
-    import re as _re
-    # 先按换行切，再按句号切
-    raw_parts = text.split("\n")
-    chunks: list[str] = []
-    cur = ""
-    for part in raw_parts:
-        # 换行内的句子再按。！？切分
-        sentences = _re.split(r"(?<=[。！？!?\.])\s*", part.strip())
-        for s in sentences:
-            if not s:
-                continue
-            if len(cur) + len(s) > 500:
-                if cur:
-                    chunks.append(cur)
-                # 单句超 500 字直接放一块（NLLB 会截断但不影响整体）
-                if len(s) > 500:
-                    chunks.append(s)
-                    cur = ""
-                else:
-                    cur = s
-            else:
-                cur += s
-        cur += "\n"
-    if cur.strip():
-        chunks.append(cur.strip())
-
-    # 逐块翻译
-    results = []
-    for i, chunk in enumerate(chunks):
-        translated = model_obj.translate(chunk, translation_config.source_lang, translation_config.target_lang)
-        results.append(translated or "")
-    return "\n".join(results)
+    return model_obj.translate(
+        text,
+        translation_config.source_lang,
+        translation_config.target_lang,
+    )
 
 
 def _workflow_emotion(source_path: str, emotion_config) -> dict:
@@ -1793,33 +1797,82 @@ async def transcribe(
                     "generate_kwargs_keys": sorted(list(generate_kwargs.keys())),
                 },
             )
-            try:
-                result = await run_in_threadpool(partial(asr_model.generate, **generate_kwargs))
-            except KeyError as ke:
-                if str(ke) == "'timestamp'" and "sentence_timestamp" in generate_kwargs:
-                    generate_kwargs.pop("sentence_timestamp", None)
-                    result = await run_in_threadpool(partial(asr_model.generate, **generate_kwargs))
-                else:
-                    raise
-            elapsed = time.time() - t0
 
-            duration_s = duration_s if duration_s > 0 else elapsed
-            try:
-                rtf = elapsed / duration_s if duration_s > 0 else 0.0
-            except Exception:
-                rtf = 0.0
-            logger.info(
-                "Transcription done: "
-                f"model={model}, "
-                f"elapsed_s={elapsed:.2f}, "
-                f"duration_s={duration_s:.2f}, "
-                f"rtf={rtf:.3f}"
-            )
-            result0 = result[0] if result else {"text": ""}
-            text = clean_text(result0.get("text", ""))
-            segments = segmentation.build_segments(result0=result0, duration_s=duration_s, clean_text=clean_text)
-            if not segments:
-                segments = [{"start": 0.0, "end": round(duration_s, 3), "text": text, "speaker": None}]
+            # 长音频自动分块：>5 分钟时 ffmpeg 切片逐块 ASR 后合并，避免模型处理超长音频丢失内容
+            auto_chunk = duration_s > 300
+            if auto_chunk:
+                from pat_funasr_webui.fine_transcription.transcription_pipeline import (
+                    _split_audio_ffmpeg,
+                    _merge_chunk_segments,
+                )
+
+                chunks = _split_audio_ffmpeg(tmp_path, chunk_seconds=240, overlap_seconds=10)
+                logger.info(f"Auto chunk: duration={duration_s:.1f}s → {len(chunks)} chunks (240s/块, 10s 重叠)")
+                all_segs: list[list[dict]] = []
+                offsets: list[float] = []
+                total_text_parts: list[str] = []
+                for chunk_path, offset in chunks:
+                    ck = dict(generate_kwargs)
+                    ck["tmp_path"] = chunk_path
+                    try:
+                        cresult = await run_in_threadpool(partial(asr_model.generate, **ck))
+                    except KeyError as ke:
+                        if str(ke) == "'timestamp'" and "sentence_timestamp" in ck:
+                            ck.pop("sentence_timestamp", None)
+                            cresult = await run_in_threadpool(partial(asr_model.generate, **ck))
+                        else:
+                            raise
+                    c0 = cresult[0] if cresult else {"text": ""}
+                    seg = segmentation.build_segments(result0=c0, duration_s=240, clean_text=clean_text(c0.get("text", "")))
+                    # 给每段加 offset（workflow 的 _merge_chunk_segments 会统一处理）
+                    for s in seg:
+                        s["start"] = float(s.get("start", 0)) + offset
+                        s["end"] = float(s.get("end", 0)) + offset
+                    all_segs.append(seg)
+                    offsets.append(offset)
+                    total_text_parts.append(clean_text(c0.get("text", "")))
+                # 合并：去重 + 按时间排序
+                segments = _merge_chunk_segments(all_segs, offsets, overlap_seconds=10)
+                # 合并全文：去重窗口内的文本只保留第一次
+                merged_text_parts: list[str] = []
+                seen_text: dict[str, float] = {}
+                for text_part, offset in zip(total_text_parts, offsets):
+                    # 重叠窗口内相同文本跳过（用前 40 字指纹）
+                    short = text_part[:40].strip()
+                    if short and short in seen_text:
+                        continue
+                    if short:
+                        seen_text[short] = offset
+                    merged_text_parts.append(text_part)
+                text = "".join(merged_text_parts)
+            else:
+                try:
+                    result = await run_in_threadpool(partial(asr_model.generate, **generate_kwargs))
+                except KeyError as ke:
+                    if str(ke) == "'timestamp'" and "sentence_timestamp" in generate_kwargs:
+                        generate_kwargs.pop("sentence_timestamp", None)
+                        result = await run_in_threadpool(partial(asr_model.generate, **generate_kwargs))
+                    else:
+                        raise
+                elapsed = time.time() - t0
+
+                duration_s = duration_s if duration_s > 0 else elapsed
+                try:
+                    rtf = elapsed / duration_s if duration_s > 0 else 0.0
+                except Exception:
+                    rtf = 0.0
+                logger.info(
+                    "Transcription done: "
+                    f"model={model}, "
+                    f"elapsed_s={elapsed:.2f}, "
+                    f"duration_s={duration_s:.2f}, "
+                    f"rtf={rtf:.3f}"
+                )
+                result0 = result[0] if result else {"text": ""}
+                text = clean_text(result0.get("text", ""))
+                segments = segmentation.build_segments(result0=result0, duration_s=duration_s, clean_text=clean_text)
+                if not segments:
+                    segments = [{"start": 0.0, "end": round(duration_s, 3), "text": text, "speaker": None}]
             _dbg_report(
                 hypothesis_id="D",
                 msg="api_generate_done",
