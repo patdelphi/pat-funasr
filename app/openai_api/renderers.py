@@ -1,4 +1,4 @@
-﻿"""
+"""
 程序说明：
 提供转写结果的“输出渲染器”（纯后处理），将统一的 segments 结构渲染为：
 txt / json / srt / vtt / tsv，并支持 all(zip) 打包输出。
@@ -194,96 +194,50 @@ def render_fine_all_zip(
     max_line_width: Optional[int] = None,
 ) -> bytes:
     """
-    精细转录打包 ZIP：除基础 5 件套外，额外追加：
-      transcript_refined.txt  /  summary.md  /  mindmap.json
-    并把基础 output.txt 改为包含完整导出（纪要+思维导图）的版本
+    精细转录打包 ZIP，产物列表与 artifact_service.write_workflow_artifacts 完全对齐：
+
+      transcript.json / transcript.txt / transcript.srt / transcript.vtt / transcript.tsv
+      transcript_refined.txt（仅当 refined ≠ full 时）
+      summary.md（复用 artifact_service._render_summary_markdown）
+      mindmap.json
+
+    文本统一 UTF-8 BOM + CRLF。
     """
     import json as _json_mod
+    from artifact_service import _render_summary_markdown
+
+    def _crlf(text: str) -> bytes:
+        normalized = str(text).replace("\r\n", "\n").replace("\r", "\n").replace("\n", "\r\n")
+        return b"\xef\xbb\xbf" + normalized.encode("utf-8")
 
     seg_txt = render_txt(segments, max_line_width=max_line_width)
-    tsv = render_tsv(segments)
-    srt = render_srt(segments, max_line_width=max_line_width)
-    vtt = render_vtt(segments, max_line_width=max_line_width)
-    js = render_json_pretty(json_payload)
-
-    # ---- 完整 TXT（包含 转写 + 纪要 + 思维导图）----
-    sep = "=" * 60
-    complete_lines: List[str] = []
-    complete_lines.append(f"精细转录结果 - {scene_name or ''}")
-    if elapsed:
-        complete_lines.append(f"耗时: {elapsed:.1f}s")
-    complete_lines.append(sep)
-    complete_lines.append("")
-    if refined_text:
-        complete_lines.append("【优化后文本】")
-        complete_lines.append(refined_text)
-    elif full_text:
-        complete_lines.append("【原始转写】")
-        complete_lines.append(full_text)
+    full_text = str(full_text or "")
+    refined_text = str(refined_text or full_text)
+    # 对齐 artifact_service：如果 segments 拼接 == full_text 用带时间戳的分段，否则用纯全文
+    if full_text.strip() and "".join(str(s.get("text") or "") for s in segments) != full_text:
+        plain_txt = full_text.strip() + "\r\n"
     else:
-        complete_lines.append("【按段落转写】")
-        complete_lines.append(seg_txt)
-    if summary:
-        complete_lines.append("")
-        complete_lines.append(sep)
-        complete_lines.append("【纪要】")
-        complete_lines.append(_json_mod.dumps(summary, ensure_ascii=False, indent=2))
-    if mindmap:
-        complete_lines.append("")
-        complete_lines.append(sep)
-        complete_lines.append("【思维导图】")
-        complete_lines.append(_json_mod.dumps(mindmap, ensure_ascii=False, indent=2))
-    complete_txt = "\n".join(complete_lines) + "\n"
+        plain_txt = seg_txt
 
     mem = io.BytesIO()
     with zipfile.ZipFile(mem, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr("output.txt", complete_txt)
-        zf.writestr("transcript_segments.txt", seg_txt)
-        if refined_text:
-            zf.writestr("transcript_refined.txt", refined_text)
-        zf.writestr("output.tsv", tsv)
-        zf.writestr("output.srt", srt)
-        zf.writestr("output.vtt", vtt)
-        zf.writestr("output.json", js)
+        zf.writestr("transcript.json", _crlf(render_json_pretty(json_payload)))
+        zf.writestr("transcript.txt", _crlf(plain_txt))
+        zf.writestr("transcript.srt", _crlf(render_srt(segments, max_line_width=max_line_width)))
+        zf.writestr("transcript.vtt", _crlf(render_vtt(segments, max_line_width=max_line_width)))
+        zf.writestr("transcript.tsv", _crlf(render_tsv(segments)))
+
+        # 校对后全文（与原文不同才额外写出）
+        if refined_text and refined_text != full_text:
+            zf.writestr("transcript_refined.txt", _crlf(refined_text))
+
+        # 纪要 Markdown（复用 artifact_service 统一渲染）
         if summary:
-            # summary 也输出一份可读 Markdown
-            summary_lines: List[str] = [f"# 纪要 - {scene_name or ''}", ""]
-            field_labels = {
-                "participants": "参会人员", "summary": "概要",
-                "deadlines": "截止日期", "decisions": "决策",
-                "action_items": "行动项", "follow_ups": "后续跟进",
-                "notes": "备注", "topics": "讨论主题",
-                "key_insights": "关键洞察", "pain_points": "痛点",
-                "suggestions": "建议", "conclusion": "结论",
-                "action_items": "行动项",
-            }
-            if summary.get("aggregated"):
-                for i, part in enumerate(summary.get("parts") or []):
-                    summary_lines.append(f"## 第 {i + 1} 段")
-                    for k, v in part.items():
-                        label = field_labels.get(k, k)
-                        if isinstance(v, list):
-                            summary_lines.append(f"**{label}:**")
-                            for it in v:
-                                summary_lines.append(f"- {it}")
-                        else:
-                            summary_lines.append(f"**{label}:** {v}")
-                    summary_lines.append("")
-            else:
-                for k, v in summary.items():
-                    label = field_labels.get(k, k)
-                    if isinstance(v, list):
-                        summary_lines.append(f"**{label}:**")
-                        for it in v:
-                            summary_lines.append(f"- {it}")
-                    elif isinstance(v, dict):
-                        summary_lines.append(f"**{label}:**")
-                        for dk, dv in v.items():
-                            summary_lines.append(f"- {dk}: {dv}")
-                    else:
-                        summary_lines.append(f"**{label}:** {v}")
-                    summary_lines.append("")
-            zf.writestr("summary.md", "\n".join(summary_lines).strip() + "\n")
+            md = _render_summary_markdown(summary)
+            if md.strip():
+                zf.writestr("summary.md", md.encode("utf-8"))
+
+        # 脑图 JSON
         if mindmap:
-            zf.writestr("mindmap.json", _json_mod.dumps(mindmap, ensure_ascii=False, indent=2) + "\n")
+            zf.writestr("mindmap.json", _crlf(_json_mod.dumps(mindmap, ensure_ascii=False, indent=2) + "\n"))
     return mem.getvalue()
