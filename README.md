@@ -54,6 +54,18 @@
 - SQLite 全部启用 `journal_mode=WAL` + `synchronous=NORMAL`
 - 所有 API 有异常处理、数据库操作有事务、所有阶段失败有回退策略（如 reviewer 失败 `skip_failed_reviewer`）
 
+### 🔁 代码复用策略（关键）
+长音频 ASR 分块和 NLLB 翻译分块**不是**精细转录工作流独有，而是**自动下沉到公共层**，所有入口受益：
+
+| 能力 | 下沉位置 | 覆盖路径 |
+|------|----------|----------|
+| **ASR 自动分块**（>5min） | `server.py` `transcribe()`（离线识别 API） | 离线识别 API + 精细转录工作流（后者显式配置 chunk_enabled） |
+| **NLLB 翻译分块**（≤500字/块） | `NLLBTranslationModel.translate()` | 工作流翻译 + 独立翻译 Tab + API `/v1/funasr/translate` |
+| **LLM 熔断 / connect+read 超时 / enable_thinking=False** | `summary_processor.call_llm()` | 校对 + 纪要 + 脑图 三条 LLM 调用路径 |
+| **校对回填 `_redistribute_refined_to_segments`** | `workflow_runner`（纯函数） | 任何 scope=refined/all 的 LLM 后处理场景，import 即可用 |
+
+**设计原则**：能下沉到底层类/方法的不分层调用，能自动触发的不加额外参数。这样新增入口（如批量 API、新 UI Tab）时自动继承稳定性，不会遗漏。
+
 ## 🚀 快速开始
 
 ### 环境要求

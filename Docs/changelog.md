@@ -3,6 +3,12 @@
 
 ## 2026-09-03
 
+### 代码复用：ASR 分块 + NLLB 翻译分块下沉到公共层
+
+- **离线识别 `/v1/audio/transcriptions` 自动分块**：duration > 5 分钟时自动 ffmpeg 240s/块 + 10s 重叠，复用 `_split_audio_ffmpeg` + `_merge_chunk_segments`，API 无额外参数，短音频走原路径。之前只有 workflow 路径分块，用户从"快速转录"tab 上传 2h 录音仍会截断到几千字
+- **NLLB translate 内部分块**（4f63533）：下沉到 `NLLBTranslationModel.translate()` 方法内部，≤500 字/块按。！？!?\. 和换行切分。**所有路径自动受益**——工作流翻译、独立翻译 Tab、API `/v1/funasr/translate` 三入口统一；`_workflow_translate` 简化为 12 行（之前 45 行重复分块代码）
+- README 新增"代码复用策略"章节，明确能力下沉位置与覆盖路径矩阵
+
 ### 长音频 ASR 默认启用分块（完整度 +1200%）
 - `segmentation.chunk_enabled` 默认 False → True，后端 schema、前端配置、UI Checkbox 三层同步
 - 不分块时 2h43m 录音仅识别 4262 字（截断）；分块后 56936 字，完整度提升 **+1236%**
