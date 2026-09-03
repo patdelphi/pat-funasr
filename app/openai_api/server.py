@@ -1333,15 +1333,20 @@ def _workflow_transcribe_model(
             _split_audio_ffmpeg,
         )
 
-        split_chunks = _split_audio_ffmpeg(
-            source_path,
-            chunk_seconds=config.segmentation.chunk_seconds,
-            overlap_seconds=config.segmentation.overlap_seconds,
-        )
-        if not split_chunks:
-            raise RuntimeError("已启用音频分块，但 FFmpeg 未生成有效分块")
-        chunks = split_chunks
-        chunk_dirs = {str(Path(path).parent) for path, _offset in chunks}
+        try:
+            split_chunks = _split_audio_ffmpeg(
+                source_path,
+                chunk_seconds=config.segmentation.chunk_seconds,
+                overlap_seconds=config.segmentation.overlap_seconds,
+            )
+            if split_chunks:
+                chunks = split_chunks
+                chunk_dirs = {str(Path(path).parent) for path, _offset in chunks}
+                logger.info(f"Audio chunking succeeded: {len(chunks)} chunks")
+            else:
+                logger.warning("Audio chunking enabled but ffmpeg returned no chunks, fallback to single pass")
+        except Exception as exc:
+            logger.warning(f"Audio chunking failed ({exc}), fallback to single pass")
 
     all_segments: list[list[dict]] = []
     all_words: list[dict] = []
