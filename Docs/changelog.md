@@ -1,7 +1,14 @@
 #
 变更记录（Changelog）
 
-## 2026-09-03
+## 2026-09-03（下午）
+
+### 全量 pytest 验证通过 + ffmpeg 分块 fallback
+
+- **全量 pytest 238 passed, 0 failed, 3 subtests passed**（46.5s）
+- FakeModel 测试在 `chunk_enabled` 默认 True 后失败：ffmpeg 无法处理假音频 `b"fake-audio"` → 分块逻辑改为 try/except，失败时**自动 fallback 到单块**（原 chunks 列表），打 warning 日志
+- 修复位置：`_workflow_transcribe_model` 分块段，生产环境 ffmpeg 异常也不会中断任务
+- commit 6bde4f1
 
 ### 代码复用：ASR 分块 + NLLB 翻译分块下沉到公共层
 

@@ -107,7 +107,177 @@ OpenAI 兼容 API 说明（API）
 
 补充说明：
 
-- `"/v1/models"` 的 `"ready"` 按“模型主名 + 任一已加载运行时变体”判断，因此即使某模型以自定义 `device / ncpu / punc_mode` 变体加载，前端仍会把该模型视为已就绪
+- `"/v1/models"` 的 `"ready"` 按"模型主名 + 任一已加载运行时变体"判断，因此即使某模型以自定义 `device / ncpu / punc_mode` 变体加载，前端仍会把该模型视为已就绪
+
+### 长音频自动分块
+
+当上传音频 duration > 300 秒（5 分钟）时，API **自动启用 ffmpeg 分块**：
+
+- 切分：240 秒/块 + 10 秒重叠（可通过 `ffmpeg.split_audio` 内部函数调整）
+- 每块独立 ASR 推理，避免模型处理超长音频丢失内容
+- 合并时使用"文本前 40 字指纹 + 2×重叠时间窗口"去重，防止误删远距离真重复
+- 短音频（≤5 分钟）走原路径，无分块开销
+- ffmpeg 分块失败时**自动 fallback 到单块**，不中断任务
+
+> 该自动分块逻辑在 `server.py` 的 `/v1/audio/transcriptions` 端点和 `workflow_runner._workflow_transcribe_model` 两处实现，后者可通过 `segmentation.chunk_enabled` 配置显式控制。
+
+### POST "/v1/funasr/translate"
+
+用途：文本翻译（NLLB 本地模型，200+ 语言互译）。
+
+请求类型：application/json
+
+```json
+{
+  "text": "你好，欢迎使用 Pat-FunASR",
+  "source_lang": "zho_Hans",
+  "target_lang": "eng_Latn",
+  "model": "nllb-200-distilled-600m"
+}
+```
+
+字段说明：
+
+- "text"（必填）：待翻译文本（字符串或字符串数组）
+- "source_lang"（必填）：源语言代码（NLLB BCP-47 格式，如 `zho_Hans`、`eng_Latn`）
+- "target_lang"（必填）：目标语言代码
+- "model"（可选，默认 "nllb-200-distilled-600m"）：NLLB 模型名
+
+响应：
+
+```json
+{"text": "Hello, welcome to Pat-FunASR", "model": "nllb-200-distilled-600m"}
+```
+
+长文本自动分块：`NLLBTranslationModel.translate()` 内部自动按。！？!?\. 和换行切分，≤500 字/块逐块翻译后拼接。外部调用者直接传全文即可，无需手动拆分。
+
+### POST "/v1/funasr/workflows"
+
+用途：**精细转录工作流**（全流程编排：ASR → 双模型对照 → 说话人分离 → LLM 校对 → 纪要 → 脑图 → 翻译 → 情感 → 导出）。
+
+请求类型：multipart/form-data
+
+表单字段：
+
+- "file"（必填）：音频/视频文件
+- "workflow"（必填）：JSON 字符串，工作流配置
+
+最小配置示例（仅 ASR + 导出）：
+
+```json
+{
+  "workflow_version": "1.0",
+  "transcription": {"primary": {"model": "sensevoice"}},
+  "export": {"formats": ["json", "txt"]}
+}
+```
+
+完整配置示例（70 分钟会议全流程）：
+
+```json
+{
+  "workflow_version": "1.0",
+  "segmentation": {"chunk_enabled": true},
+  "transcription": {
+    "primary": {"model": "sensevoice"},
+    "reviewers": [{"model": "paraformer", "weight": 0.3}]
+  },
+  "reconciliation": {"mode": "primary_first"},
+  "diarization": {"enabled": true, "speaker_model": "cam++"},
+  "llm_proofread": {"enabled": true, "scope": "refined", "model": "qwen3.7-plus"},
+  "summary": {"enabled": true, "model": "qwen3.7-plus"},
+  "mindmap": {"enabled": true, "model": "qwen3.7-plus"},
+  "translation": {
+    "enabled": true,
+    "model": "nllb-200-distilled-600m",
+    "source_lang": "zho_Hans",
+    "target_lang": "eng_Latn"
+  },
+  "export": {"formats": ["json", "txt", "srt", "vtt"]}
+}
+```
+
+工作流配置 schema 各节点说明：
+
+| 节点 | 字段 | 默认值 | 说明 |
+|------|------|--------|------|
+| `segmentation` | `chunk_enabled` | **true** | 长音频分块（推荐开启） |
+| | `chunk_seconds` | 240 | 分块时长（秒） |
+| | `overlap_seconds` | 10 | 分块重叠（秒） |
+| `transcription.primary` | `model` | — | 主 ASR 模型（必填） |
+| `transcription.reviewers` | `[].model` | — | 校对模型列表（可选） |
+| `diarization` | `enabled` | false | 说话人分离 |
+| | `speaker_model` | "cam++" | cam++ / eres2net |
+| `llm_proofread` | `enabled` | false | LLM 校对 |
+| | `scope` | **"refined"** | refined=全文拼接（快）, segments=逐段（慢）, original=原始文本 |
+| | `model` | — | LLM 模型名（需与 .env 配置对应） |
+| `summary` | `enabled` | false | 会议纪要 |
+| `mindmap` | `enabled` | false | 思维导图 |
+| `translation` | `enabled` | false | NLLB 翻译 |
+| | `source_lang` | — | NLLB BCP-47 语言码 |
+| | `target_lang` | — | NLLB BCP-47 语言码 |
+| `export` | `formats` | ["json","txt"] | 导出格式列表 |
+
+响应（202 Accepted）：
+
+```json
+{"job_id": "a1b2c3d4e5", "status": "queued"}
+```
+
+### GET "/v1/funasr/workflows/{job_id}"
+
+用途：查询工作流任务状态与结果。
+
+响应示例（进行中）：
+
+```json
+{
+  "job_id": "a1b2c3d4e5",
+  "status": "running",
+  "result": null,
+  "events": [
+    {"phase": "progress", "stage": "transcription.primary", "progress": 0.35, "message": "模型 sensevoice 转录中", "timestamp": 1756944000}
+  ]
+}
+```
+
+响应示例（完成）：
+
+```json
+{
+  "job_id": "a1b2c3d4e5",
+  "status": "completed",
+  "result": {
+    "text": "校对后全文...",
+    "original_text": "原始全文...",
+    "refined_text": "校对后全文...",
+    "segments": [{"start": 0.0, "end": 2.5, "text": "...", "speaker": 0}],
+    "model_runs": [{"model": "sensevoice", "segments": [...]}],
+    "summary": {"summary": "...", "action_items": [...]},
+    "mindmap": {"title": "...", "children": [...]},
+    "translation": "...",
+    "diarization": {"segments": [...]},
+    "artifacts": [{"name": "transcript.json", "path": "...", "size": 12345}, ...]
+  },
+  "events": [...]
+}
+```
+
+status 取值：`queued` → `running` → `completed` / `failed` / `cancelled`
+
+### GET "/v1/funasr/workflows/{job_id}/artifacts/{name}"
+
+用途：下载工作流产物。
+
+可用 name：`transcript.json`、`transcript.txt`、`transcript_segments.txt`、`transcript_refined.txt`、`transcript.srt`、`transcript.vtt`、`transcript.tsv`、`summary.md`、`mindmap.json`
+
+### GET "/v1/funasr/runtime"
+
+用途：查询运行时资源状态（GPU/CPU、已加载模型、队列长度）。
+
+### POST "/v1/funasr/workflows/{job_id}/cancel"
+
+用途：取消正在运行的工作流任务。
 
 ### POST "/v1/funasr/streaming"
 
