@@ -1,4 +1,4 @@
-﻿"""
+"""
 程序说明：
 统一写出精细转录工作流产物，并保留配置快照和事件日志。
 
@@ -40,6 +40,77 @@ def _public_result(result: dict[str, Any], include_raw_candidates: bool) -> dict
     return payload
 
 
+def _render_summary_markdown(summary_obj: Any) -> str:
+    """把 summary dict 渲染成 Markdown 纪要文本。"""
+    if not summary_obj:
+        return ""
+    if isinstance(summary_obj, str):
+        return summary_obj
+
+    parts = summary_obj.get("parts", []) if isinstance(summary_obj, dict) else []
+    lines: list[str] = ["# 会议纪要", ""]
+
+    for idx, part in enumerate(parts, 1):
+        if not isinstance(part, dict):
+            continue
+        # 摘要
+        summary_text = str(part.get("summary") or "").strip()
+        if summary_text:
+            if len(parts) > 1:
+                lines.append(f"## 摘要（第 {idx} 部分）")
+            else:
+                lines.append("## 摘要")
+            lines.append("")
+            lines.append(summary_text)
+            lines.append("")
+
+        # 决定
+        decisions = part.get("decisions") or []
+        if decisions and isinstance(decisions, list):
+            lines.append("### 决定")
+            lines.append("")
+            for d in decisions:
+                if isinstance(d, dict):
+                    point = str(d.get("decision_point") or "").strip()
+                    desc = str(d.get("description") or "").strip()
+                    if point:
+                        lines.append(f"- **{point}**：{desc}")
+                    elif desc:
+                        lines.append(f"- {desc}")
+                elif isinstance(d, str) and d.strip():
+                    lines.append(f"- {d.strip()}")
+            lines.append("")
+
+        # 行动项
+        actions = part.get("action_items") or []
+        if actions and isinstance(actions, list):
+            lines.append("### 行动项")
+            lines.append("")
+            for a in actions:
+                if isinstance(a, dict):
+                    task = str(a.get("task") or a.get("action") or "").strip()
+                    owner = str(a.get("owner") or a.get("person") or "").strip()
+                    deadline = str(a.get("deadline") or a.get("due") or "").strip()
+                    if task:
+                        suffix = ""
+                        if owner or deadline:
+                            suffix = f"（{owner}" + (f"，{deadline}）" if deadline else "）")
+                        lines.append(f"- [ ] {task}{suffix}")
+                elif isinstance(a, str) and a.strip():
+                    lines.append(f"- [ ] {a.strip()}")
+            lines.append("")
+
+        # 备注
+        notes = str(part.get("notes") or "").strip()
+        if notes:
+            lines.append("### 备注")
+            lines.append("")
+            lines.append(notes)
+            lines.append("")
+
+    return "\r\n".join(lines).strip() + "\r\n"
+
+
 def write_workflow_artifacts(
     *,
     output_dir: str | Path,
@@ -63,6 +134,9 @@ def write_workflow_artifacts(
     payload = _public_result(result, include_raw_candidates)
     segments = list(payload.get("segments") or [])
     full_text = str(payload.get("text") or "")
+    refined_text = str(payload.get("refined_text") or full_text)
+    summary = payload.get("summary")
+    mindmap = payload.get("mindmap")
     artifacts: list[dict[str, Any]] = []
 
     render_map = {
@@ -80,6 +154,26 @@ def write_workflow_artifacts(
         path = root / f"transcript.{fmt}"
         _write_text(path, render_map[fmt]())
         artifacts.append(_artifact(path, fmt))
+
+    # 校对后全文（如果与原文不同则单独导出）
+    if refined_text and refined_text != full_text:
+        refined_path = root / "transcript_refined.txt"
+        _write_text(refined_path, refined_text)
+        artifacts.append(_artifact(refined_path, "txt"))
+
+    # 纪要 Markdown
+    if summary:
+        summary_md = _render_summary_markdown(summary)
+        if summary_md.strip():
+            sum_path = root / "summary.md"
+            _write_text(sum_path, summary_md)
+            artifacts.append(_artifact(sum_path, "md"))
+
+    # 脑图 JSON
+    if mindmap:
+        mm_path = root / "mindmap.json"
+        _write_text(mm_path, json.dumps(mindmap, ensure_ascii=False, indent=2) + "\n")
+        artifacts.append(_artifact(mm_path, "json"))
 
     if include_config_snapshot:
         config_path = root / "workflow-config.json"
