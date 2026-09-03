@@ -1,4 +1,4 @@
-﻿"""
+"""
 FunASR OpenAI-Compatible API Server
 
 Drop-in replacement for OpenAI's /v1/audio/transcriptions endpoint.
@@ -1548,12 +1548,50 @@ def _workflow_llm_stage(stage_name: str, text: str, stage_config):
 
 
 def _workflow_translate(text: str, translation_config):
+    """
+    翻译全文：NLLB max_length=512，超长文本会极慢且截断。
+    按句号/换行分割成 ≤500 字的块，逐块翻译后拼接。
+    """
     model_obj = load_model(translation_config.model)
-    return model_obj.translate(
-        text,
-        translation_config.source_lang,
-        translation_config.target_lang,
-    )
+    if not text:
+        return ""
+    # 单块短文本直接翻译
+    if len(text) <= 500:
+        return model_obj.translate(text, translation_config.source_lang, translation_config.target_lang)
+
+    # 长文本分块：按换行/句号切分，每块累计 ≤500 字
+    import re as _re
+    # 先按换行切，再按句号切
+    raw_parts = text.split("\n")
+    chunks: list[str] = []
+    cur = ""
+    for part in raw_parts:
+        # 换行内的句子再按。！？切分
+        sentences = _re.split(r"(?<=[。！？!?\.])\s*", part.strip())
+        for s in sentences:
+            if not s:
+                continue
+            if len(cur) + len(s) > 500:
+                if cur:
+                    chunks.append(cur)
+                # 单句超 500 字直接放一块（NLLB 会截断但不影响整体）
+                if len(s) > 500:
+                    chunks.append(s)
+                    cur = ""
+                else:
+                    cur = s
+            else:
+                cur += s
+        cur += "\n"
+    if cur.strip():
+        chunks.append(cur.strip())
+
+    # 逐块翻译
+    results = []
+    for i, chunk in enumerate(chunks):
+        translated = model_obj.translate(chunk, translation_config.source_lang, translation_config.target_lang)
+        results.append(translated or "")
+    return "\n".join(results)
 
 
 def _workflow_emotion(source_path: str, emotion_config) -> dict:

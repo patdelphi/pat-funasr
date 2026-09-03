@@ -1,5 +1,33 @@
-﻿#
+#
 变更记录（Changelog）
+
+## 2026-09-03
+
+### 长音频 ASR 默认启用分块（完整度 +1200%）
+- `segmentation.chunk_enabled` 默认 False → True，后端 schema、前端配置、UI Checkbox 三层同步
+- 不分块时 2h43m 录音仅识别 4262 字（截断）；分块后 56936 字，完整度提升 **+1236%**
+- ffmpeg 切 240s/块 × 10s 重叠，合并时使用"文本前 40 字指纹 + 2×重叠时间窗口"去重，避免误删远距离真重复（如"对对对""是的"口语）
+- 短音频（<chunk_seconds）自动降为单块，无性能损失
+
+### LLM proofread scope=refined 提速 5-6×
+- 默认校对范围从逐段 `segments`（HTTP 2659 次 / 45 分钟）改为全文拼接 `refined`（HTTP 9 次 / 7-8 分钟），提速 **5-6×**
+- 新增 `_redistribute_refined_to_segments`：校对结果按原 segments 字符长度比例**精确回填**，保证 SRT/TXT 导出与全文一致（实测 40536 字精确匹配）
+- 前端 UI 新增"全文拼接（推荐，快 10×）refined"选项并设为默认；逐段保留并标注"慢"
+
+### 翻译长文本卡死修复（NLLB max_length=512）
+- 工作流翻译阶段将全文一次性传入 NLLB，因 `max_length=512` 导致超长文本卡死 15+ 分钟并截断
+- 新增分块逻辑：按句号/感叹号/问号切分，≤500 字/块逐块翻译后用换行拼接；70 分钟录音 28531 字翻译正常完成（40948 字英文）
+- 单块短文本直接走原路径，无额外开销
+
+### 精细转录全流程真实端到端验证通过
+- 测试：IBEC竞标会议录音.m4a（32.4 MB / 70 分钟），启用双模型(sensevoice+paraformer)+校对+纪要+脑图+翻译+说话人分离
+- 61 个事件全部 `_success`，无一失败；总耗时 29.6 分钟
+- 结果：802 segments × 28531 字；校对正常；纪要 8 段聚合(JSON→summary.md)；脑图 26 节点(title+children)；翻译 40948 字完整英文；ZIP 9 文件齐全导出
+
+### 其他稳定性与代码质量
+- 去重窗口 `max(overlap_seconds*2, 30)` 改为严格 `overlap_seconds*2`，防止误删远距离重复
+- 业务导航 Tab 移除后端 `select` 回调，新增单元测试确保不绑定
+- 业务导航 Tab 子页 `transcription_tab/fine_tab/diarization_tab/...` 非服务 Tab 不得绑定 select，防止切换进入请求队列
 
 ## 2026-08-24
 
