@@ -165,19 +165,29 @@ def render_all_zip(
     json_payload: Dict[str, Any],
     max_line_width: Optional[int] = None,
 ) -> bytes:
-    txt = render_txt(segments, max_line_width=max_line_width)
-    tsv = render_tsv(segments)
-    srt = render_srt(segments, max_line_width=max_line_width)
-    vtt = render_vtt(segments, max_line_width=max_line_width)
-    js = render_json_pretty(json_payload)
+    """
+    基础 5 件套 ZIP（离线识别/说话人分离），产物命名与 render_fine_all_zip 对齐：
+      transcript.json / transcript.txt / transcript.srt / transcript.vtt / transcript.tsv
+    文本统一 UTF-8 BOM + CRLF。
+    """
+
+    def _crlf(text: str) -> bytes:
+        normalized = str(text).replace("\r\n", "\n").replace("\r", "\n").replace("\n", "\r\n")
+        return b"\xef\xbb\xbf" + normalized.encode("utf-8")
+
+    seg_txt = render_txt(segments, max_line_width=max_line_width)
+    full_text = str(full_text or "")
+    # transcript.txt 优先级：render_txt(segments) > full_text
+    # render_all_zip 无 LLM proofread，不需要 refined_text 分支
+    plain_txt = seg_txt if seg_txt.strip() else (full_text.strip() + "\r\n")
 
     mem = io.BytesIO()
     with zipfile.ZipFile(mem, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr("output.txt", txt)
-        zf.writestr("output.tsv", tsv)
-        zf.writestr("output.srt", srt)
-        zf.writestr("output.vtt", vtt)
-        zf.writestr("output.json", js)
+        zf.writestr("transcript.json", _crlf(render_json_pretty(json_payload)))
+        zf.writestr("transcript.txt", _crlf(plain_txt))
+        zf.writestr("transcript.srt", _crlf(render_srt(segments, max_line_width=max_line_width)))
+        zf.writestr("transcript.vtt", _crlf(render_vtt(segments, max_line_width=max_line_width)))
+        zf.writestr("transcript.tsv", _crlf(render_tsv(segments)))
     return mem.getvalue()
 
 
@@ -212,12 +222,15 @@ def render_fine_all_zip(
 
     seg_txt = render_txt(segments, max_line_width=max_line_width)
     full_text = str(full_text or "")
-    refined_text = str(refined_text or full_text)
-    # 对齐 artifact_service：如果 segments 拼接 == full_text 用带时间戳的分段，否则用纯全文
-    if full_text.strip() and "".join(str(s.get("text") or "") for s in segments) != full_text:
-        plain_txt = full_text.strip() + "\r\n"
-    else:
+    refined_text = str(refined_text or "")
+    # transcript.txt 优先级：refined_text > render_txt(segments) > full_text
+    # 只要 LLM proofread 产生了 refined_text，就优先用
+    if refined_text.strip():
+        plain_txt = refined_text.strip() + "\r\n"
+    elif seg_txt.strip():
         plain_txt = seg_txt
+    else:
+        plain_txt = full_text.strip() + "\r\n"
 
     mem = io.BytesIO()
     with zipfile.ZipFile(mem, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:

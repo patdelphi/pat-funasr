@@ -263,13 +263,13 @@ CAPABILITY_TARGETS = {
 }
 
 FORMAT_FILENAMES = {
-    "json": "output.json",
-    "verbose_json": "output.verbose.json",
-    "txt": "output.txt",
-    "srt": "output.srt",
-    "vtt": "output.vtt",
-    "tsv": "output.tsv",
-    "all": "output.zip",
+    "json": "transcript.json",
+    "verbose_json": "transcript.verbose.json",
+    "txt": "transcript.txt",
+    "srt": "transcript.srt",
+    "vtt": "transcript.vtt",
+    "tsv": "transcript.tsv",
+    "all": "transcript.zip",
 }
 
 

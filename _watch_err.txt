@@ -1,0 +1,5 @@
+Traceback (most recent call last):
+  File "Y:\NewStore\AI\pat-funasr\_watch.py", line 72, in <module>
+    for name in sorted(artifacts.keys()):
+                       ^^^^^^^^^^^^^^
+AttributeError: 'list' object has no attribute 'keys'

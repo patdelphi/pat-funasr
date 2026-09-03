@@ -139,13 +139,21 @@ def write_workflow_artifacts(
     mindmap = payload.get("mindmap")
     artifacts: list[dict[str, Any]] = []
 
+    # transcript.txt 选择优先级：refined_text > render_txt(segments) > full_text
+    # 只要 LLM proofread 产生了 refined_text，就优先用（segments 可能还没同步更新）
+    refined_text = str(payload.get("refined_text") or "")
+    full_text = str(payload.get("text") or "")
+    seg_txt = renderers.render_txt(segments)
+    if refined_text.strip():
+        plain_txt = refined_text.strip() + "\n"
+    elif seg_txt.strip():
+        plain_txt = seg_txt
+    else:
+        plain_txt = full_text.strip() + ("\n" if full_text.strip() else "")
+
     render_map = {
         "json": lambda: renderers.render_json_pretty(payload),
-        "txt": lambda: (
-            renderers.render_txt(segments)
-            if "".join(str(item.get("text") or "") for item in segments) == full_text
-            else full_text.strip() + ("\n" if full_text.strip() else "")
-        ),
+        "txt": lambda: plain_txt,
         "srt": lambda: renderers.render_srt(segments),
         "vtt": lambda: renderers.render_vtt(segments),
         "tsv": lambda: renderers.render_tsv(segments),

@@ -92,10 +92,11 @@ class TestRenderers(unittest.TestCase):
         zf = zipfile.ZipFile(io.BytesIO(zbytes))
         names = set(zf.namelist())
         self.assertEqual(
-            names, {"output.txt", "output.tsv", "output.srt", "output.vtt", "output.json"}
+            names, {"transcript.txt", "transcript.tsv", "transcript.srt", "transcript.vtt", "transcript.json"}
         )
-        self.assertEqual(zf.read("output.srt").decode("utf-8"), renderers.render_srt(self.segments))
-        self.assertEqual(zf.read("output.tsv").decode("utf-8"), renderers.render_tsv(self.segments))
+        # ZIP 内统一做了 CRLF 转换，测试先转回 LF 再比
+        self.assertEqual(zf.read("transcript.srt").decode("utf-8-sig").replace("\r\n", "\n"), renderers.render_srt(self.segments))
+        self.assertEqual(zf.read("transcript.tsv").decode("utf-8-sig").replace("\r\n", "\n"), renderers.render_tsv(self.segments))
 
 
 if __name__ == "__main__":

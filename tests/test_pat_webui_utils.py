@@ -316,8 +316,8 @@ class TestPatWebUiUtils(unittest.TestCase):
         )
 
     def test_output_filename_for_format(self):
-        self.assertEqual(app_utils.output_filename_for_format("txt"), "output.txt")
-        self.assertEqual(app_utils.output_filename_for_format("all"), "output.zip")
+        self.assertEqual(app_utils.output_filename_for_format("txt"), "transcript.txt")
+        self.assertEqual(app_utils.output_filename_for_format("all"), "transcript.zip")
 
     def test_normalize_uploaded_paths(self):
         paths = app_utils.normalize_uploaded_paths(

@@ -266,9 +266,9 @@ class TestPatWebUiDiarizationExports(unittest.TestCase):
         with zipfile.ZipFile(io.BytesIO(archive_bytes)) as zf:
             self.assertEqual(
                 set(zf.namelist()),
-                {"output.json", "output.srt", "output.tsv", "output.txt", "output.vtt"},
+                {"transcript.json", "transcript.srt", "transcript.tsv", "transcript.txt", "transcript.vtt"},
             )
-            self.assertIn("[spk=0] 你好", zf.read("output.txt").decode("utf-8"))
+            self.assertIn("[spk=0] 你好", zf.read("transcript.txt").decode("utf-8-sig"))
 
     def test_build_transcription_export_files(self):
         payload = {
