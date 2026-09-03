@@ -164,12 +164,14 @@ def render_all_zip(
     segments: List[Dict[str, Any]],
     json_payload: Dict[str, Any],
     max_line_width: Optional[int] = None,
+    timestamp: str | None = None,
 ) -> bytes:
     """
     基础 5 件套 ZIP（离线识别/说话人分离），产物命名与 render_fine_all_zip 对齐：
-      transcript.json / transcript.txt / transcript.srt / transcript.vtt / transcript.tsv
+      transcript_{ts}.json / .txt / .srt / .vtt / .tsv
     文本统一 UTF-8 BOM + CRLF。
     """
+    from artifact_service import _ts_name
 
     def _crlf(text: str) -> bytes:
         normalized = str(text).replace("\r\n", "\n").replace("\r", "\n").replace("\n", "\r\n")
@@ -183,11 +185,11 @@ def render_all_zip(
 
     mem = io.BytesIO()
     with zipfile.ZipFile(mem, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr("transcript.json", _crlf(render_json_pretty(json_payload)))
-        zf.writestr("transcript.txt", _crlf(plain_txt))
-        zf.writestr("transcript.srt", _crlf(render_srt(segments, max_line_width=max_line_width)))
-        zf.writestr("transcript.vtt", _crlf(render_vtt(segments, max_line_width=max_line_width)))
-        zf.writestr("transcript.tsv", _crlf(render_tsv(segments)))
+        zf.writestr(_ts_name("transcript", "json", timestamp), _crlf(render_json_pretty(json_payload)))
+        zf.writestr(_ts_name("transcript", "txt", timestamp), _crlf(plain_txt))
+        zf.writestr(_ts_name("transcript", "srt", timestamp), _crlf(render_srt(segments, max_line_width=max_line_width)))
+        zf.writestr(_ts_name("transcript", "vtt", timestamp), _crlf(render_vtt(segments, max_line_width=max_line_width)))
+        zf.writestr(_ts_name("transcript", "tsv", timestamp), _crlf(render_tsv(segments)))
     return mem.getvalue()
 
 
@@ -202,19 +204,20 @@ def render_fine_all_zip(
     scene_name: str = "",
     elapsed: float = 0.0,
     max_line_width: Optional[int] = None,
+    timestamp: str | None = None,
 ) -> bytes:
     """
     精细转录打包 ZIP，产物列表与 artifact_service.write_workflow_artifacts 完全对齐：
 
-      transcript.json / transcript.txt / transcript.srt / transcript.vtt / transcript.tsv
-      transcript_refined.txt（仅当 refined ≠ full 时）
-      summary.md（复用 artifact_service._render_summary_markdown）
-      mindmap.json
+      transcript_{ts}.json / .txt / .srt / .vtt / .tsv
+      transcript_refined_{ts}.txt（仅当 refined ≠ full 时）
+      summary_{ts}.md（复用 artifact_service._render_summary_markdown）
+      mindmap_{ts}.json
 
     文本统一 UTF-8 BOM + CRLF。
     """
     import json as _json_mod
-    from artifact_service import _render_summary_markdown
+    from artifact_service import _render_summary_markdown, _ts_name
 
     def _crlf(text: str) -> bytes:
         normalized = str(text).replace("\r\n", "\n").replace("\r", "\n").replace("\n", "\r\n")
@@ -234,23 +237,23 @@ def render_fine_all_zip(
 
     mem = io.BytesIO()
     with zipfile.ZipFile(mem, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr("transcript.json", _crlf(render_json_pretty(json_payload)))
-        zf.writestr("transcript.txt", _crlf(plain_txt))
-        zf.writestr("transcript.srt", _crlf(render_srt(segments, max_line_width=max_line_width)))
-        zf.writestr("transcript.vtt", _crlf(render_vtt(segments, max_line_width=max_line_width)))
-        zf.writestr("transcript.tsv", _crlf(render_tsv(segments)))
+        zf.writestr(_ts_name("transcript", "json", timestamp), _crlf(render_json_pretty(json_payload)))
+        zf.writestr(_ts_name("transcript", "txt", timestamp), _crlf(plain_txt))
+        zf.writestr(_ts_name("transcript", "srt", timestamp), _crlf(render_srt(segments, max_line_width=max_line_width)))
+        zf.writestr(_ts_name("transcript", "vtt", timestamp), _crlf(render_vtt(segments, max_line_width=max_line_width)))
+        zf.writestr(_ts_name("transcript", "tsv", timestamp), _crlf(render_tsv(segments)))
 
         # 校对后全文（与原文不同才额外写出）
         if refined_text and refined_text != full_text:
-            zf.writestr("transcript_refined.txt", _crlf(refined_text))
+            zf.writestr(_ts_name("transcript_refined", "txt", timestamp), _crlf(refined_text))
 
         # 纪要 Markdown（复用 artifact_service 统一渲染）
         if summary:
             md = _render_summary_markdown(summary)
             if md.strip():
-                zf.writestr("summary.md", md.encode("utf-8"))
+                zf.writestr(_ts_name("summary", "md", timestamp), md.encode("utf-8"))
 
         # 脑图 JSON
         if mindmap:
-            zf.writestr("mindmap.json", _crlf(_json_mod.dumps(mindmap, ensure_ascii=False, indent=2) + "\n"))
+            zf.writestr(_ts_name("mindmap", "json", timestamp), _crlf(_json_mod.dumps(mindmap, ensure_ascii=False, indent=2) + "\n"))
     return mem.getvalue()

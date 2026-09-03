@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import copy
 import json
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +17,22 @@ import renderers
 
 
 _TRANSCRIPT_FORMATS = ("json", "txt", "srt", "vtt", "tsv")
+
+
+def _make_timestamp() -> str:
+    """生成本次产物统一的时间戳。可通过模块级 _TEST_TS 覆盖（供测试用）。"""
+    ts = globals().get("_TEST_TS")
+    if ts:
+        return ts
+    return datetime.now().strftime("%Y%m%d_%H%M%S")
+
+
+def _ts_name(stem: str, suffix: str, timestamp: str | None) -> str:
+    """生成带时间戳的文件名，如 transcript_20260903_180245.json。"""
+    ext = suffix if suffix.startswith(".") else f".{suffix}"
+    if timestamp:
+        return f"{stem}_{timestamp}{ext}"
+    return f"{stem}{ext}"
 
 
 def _crlf_bytes(text: str) -> bytes:
@@ -120,6 +137,7 @@ def write_workflow_artifacts(
     formats: list[str],
     include_raw_candidates: bool,
     include_config_snapshot: bool,
+    timestamp: str | None = None,
 ) -> list[dict[str, Any]]:
     """写出所选转录格式及审计文件，返回可下载产物清单。"""
     root = Path(output_dir).resolve()
@@ -159,13 +177,13 @@ def write_workflow_artifacts(
         "tsv": lambda: renderers.render_tsv(segments),
     }
     for fmt in selected:
-        path = root / f"transcript.{fmt}"
+        path = root / _ts_name("transcript", fmt, timestamp)
         _write_text(path, render_map[fmt]())
         artifacts.append(_artifact(path, fmt))
 
     # 校对后全文（如果与原文不同则单独导出）
     if refined_text and refined_text != full_text:
-        refined_path = root / "transcript_refined.txt"
+        refined_path = root / _ts_name("transcript_refined", "txt", timestamp)
         _write_text(refined_path, refined_text)
         artifacts.append(_artifact(refined_path, "txt"))
 
@@ -173,22 +191,22 @@ def write_workflow_artifacts(
     if summary:
         summary_md = _render_summary_markdown(summary)
         if summary_md.strip():
-            sum_path = root / "summary.md"
+            sum_path = root / _ts_name("summary", "md", timestamp)
             _write_text(sum_path, summary_md)
             artifacts.append(_artifact(sum_path, "md"))
 
     # 脑图 JSON
     if mindmap:
-        mm_path = root / "mindmap.json"
+        mm_path = root / _ts_name("mindmap", "json", timestamp)
         _write_text(mm_path, json.dumps(mindmap, ensure_ascii=False, indent=2) + "\n")
         artifacts.append(_artifact(mm_path, "json"))
 
     if include_config_snapshot:
-        config_path = root / "workflow-config.json"
+        config_path = root / _ts_name("workflow-config", "json", timestamp)
         _write_text(config_path, json.dumps(config, ensure_ascii=False, indent=2) + "\n")
         artifacts.append(_artifact(config_path, "json"))
 
-    events_path = root / "events.jsonl"
+    events_path = root / _ts_name("events", "jsonl", timestamp)
     event_text = "".join(json.dumps(item, ensure_ascii=False) + "\n" for item in events)
     _write_text(events_path, event_text)
     artifacts.append(_artifact(events_path, "jsonl"))
@@ -209,13 +227,13 @@ def refresh_events_artifact(snapshot: dict[str, Any]) -> None:
     """任务进入终态后重写事件产物，确保包含导出成功和任务完成事件。"""
     artifacts = (snapshot.get("result") or {}).get("artifacts") or []
     artifact = next(
-        (item for item in artifacts if item.get("name") == "events.jsonl"),
+        (item for item in artifacts if str(item.get("name") or "").endswith(".jsonl")),
         None,
     )
     if artifact is None:
         return
     path = Path(str(artifact.get("path") or "")).resolve()
-    if path.name != "events.jsonl" or not path.parent.is_dir():
+    if path.suffix != ".jsonl" or not path.parent.is_dir():
         return
     event_text = "".join(
         json.dumps(item, ensure_ascii=False) + "\n"

@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 import alignment_service
+import artifact_service
 import reconciliation_service
 from workflow_service import ModelRunConfig, WorkflowConfig, WorkflowRunContext, parse_workflow_config
 
@@ -533,6 +534,7 @@ def run_workflow(context: WorkflowRunContext, runtime: WorkflowRuntime) -> dict[
         formats=config.export.formats,
         include_raw_candidates=config.export.include_raw_candidates,
         include_config_snapshot=config.export.include_config_snapshot,
+        timestamp=artifact_service._make_timestamp(),
     )
     _emit_stage(context, stage="export", progress=0.99, message="导出产物已生成", level="success")
     return result

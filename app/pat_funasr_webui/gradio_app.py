@@ -34,6 +34,7 @@ import importlib.util
 
 import numpy as np
 import requests
+import artifact_service as _artifact_service
 
 CURRENT_DIR = Path(__file__).resolve().parent
 if str(CURRENT_DIR) not in sys.path:
@@ -506,7 +507,7 @@ def read_preview_text_from_state(preview_format: str, preview_state_json: str) -
 
 
 def build_runtime_logs_archive() -> str | None:
-    archive_path = Path(tempfile.gettempdir()) / f"pat-funasr-logs-{uuid.uuid4().hex}.zip"
+    archive_path = Path(tempfile.gettempdir()) / f"pat-funasr-logs-{uuid.uuid4().hex}-logs_{_artifact_service._make_timestamp()}.zip"
     candidates = []
     for file_name in RUNTIME_LOG_FILENAMES:
         log_path = PROJECT_ROOT / file_name
@@ -599,7 +600,8 @@ def build_workflow_downloads(
             if suffix in outputs:
                 outputs[suffix] = str(path)
     if artifact_paths:
-        archive_path = download_root / "workflow-artifacts.zip"
+        _ts = _artifact_service._make_timestamp()
+        archive_path = download_root / f"workflow-artifacts_{_ts}.zip"
         with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
             for path in artifact_paths:
                 archive.write(path, arcname=path.name)
@@ -2096,10 +2098,12 @@ def build_diarization_export_files(payload: dict) -> dict[str, str]:
             if key not in {"text", "segments"}
         },
     )
+    ts = _artifact_service._make_timestamp()
     archive_bytes = diarization_renderers.render_all_zip(
         full_text=full_text,
         segments=segments,
         json_payload=verbose_payload,
+        timestamp=ts,
     )
     exports: dict[str, str] = {}
     text_outputs = {
@@ -2118,7 +2122,7 @@ def build_diarization_export_files(payload: dict) -> dict[str, str]:
         exports[response_format] = str(output_path)
     archive_path = (
         Path(tempfile.gettempdir())
-        / f"pat-funasr-diarization-{uuid.uuid4().hex}-{output_filename_for_format('all')}"
+        / f"pat-funasr-diarization-{uuid.uuid4().hex}-diarization_{ts}.zip"
     )
     archive_path.write_bytes(archive_bytes)
     exports["all"] = str(archive_path)
@@ -2311,8 +2315,7 @@ def safe_export_translation_file(
 
         # 2. 针对文本框输入翻译，将最新的翻译结果渲染为临时 txt 文件返回
         if translated_text and translated_text.strip():
-            from datetime import datetime
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            timestamp = _artifact_service._make_timestamp()
             src_short = source_lang.split("_")[0] if "_" in source_lang else source_lang
             tgt_short = target_lang.split("_")[0] if "_" in target_lang else target_lang
 
@@ -2501,7 +2504,7 @@ def build_batch_archive(results: list[dict[str, str]]) -> str | None:
     if not results:
         return None
 
-    archive_path = Path(tempfile.gettempdir()) / f"pat-funasr-batch-{uuid.uuid4().hex}.zip"
+    archive_path = Path(tempfile.gettempdir()) / f"pat-funasr-batch-{uuid.uuid4().hex}-batch_{_artifact_service._make_timestamp()}.zip"
     with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         for index, item in enumerate(results, start=1):
             file_name = item.get("file_name", f"item-{index}")
@@ -2780,10 +2783,12 @@ def build_transcription_export_files(payload: dict) -> dict[str, str]:
         segments = []
     full_text = str(payload.get("text", "") or "")
     json_text = json.dumps(payload, ensure_ascii=False, indent=2)
+    ts = _artifact_service._make_timestamp()
     archive_bytes = diarization_renderers.render_all_zip(
         full_text=full_text,
         segments=segments,
         json_payload=payload,
+        timestamp=ts,
     )
     exports: dict[str, str] = {}
     text_outputs = {
@@ -2802,7 +2807,7 @@ def build_transcription_export_files(payload: dict) -> dict[str, str]:
         exports[response_format] = str(output_path)
     archive_path = (
         Path(tempfile.gettempdir())
-        / f"pat-funasr-transcription-{uuid.uuid4().hex}-{output_filename_for_format('all')}"
+        / f"pat-funasr-transcription-{uuid.uuid4().hex}-transcription_{ts}.zip"
     )
     archive_path.write_bytes(archive_bytes)
     exports["all"] = str(archive_path)
@@ -2833,6 +2838,7 @@ def build_fine_export_files(payload: dict) -> dict[str, str]:
     # TXT：使用 export_result(txt) 组合转写+纪要+思维导图
     txt_export = export_result(payload, format="txt")
 
+    ts = _artifact_service._make_timestamp()
     archive_bytes = diarization_renderers.render_fine_all_zip(
         full_text=full_text,
         refined_text=refined_text,
@@ -2842,6 +2848,7 @@ def build_fine_export_files(payload: dict) -> dict[str, str]:
         mindmap=mindmap,
         scene_name=scene_name,
         elapsed=elapsed,
+        timestamp=ts,
     )
     exports: dict[str, str] = {}
     text_outputs = {
@@ -2860,7 +2867,7 @@ def build_fine_export_files(payload: dict) -> dict[str, str]:
         exports[response_format] = str(output_path)
     archive_path = (
         Path(tempfile.gettempdir())
-        / f"pat-funasr-fine-{uuid.uuid4().hex}-{output_filename_for_format('all')}"
+        / f"pat-funasr-fine-{uuid.uuid4().hex}-fine_{ts}.zip"
     )
     archive_path.write_bytes(archive_bytes)
     exports["all"] = str(archive_path)

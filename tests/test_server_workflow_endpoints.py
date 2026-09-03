@@ -1,4 +1,4 @@
-﻿"""
+"""
 程序说明：
 工作流校验、提交、状态、事件和取消端点测试。
 
@@ -24,6 +24,14 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parents[1]
 _OPENAI_API_DIR = _ROOT / "app" / "openai_api"
 _SERVER_PATH = _OPENAI_API_DIR / "server.py"
+
+# 固定 artifact_service._make_timestamp 输出，确保产物名可预测
+_APP_DIR = _ROOT / "app"
+sys.path.insert(0, str(_APP_DIR))
+sys.path.insert(0, str(_OPENAI_API_DIR))
+import artifact_service as _artifact_service  # noqa: E402
+_artifact_service._TEST_TS = "20260903_180245"
+_TS = _artifact_service._TEST_TS
 
 
 def _load_server_module():
@@ -185,11 +193,11 @@ class TestServerWorkflowEndpoints(unittest.TestCase):
             )
             artifact = next(
                 item for item in private_snapshot["result"]["artifacts"]
-                if item["name"] == "transcript.json"
+                if item["name"] == f"transcript_{_TS}.json"
             )
             artifact_root = Path(artifact["path"]).parent.parent
             download = self.client.get(
-                f"/v1/funasr/workflows/{job_id}/artifacts/transcript.json"
+                f"/v1/funasr/workflows/{job_id}/artifacts/transcript_{_TS}.json"
             )
             self.assertEqual(download.status_code, 200)
             self.assertIn("测试完成", download.content.decode("utf-8-sig"))

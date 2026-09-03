@@ -426,8 +426,8 @@ def translate_file(
         )
             
     # 写入临时文件，文件名包含源语言、目标语言和时间戳
-    from datetime import datetime
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    import artifact_service as _artifact_service  # noqa: E402
+    timestamp = _artifact_service._make_timestamp()
     # 语言代码取下划线前的简短部分（如 zho_Hans -> zho_Hans, eng_Latn -> eng_Latn）
     src_short = source_lang.split("_")[0] if "_" in source_lang else source_lang
     tgt_short = target_lang.split("_")[0] if "_" in target_lang else target_lang

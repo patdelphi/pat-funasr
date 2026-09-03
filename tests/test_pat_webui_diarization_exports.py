@@ -14,10 +14,18 @@ import io
 import json
 import numpy as np
 import os
+import sys
 import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+
+# 固定 artifact_service._make_timestamp 输出，确保产物名可预测
+_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(_ROOT / "app"))
+sys.path.insert(0, str(_ROOT / "app" / "openai_api"))
+import artifact_service as _artifact_service  # noqa: E402
+_artifact_service._TEST_TS = "20260903_180245"
 
 if hasattr(asyncio, "WindowsSelectorEventLoopPolicy"):
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
@@ -266,9 +274,9 @@ class TestPatWebUiDiarizationExports(unittest.TestCase):
         with zipfile.ZipFile(io.BytesIO(archive_bytes)) as zf:
             self.assertEqual(
                 set(zf.namelist()),
-                {"transcript.json", "transcript.srt", "transcript.tsv", "transcript.txt", "transcript.vtt"},
+                {f"transcript_{_artifact_service._TEST_TS}.json", f"transcript_{_artifact_service._TEST_TS}.srt", f"transcript_{_artifact_service._TEST_TS}.tsv", f"transcript_{_artifact_service._TEST_TS}.txt", f"transcript_{_artifact_service._TEST_TS}.vtt"},
             )
-            self.assertIn("[spk=0] 你好", zf.read("transcript.txt").decode("utf-8-sig"))
+            self.assertIn("[spk=0] 你好", zf.read(f"transcript_{_artifact_service._TEST_TS}.txt").decode("utf-8-sig"))
 
     def test_build_transcription_export_files(self):
         payload = {

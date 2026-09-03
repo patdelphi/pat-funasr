@@ -37,6 +37,7 @@ except Exception:
     pass
 
 import argparse
+from datetime import datetime
 from functools import partial
 import tempfile
 import time
@@ -1928,13 +1929,15 @@ async def transcribe(
                 resp_content = renderers.render_vtt(segments, max_line_width=max_line_width)
                 return Response(content=resp_content, media_type="text/vtt; charset=utf-8")
             if response_format == "all":
+                _ts = artifact_service._make_timestamp()
                 zbytes = renderers.render_all_zip(
                     full_text=text,
                     segments=segments,
                     json_payload=verbose_payload,
                     max_line_width=max_line_width,
+                    timestamp=_ts,
                 )
-                headers = {"Content-Disposition": "attachment; filename=\"output.zip\""}
+                headers = {"Content-Disposition": f'attachment; filename="transcript_{_ts}.zip"'}
                 return Response(content=zbytes, media_type="application/zip", headers=headers)
 
             return JSONResponse({"text": text})
