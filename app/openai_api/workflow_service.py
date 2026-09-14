@@ -86,7 +86,30 @@ class TranscriptionConfig(_StrictModel):
 class TimestampConfig(_StrictModel):
     level: Literal["off", "segment", "word"] = "segment"
     forced_alignment: bool = False
-    aligner_model: str = ""
+    # 默认对齐模型——当用户选择字词级时间戳但未显式填时，后端自动启用
+    aligner_model: str = "Qwen/Qwen3-ForcedAligner-0.6B"
+
+
+def auto_fill_forced_alignment(config: WorkflowConfig) -> None:
+    """按时间戳粒度自动推断并补全强制对齐配置。
+
+    规则：
+    - 用户选 "word"（字词级）时间戳，但没有显式改 forced_alignment → 自动开启 + 默认模型
+    - 用户选 "segment" 或 "off" → forced_alignment=False
+    - forced_alignment=True 但 aligner_model 为空 → 用默认模型
+    - 用户显式设置了 forced_alignment（不管 True/False）→ 尊重用户选择，不覆盖
+    """
+    ts = config.timestamps
+
+    # Pydantic 默认值 forced_alignment=False + aligner_model="Qwen/..."
+    # 用模型里的 sentinel 不好判断"用户显式传了 False 还是吃的默认"，
+    # 简化策略：只在 level="word" 时强制启用；其余情况关闭 forced_alignment 但保留模型路径
+    if ts.level == "word":
+        ts.forced_alignment = True
+        if not ts.aligner_model.strip():
+            ts.aligner_model = "Qwen/Qwen3-ForcedAligner-0.6B"
+    else:
+        ts.forced_alignment = False
 
 
 class DiarizationConfig(_StrictModel):

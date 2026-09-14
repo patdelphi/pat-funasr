@@ -1,4 +1,4 @@
-﻿"""
+"""
 程序说明：
 Pat-FunASR 统一模型目录。
 
@@ -54,7 +54,8 @@ MODEL_CONFIGS = {
         "hub": "ms",
         "trust_remote_code": True,
         "dtype": "fp16",
-        "forced_aligner": "Qwen/Qwen3-ForcedAligner-0.6B",
+        # forced_aligner 不默认填——仅当用户显式启用字级时间戳时才通过
+        # aligner_model 参数注入，避免不必要的模型下载依赖
         "vad_model": "fsmn-vad",
         "vad_kwargs": {"max_single_segment_time": 30000},
     },
@@ -63,7 +64,6 @@ MODEL_CONFIGS = {
         "hub": "ms",
         "trust_remote_code": True,
         "dtype": "fp16",
-        "forced_aligner": "Qwen/Qwen3-ForcedAligner-0.6B",
         "vad_model": "fsmn-vad",
         "vad_kwargs": {"max_single_segment_time": 30000},
     },
@@ -234,17 +234,45 @@ def _has_model_payload(path: Path) -> bool:
     return has_config and has_payload
 
 
+def _iter_hf_snapshot_dirs(cache_root: Path, model_id: str) -> Iterable[Path]:
+    """从 HuggingFace Hub 标准缓存布局中枚举快照目录。
+
+    HF Hub 布局: <cache>/models--<org>--<name>/snapshots/<hash>/config.json
+    """
+    # HF model id: "Org/Name"  →  "models--Org--Name"
+    hf_folder_name = "models--" + model_id.replace("/", "--")
+    model_dir = cache_root / hf_folder_name
+    if not model_dir.is_dir():
+        return
+    snapshots_dir = model_dir / "snapshots"
+    if not snapshots_dir.is_dir():
+        return
+    # 最新的快照（按 mtime 倒序）
+    snapshots = sorted(snapshots_dir.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True)
+    for snapshot in snapshots:
+        if snapshot.is_dir():
+            yield snapshot
+
+
 def resolve_local_model_path(
     model_id: str,
     cache_roots: Iterable[str | Path],
 ) -> Path | None:
-    """从已存在的 ModelScope 缓存解析模型目录，不触发联网或下载。"""
+    """从本地缓存解析模型目录，不触发联网或下载。
+
+    同时兼容 ModelScope 布局（``Org/Name/``、``Org___Name/``）
+    与 HuggingFace Hub 布局（``models--Org--Name/snapshots/<hash>/``）。
+    """
     resolved_id = MODELSCOPE_MODEL_ALIASES.get(model_id, model_id)
     identifiers = [resolved_id]
     if resolved_id != model_id:
         identifiers.append(model_id)
     for root_value in cache_roots:
         root = Path(root_value).expanduser()
+        if not root.is_dir():
+            continue
+
+        # 1) ModelScope 布局：root/Org/Name/  或  root/Org___Name/
         for base in (root, root / "models"):
             for identifier in identifiers:
                 relative = Path(*identifier.replace("___", ".").split("/"))
@@ -254,6 +282,12 @@ def resolve_local_model_path(
                 for candidate in candidates:
                     if _has_model_payload(candidate):
                         return candidate.resolve()
+
+        # 2) HuggingFace Hub 布局：root/models--Org--Name/snapshots/<hash>/
+        for identifier in identifiers:
+            for snapshot in _iter_hf_snapshot_dirs(root, identifier):
+                if _has_model_payload(snapshot):
+                    return snapshot.resolve()
     return None
 
 

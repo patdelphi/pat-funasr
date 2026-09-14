@@ -15,7 +15,7 @@ from typing import Any, Callable
 import alignment_service
 import artifact_service
 import reconciliation_service
-from workflow_service import ModelRunConfig, WorkflowConfig, WorkflowRunContext, parse_workflow_config
+from workflow_service import ModelRunConfig, WorkflowConfig, WorkflowRunContext, auto_fill_forced_alignment, parse_workflow_config
 
 
 TranscribeFn = Callable[[str, ModelRunConfig, WorkflowConfig, Callable[[int, int, str], None]], dict[str, Any]]
@@ -408,6 +408,8 @@ def _run_llm_stages(
 def run_workflow(context: WorkflowRunContext, runtime: WorkflowRuntime) -> dict[str, Any]:
     """执行一个工作流任务并返回统一结果。"""
     config = parse_workflow_config(context.config)
+    # 自动推断强制对齐：字词级时间戳 → 自动启用 forced_alignment + 默认模型
+    auto_fill_forced_alignment(config)
     source_path = context.source_path
     output_dir = str(Path(source_path).resolve().parent / "artifacts")
     context.raise_if_cancelled()

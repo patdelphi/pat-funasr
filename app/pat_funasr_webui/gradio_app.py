@@ -34,7 +34,6 @@ import importlib.util
 
 import numpy as np
 import requests
-import artifact_service as _artifact_service
 
 CURRENT_DIR = Path(__file__).resolve().parent
 if str(CURRENT_DIR) not in sys.path:
@@ -43,6 +42,9 @@ OPENAI_API_DIR = CURRENT_DIR.parent / "openai_api"
 if str(OPENAI_API_DIR) not in sys.path:
     sys.path.insert(0, str(OPENAI_API_DIR))
 PROJECT_ROOT = CURRENT_DIR.parent.parent
+
+# sys.path 设好后再导入跨目录模块
+import artifact_service as _artifact_service
 
 from app_utils import (
     CAPABILITY_FILTER_CHOICES,

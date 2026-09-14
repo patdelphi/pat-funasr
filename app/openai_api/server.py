@@ -404,7 +404,13 @@ def _model_cache_roots() -> list[Path]:
     roots = [
         _PROJECT_ROOT / "workspace" / "models",
         Path.home() / ".cache" / "modelscope" / "hub" / "models",
+        # HuggingFace Hub 默认缓存目录（支持 models--Org--Name/snapshots/<hash>/ 布局）
+        Path.home() / ".cache" / "huggingface" / "hub",
     ]
+    # 环境变量可覆写 HF 缓存路径
+    configured_hf = os.environ.get("HUGGINGFACE_HUB_CACHE", "").strip()
+    if configured_hf:
+        roots.insert(0, Path(configured_hf))
     configured_cache = os.environ.get("MODELSCOPE_CACHE", "").strip()
     if configured_cache:
         roots.insert(0, Path(configured_cache))
@@ -2170,17 +2176,17 @@ async def recognize_diarization(
 
 
 def _parse_workflow_payload(raw: str | dict) -> workflow_service.WorkflowConfig:
-    """解析 HTTP 请求中的 workflow JSON。"""
+    """解析 HTTP 请求中的 workflow JSON，并自动推断强制对齐配置。"""
     try:
         payload = json.loads(raw) if isinstance(raw, str) else raw
     except json.JSONDecodeError as exc:
         raise HTTPException(status_code=400, detail=f"workflow JSON 解析失败：{exc.msg}") from exc
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="workflow JSON 必须是对象")
-    try:
-        return workflow_service.parse_workflow_config(payload)
-    except workflow_service.WorkflowConfigError as exc:
-        raise HTTPException(status_code=400, detail=f"workflow JSON 不符合 schema：{exc}") from exc
+    config = workflow_service.parse_workflow_config(payload)
+    # 自动补全强制对齐：字词级时间戳 → forced_alignment=True + 默认模型
+    workflow_service.auto_fill_forced_alignment(config)
+    return config
 
 
 @app.post("/v1/funasr/workflows/validate")
