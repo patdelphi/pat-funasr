@@ -363,8 +363,42 @@ APP_CSS = """
     z-index: 1 !important;
 }
 
-.ft-audio-player .audio-container {
-    padding-bottom: 20px !important;
+/* ===== 音频播放器：WaveSurfer 滚动条不遮挡时间码 =====
+   根因：waveform-container 和 timestamps 是平级兄弟。
+         waveform-container 内 WaveSurfer 产生横向滚动条，
+         滚动条占据容器底部空间，挤出到 timestamps 区域。
+   修法：给 waveform-container 底部留足 padding 容纳滚动条。 */
+
+/* 给 waveform-container 底部留 24px 容纳滚动条（Windows 默认滚动条高度 ~18px + 余量） */
+.ft-audio-player .waveform-container,
+.ft-audio-player [class*="waveform-container"],
+.ft-audio-player [class*="waveform_container"] {
+    padding-bottom: 28px !important;
+}
+
+/* timestamps 向下挪一点，避免紧贴滚动条 */
+.ft-audio-player .timestamps,
+.ft-audio-player [class*="timestamps"] {
+    margin-top: 4px !important;
+}
+
+/* 会议纪要 / 思维导图 / 转写文本：固定高度 + 滚动条 */
+#ft-summary .prose,
+#ft-summary .markdown,
+[class*="ft_summary"] .prose,
+[class*="ft_summary"] .markdown {
+    max-height: 500px !important;
+    overflow-y: auto !important;
+    padding-right: 12px !important;
+}
+#ft-mindmap,
+[class*="ft_mindmap"] {
+    max-height: 600px !important;
+    overflow-y: auto !important;
+}
+#ft-transcript textarea,
+[class*="ft_transcript"] textarea {
+    max-height: 500px !important;
 }
 """
 
@@ -596,11 +630,11 @@ def build_workflow_downloads(
                 if chunk:
                     output_stream.write(chunk)
         artifact_paths.append(path)
-        name = path.name.lower()
-        if name.startswith("transcript."):
-            suffix = path.suffix.lower().lstrip(".")
-            if suffix in outputs:
-                outputs[suffix] = str(path)
+        # 按名字 + 后缀分类（后端产物名如 transcript_20260915_xxx.json）
+        _name_lower = path.name.lower()
+        _suffix = path.suffix.lower().lstrip(".")
+        if "transcript" in _name_lower and _suffix in outputs:
+            outputs[_suffix] = str(path)
     if artifact_paths:
         _ts = _artifact_service._make_timestamp()
         archive_path = download_root / f"workflow-artifacts_{_ts}.zip"
@@ -1795,7 +1829,7 @@ def safe_transcribe(
         return "", f"Transcription failed: {error}", None
 
 
-def safe_transcribe_with_exports(
+def _safe_transcribe_core(
     base_url: str,
     audio_path: str | None,
     model: str,
@@ -1819,7 +1853,7 @@ def safe_transcribe_with_exports(
     log_level: str | None,
     disable_pbar: str | bool | None,
 ) -> tuple[str, str, str | None, str | None, str | None, str | None, str | None, str | None]:
-    """安全调用离线识别，并返回预览文本、原始 JSON 与全量下载文件。"""
+    """实际执行离线识别的核心函数（被 safe_transcribe_with_exports generator 包一层）。"""
     # #region debug-point A:offline-entry
     trace_id = uuid.uuid4().hex
     t0 = time.monotonic()
@@ -1928,6 +1962,105 @@ def safe_transcribe_with_exports(
             pass
         # #endregion
         return "", f"Transcription failed: {error}", None, None, None, None, None, None
+
+
+def safe_transcribe_with_exports(
+    base_url: str,
+    audio_path: str | None,
+    model: str,
+    preview_format: str,
+    timeout: float,
+    language: str | None,
+    hotword: str | None,
+    vad_preset: str | None,
+    merge_vad: str | bool | None,
+    use_itn: str | bool | None,
+    merge_length_s: int | None,
+    max_line_width: int | None,
+    batch_size_s: int | None,
+    batch_size_threshold_s: int | None,
+    vad_max_single_segment_time: int | None,
+    punc_mode: str | None,
+    device: str | None,
+    hub: str | None,
+    disable_update: str | bool | None,
+    ncpu: int | None,
+    log_level: str | None,
+    disable_pbar: str | bool | None,
+):
+    """Generator 版快速转录：yield (result_tuple, status_text) 两阶段。
+
+    第一次 yield：API 调用前，status="⏳ 准备识别..."；
+    第二次 yield：API 返回后（或异常时），status=结果/错误简述。
+    """
+    import os as _os
+    import time as _time
+    fname = _os.path.basename(audio_path) if audio_path else "(未选择)"
+
+    # event_id 计数器
+    _evt_id = [0]
+
+    def _make_event(stage: str, message: str, level: str = "info",
+                    progress: float | None = None, model_name: str | None = None) -> dict:
+        _evt_id[0] += 1
+        return {
+            "event_id": _evt_id[0],
+            "progress": progress,
+            "level": level,
+            "stage": stage,
+            "model": model_name,
+            "message": message,
+            "timestamp": _time.strftime("%H:%M:%S"),
+        }
+
+    # 第 1 次 yield：准备阶段
+    events = [_make_event("准备", f"文件：{fname} | 模型：{model}", "info", 0.0, model)]
+    yield ("⏳ 准备识别...", render_workflow_event_panel(events),
+           "", "{}", None, None, None, None, None, None)
+
+    try:
+        t0 = _time.time()
+        # 第 2 次 yield：正在识别
+        events.append(_make_event("识别中", "调用 API /v1/audio/transcriptions ...", "info", 0.3, model))
+        yield (f"⏳ 正在识别：{fname}\n模型：{model} | 格式：{preview_format}",
+               render_workflow_event_panel(events),
+               "", "{}", None, None, None, None, None, None)
+
+        result = _safe_transcribe_core(
+            base_url=base_url,
+            audio_path=audio_path,
+            model=model,
+            preview_format=preview_format,
+            timeout=timeout,
+            language=language,
+            hotword=hotword,
+            vad_preset=vad_preset,
+            merge_vad=merge_vad,
+            use_itn=use_itn,
+            merge_length_s=merge_length_s,
+            max_line_width=max_line_width,
+            batch_size_s=batch_size_s,
+            batch_size_threshold_s=batch_size_threshold_s,
+            vad_max_single_segment_time=vad_max_single_segment_time,
+            punc_mode=punc_mode,
+            device=device,
+            hub=hub,
+            disable_update=disable_update,
+            ncpu=ncpu,
+            log_level=log_level,
+            disable_pbar=disable_pbar,
+        )
+        elapsed = _time.time() - t0
+        preview_text = result[0] or ""
+        n_chars = len(preview_text)
+        status = f"✅ 识别完成：{fname}\n字符数：{n_chars} | 耗时：{elapsed:.1f}s\n✓ 下载文件已就绪"
+        # 第 3 次 yield：完成，event panel 显示完整时间线
+        events.append(_make_event("完成", f"{n_chars} 字 | 耗时 {elapsed:.1f}s | 下载已生成", "success", 1.0, model))
+        yield (status, render_workflow_event_panel(events)) + result
+    except Exception as e:
+        status = f"❌ 识别失败：{fname}\n错误：{e!r}\n请检查后端 API 是否在线（http://localhost:8000）"
+        events.append(_make_event("失败", str(e)[:120], "error", 0.5, model))
+        yield (status, render_workflow_event_panel(events), "", "{}", None, None, None, None, None, None)
 
 
 def recognize_emotion(
@@ -3189,24 +3322,29 @@ def build_app(default_base_url: str, default_timeout: float):
                         with gr.Row(equal_height=False):
                             with gr.Column(scale=1, min_width=420):
                                 gr.Markdown("### 单文件处理", elem_classes=["pat-compact-markdown"])
-                                media_file = gr.File(
-                                    label="音频/视频文件",
+                                media_file = gr.Audio(
+                                    label="上传音频文件",
                                     type="filepath",
-                                    file_types=list(MEDIA_FILE_SUFFIXES),
-                                    height=208,
+                                    sources=["upload"],
+                                    elem_classes=["ft-audio-player"],
                                 )
                                 transcribe_button = gr.Button("开始识别", variant="primary")
                                 media_status = gr.Markdown(
-                                    "支持音频与视频文件。视频和音频都会显示可播放预览。",
+                                    "等待上传音频文件...",
                                     elem_classes=["pat-compact-markdown"],
                                 )
-                                media_preview = gr.Video(
-                                    label="视频预览",
-                                    visible=False,
-                                    height=260,
-                                    elem_classes=["pat-media-preview"],
+                                transcript_status = gr.Textbox(
+                                    label="实时状态",
+                                    lines=3,
+                                    max_lines=8,
+                                    interactive=False,
+                                    elem_classes=["pat-compact-textbox"],
                                 )
-                                media_audio_preview = gr.Audio(label="音频预览", visible=False)
+                                # 和精细转录 ft_event_log 同款的事件滚动窗
+                                quick_event_log = gr.HTML(
+                                    value=render_workflow_event_panel([]),
+                                    elem_classes=["pat-compact-event-log"],
+                                )
                                 transcript_preview_format = gr.Radio(
                                     label="预览格式",
                                     choices=PREVIEW_FORMAT_CHOICES,
@@ -3299,6 +3437,7 @@ def build_app(default_base_url: str, default_timeout: float):
                                 ft_audio = gr.Audio(
                                     label="上传音频文件",
                                     type="filepath",
+                                    sources=["upload"],
                                     elem_classes=["ft-audio-player"],
                                 )
 
@@ -3507,7 +3646,7 @@ def build_app(default_base_url: str, default_timeout: float):
                                     ft_export_formats = gr.CheckboxGroup(
                                         label="导出格式",
                                         choices=["json", "txt", "srt", "vtt", "tsv", "all"],
-                                        value=["json", "txt", "srt"],
+                                        value=["json", "txt", "srt", "vtt", "tsv"],
                                     )
                                     with gr.Row():
                                         ft_include_raw_candidates = gr.Checkbox(label="导出全部模型候选", value=True)
@@ -3528,10 +3667,8 @@ def build_app(default_base_url: str, default_timeout: float):
                                     value=render_workflow_event_panel([]),
                                 )
 
-                                with gr.Accordion("音字联动", open=True):
-                                    ft_audio_sync = gr.HTML(
-                                        value=get_audio_sync_html(),
-                                    )
+                                # 音字联动已禁用（用 invisible 占位，保持 outputs 数量不变）
+                                ft_audio_sync = gr.Textbox(value="", visible=False)
 
                                 with gr.Accordion("转写文本", open=True):
                                     ft_transcript = gr.Textbox(
@@ -3720,10 +3857,15 @@ def build_app(default_base_url: str, default_timeout: float):
                                         sync_script = f"""
                                         <script>
                                         (function() {{
-                                            if (window.__audioSync) {{
-                                                window.__audioSync.setAudioSrc({audio_url_json});
-                                                window.__audioSync.renderTranscript({segments_json});
-                                            }}
+                                            // 轮询等 window.__audioSync 就绪（iframe srcdoc 加载需要时间）
+                                            var _tries = 0, _timer = setInterval(function() {{
+                                                if (window.__audioSync) {{
+                                                    clearInterval(_timer);
+                                                    window.__audioSync.setAudioSrc({audio_url_json});
+                                                    window.__audioSync.renderTranscript({segments_json});
+                                                }}
+                                                if (++_tries >= 20) clearInterval(_timer);  // 最长 2s
+                                            }}, 100);
                                         }})();
                                         </script>
                                         """
@@ -3824,10 +3966,15 @@ def build_app(default_base_url: str, default_timeout: float):
                                         sync_script = f"""
                                         <script>
                                         (function() {{
-                                            if (window.__audioSync) {{
-                                                window.__audioSync.setAudioSrc({audio_url_json});
-                                                window.__audioSync.renderTranscript({segments_json});
-                                            }}
+                                            // 轮询等 window.__audioSync 就绪（iframe srcdoc 加载需要时间）
+                                            var _tries = 0, _timer = setInterval(function() {{
+                                                if (window.__audioSync) {{
+                                                    clearInterval(_timer);
+                                                    window.__audioSync.setAudioSrc({audio_url_json});
+                                                    window.__audioSync.renderTranscript({segments_json});
+                                                }}
+                                                if (++_tries >= 20) clearInterval(_timer);  // 最长 2s
+                                            }}, 100);
                                         }})();
                                         </script>
                                         """
@@ -4018,10 +4165,15 @@ def build_app(default_base_url: str, default_timeout: float):
                                     audio_path_json = json_for_inline_script(str(audio_path or ""))
                                     sync_script = f"""
                                     <script>(function() {{
-                                      if (window.__audioSync) {{
-                                        window.__audioSync.setAudioSrc({audio_path_json});
-                                        window.__audioSync.renderTranscript({segments_json});
-                                      }}
+                                      // 轮询等 window.__audioSync 就绪（iframe srcdoc 加载需要时间）
+                                      var _tries = 0, _timer = setInterval(function() {{
+                                        if (window.__audioSync) {{
+                                          clearInterval(_timer);
+                                          window.__audioSync.setAudioSrc({audio_path_json});
+                                          window.__audioSync.renderTranscript({segments_json});
+                                        }}
+                                        if (++_tries >= 20) clearInterval(_timer);
+                                      }}, 100);
                                     }})();</script>
                                     """
                                     downloads = build_workflow_downloads(
@@ -4062,6 +4214,22 @@ def build_app(default_base_url: str, default_timeout: float):
                             except Exception as error:
                                 return f"取消任务失败：{error}"
 
+                        # 精细转录：文件上传 → 更新状态（与快速转录页面对齐）
+                        def _on_ft_audio_upload(file_path: str | None):
+                            """精细转录音频上传回调：显示加载状态"""
+                            if not file_path:
+                                return "等待上传音频文件..."
+                            p = Path(file_path)
+                            size_mb = p.stat().st_size / (1024 * 1024) if p.exists() else 0
+                            return f"✅ 已加载：{p.name}（{size_mb:.1f} MB）"
+
+                        ft_audio.change(
+                            fn=_on_ft_audio_upload,
+                            inputs=[ft_audio],
+                            outputs=[ft_status],
+                            show_progress="hidden",
+                        )
+
                         ft_run_btn.click(
                             fn=_on_run_workflow,
                             inputs=[ft_audio, base_url, timeout, ft_scene, ft_hotwords_state, *workflow_value_components],
@@ -4095,11 +4263,17 @@ def build_app(default_base_url: str, default_timeout: float):
 
                     with gr.Tab("说话人时间轴", render_children=False) as diarization_tab:
                         with gr.Row():
-                            diarization_media_file = gr.File(
-                                label="音频/视频文件",
-                                type="filepath",
-                                file_types=list(MEDIA_FILE_SUFFIXES),
-                            )
+                            with gr.Column():
+                                diarization_media_file = gr.Audio(
+                                    label="上传音频文件",
+                                    type="filepath",
+                                    sources=["upload"],
+                                    elem_classes=["ft-audio-player"],
+                                )
+                                diarization_media_status = gr.Markdown(
+                                    "等待上传音频文件...",
+                                    elem_classes=["pat-compact-markdown"],
+                                )
                             with gr.Column():
                                 diarization_model = gr.Dropdown(
                                     label="说话人分离模型",
@@ -4110,15 +4284,6 @@ def build_app(default_base_url: str, default_timeout: float):
                                     value=get_model_source_hint_html(model_status_text),
                                     show_label=False
                                 )
-                        with gr.Row():
-                            diarization_preview = gr.Video(
-                                label="视频预览",
-                                visible=False,
-                                height=260,
-                                elem_classes=["pat-media-preview"],
-                            )
-                            diarization_audio_preview = gr.Audio(label="音频预览", visible=False)
-                            diarization_media_status = gr.Markdown("当前支持 paraformer / fun-asr-nano / sensevoice + cam++ 组合。")
                         with gr.Row():
                             diarization_spk_model = gr.Dropdown(
                                 label="说话人模型(spk_model)",
@@ -4176,25 +4341,14 @@ def build_app(default_base_url: str, default_timeout: float):
                 with gr.Tabs():
                     with gr.Tab("文件流式识别", render_children=False):
                         gr.Markdown("### 文件流式识别", elem_classes=["pat-compact-markdown"])
-                        stream_media_file = gr.File(
-                            label="音频/视频文件",
+                        stream_media_file = gr.Audio(
+                            label="上传音频文件",
                             type="filepath",
-                            file_types=list(MEDIA_FILE_SUFFIXES),
+                                    sources=["upload"],
+                            elem_classes=["ft-audio-player"],
                         )
                         stream_button = gr.Button("开始流式识别", variant="primary")
                         stream_file_stop_button = gr.Button("停止文件识别", variant="secondary")
-                        stream_preview = gr.Video(
-                            label="视频预览",
-                            visible=False,
-                            height=220,
-                            elem_classes=["pat-media-preview"],
-                        )
-                        stream_audio_preview = gr.Audio(
-                            label="音频预览",
-                            sources=["upload"],
-                            interactive=False,
-                            visible=False,
-                        )
                         stream_status = gr.Textbox(label="文件识别状态", interactive=False)
                         stream_transcript = gr.Textbox(label="文件流式输出", lines=8, max_lines=18, buttons=["copy"])
                         stream_download_button = gr.Button("生成结果下载", variant="secondary")
@@ -4413,11 +4567,17 @@ def build_app(default_base_url: str, default_timeout: float):
 
                     with gr.Tab("情感识别", render_children=False) as emotion_tab:
                         with gr.Row():
-                            emotion_media_file = gr.File(
-                                label="音频/视频文件",
-                                type="filepath",
-                                file_types=list(MEDIA_FILE_SUFFIXES),
-                            )
+                            with gr.Column():
+                                emotion_media_file = gr.Audio(
+                                    label="上传音频文件",
+                                    type="filepath",
+                                    sources=["upload"],
+                                    elem_classes=["ft-audio-player"],
+                                )
+                                emotion_media_status = gr.Markdown(
+                                    "等待上传音频文件...",
+                                    elem_classes=["pat-compact-markdown"],
+                                )
                             with gr.Column():
                                 emotion_model = gr.Dropdown(
                                     label="情感识别模型",
@@ -4428,15 +4588,6 @@ def build_app(default_base_url: str, default_timeout: float):
                                     value=get_model_source_hint_html(model_status_text),
                                     show_label=False
                                 )
-                        with gr.Row():
-                            emotion_preview = gr.Video(
-                                label="视频预览",
-                                visible=False,
-                                height=260,
-                                elem_classes=["pat-media-preview"],
-                            )
-                            emotion_audio_preview = gr.Audio(label="音频预览", visible=False)
-                            emotion_media_status = gr.Markdown("当前先支持整体情感识别，后续再补时间片能力。")
                         with gr.Row():
                             emotion_granularity = gr.Dropdown(
                                 label="情感粒度(granularity)",
@@ -4578,19 +4729,22 @@ def build_app(default_base_url: str, default_timeout: float):
                 show_progress="hidden",
             )
         media_file.change(
-            fn=update_media_preview,
-            inputs=[media_file],
-            outputs=[media_preview, media_audio_preview, media_status],
-        )
+             fn=lambda p: f"✅ 已加载：{Path(p).name}（{Path(p).stat().st_size / (1024*1024):.1f} MB）" if p and Path(p).exists() else "等待上传音频文件...",
+             inputs=[media_file],
+             outputs=[media_status],
+             show_progress="hidden",
+         )
         stream_media_file.change(
-            fn=update_media_preview,
+            fn=lambda f: _simple_status(f, '已加载'),
             inputs=[stream_media_file],
-            outputs=[stream_preview, stream_audio_preview],
+            outputs=[stream_status],
+            show_progress='hidden',
         )
         emotion_media_file.change(
-            fn=update_media_preview,
+            fn=lambda f: _simple_status(f, '已加载'),
             inputs=[emotion_media_file],
-            outputs=[emotion_preview, emotion_audio_preview, emotion_media_status],
+            outputs=[emotion_media_status],
+            show_progress='hidden',
         )
         emotion_model.change(
             fn=update_emotion_granularity_options,
@@ -4598,9 +4752,10 @@ def build_app(default_base_url: str, default_timeout: float):
             outputs=[emotion_granularity],
         )
         diarization_media_file.change(
-            fn=update_media_preview,
+            fn=lambda f: _simple_status(f, '已加载'),
             inputs=[diarization_media_file],
-            outputs=[diarization_preview, diarization_audio_preview, diarization_media_status],
+            outputs=[diarization_media_status],
+            show_progress='hidden',
         )
         transcribe_button.click(
             fn=safe_transcribe_with_exports,
@@ -4629,15 +4784,17 @@ def build_app(default_base_url: str, default_timeout: float):
                 disable_pbar,
             ],
             outputs=[
-                transcript,
-                transcript_payload_state,
-                download_json,
-                download_txt,
-                download_srt,
-                download_vtt,
-                download_tsv,
-                download_zip,
-            ],
+                 transcript_status,
+                 quick_event_log,
+                 transcript,
+                 transcript_payload_state,
+                 download_json,
+                 download_txt,
+                 download_srt,
+                 download_vtt,
+                 download_tsv,
+                 download_zip,
+             ],
         )
         batch_button.click(
             fn=batch_transcribe,

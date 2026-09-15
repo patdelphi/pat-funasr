@@ -96,7 +96,7 @@ def generate_summary_streaming(
         # 阶段性聚合（让用户即便中途也能看到东西）
         interim = {}
         if len(summaries) == 1:
-            interim = _parse_json_response(summaries[0])
+            interim = _parse_json_response(summaries[0]) or {"_raw": (summaries[0] or "")[:500], "_parse_error": True}
         elif summaries:
             interim = _aggregate_summaries(summaries)
         yield "chunk_done", {"idx": i + 1, "total": total, "success": ok,
@@ -104,9 +104,20 @@ def generate_summary_streaming(
 
     if len(summaries) == 1:
         final = _parse_json_response(summaries[0])
+        if final is None:
+            # 单 chunk 也解析失败：保留原始文本
+            final = {"_raw": (summaries[0] or "")[:2000], "_parse_error": True}
+            logger.warning("generate_summary_streaming: 单 chunk 摘要 JSON 解析失败")
     else:
         yield "agg_start", {}
-        final = _aggregate_summaries(summaries)
+        # 二次 LLM 聚合：让 LLM 把各 chunk 的摘要综合成一份完整纪要
+        final = _llm_synthesize_summaries(
+            summaries, summary_prompt,
+            base_url=base_url, api_key=api_key, model=model,
+        )
+        if not final:
+            # 兜底：LLM 聚合失败时退化为直接拼接
+            final = _aggregate_summaries(summaries)
     yield "done", final
 
 
@@ -190,16 +201,23 @@ def generate_mindmap_streaming(
     elif len(sub_roots) == 1:
         yield "done", sub_roots[0]
     else:
-        merged_children = []
-        for r in sub_roots:
-            if r.get("children"):
-                merged_children.extend(r["children"])
-            elif r.get("title"):
-                merged_children.append(
-                    {"title": r["title"], "children": r.get("children") or []}
-                )
-        final = {"title": sub_roots[0].get("title") or "思维导图",
-                 "children": merged_children}
+        # 二次 LLM 聚合：让 LLM 把各 chunk 的导图合并成一个
+        final = _llm_synthesize_mindmap(
+            sub_roots,
+            base_url=base_url, api_key=api_key, model=model,
+        )
+        if not final:
+            # 兜底：直拼所有 children
+            merged_children = []
+            for r in sub_roots:
+                if r.get("children"):
+                    merged_children.extend(r["children"])
+                elif r.get("title"):
+                    merged_children.append(
+                        {"title": r["title"], "children": r.get("children") or []}
+                    )
+            final = {"title": sub_roots[0].get("title") or "思维导图",
+                     "children": merged_children}
         yield "done", final
 
 
@@ -274,34 +292,218 @@ def refine_transcript_streaming(
     yield "done", "\n".join(results)
 
 
-def _parse_json_response(text: str) -> dict:
-    """从 LLM 输出中提取 JSON，兼容 markdown 代码块"""
-    text = text.strip()
+def _parse_json_response(text: str) -> dict | None:
+    """从 LLM 输出中提取 JSON，兼容 markdown 代码块。
+
+    Returns:
+        dict: 解析成功的 JSON 对象
+        None: 解析失败（明确区分"失败"和"成功但为空"）
+    """
+    text = (text or "").strip()
+    if not text:
+        return None
     # 去除 markdown 代码块
     if text.startswith("```"):
         lines = text.split("\n")
-        # 去掉首尾 ``` 行
         lines = [l for l in lines if not l.strip().startswith("```")]
-        text = "\n".join(lines)
+        text = "\n".join(lines).strip()
+    if not text:
+        return None
     try:
-        return json.loads(text)
+        obj = json.loads(text)
+        if isinstance(obj, dict):
+            return obj
+        # 如果是 list（LLM 有时直接输出数组），包一层
+        if isinstance(obj, list):
+            return {"items": obj}
+        return None
     except json.JSONDecodeError:
         # 尝试找第一个 { 到最后一个 }
         start = text.find("{")
         end = text.rfind("}")
         if start >= 0 and end > start:
             try:
-                return json.loads(text[start:end + 1])
+                obj = json.loads(text[start:end + 1])
+                if isinstance(obj, dict):
+                    return obj
             except json.JSONDecodeError:
                 pass
-        return {}
+        logger.warning("_parse_json_response 解析失败，原文前 200 字符: %s", text[:200])
+        return None
 
 
 def _aggregate_summaries(summaries: list[str]) -> dict:
-    """聚合多段摘要为统一 JSON"""
+    """聚合多段摘要为统一 JSON（兜底：直接拼接 parts）。
+
+    解析失败的摘要不会被丢弃，而是以 {"_raw": "...原始文本...", "_parse_error": true} 形式保留。
+    这样用户至少能看到 LLM 实际输出了什么，而不是一个空壳 JSON。
+    """
     result = {"aggregated": True, "parts": []}
     for i, s in enumerate(summaries):
         parsed = _parse_json_response(s)
-        if parsed:
+        if parsed is not None:
             result["parts"].append(parsed)
+        else:
+            # 解析失败也保留原始文本，带诊断标记
+            result["parts"].append({
+                "_raw": (s or "").strip()[:500],
+                "_parse_error": True,
+            })
+            logger.warning("_aggregate_summaries: 第 %d 段摘要 JSON 解析失败，已保留原始文本", i + 1)
     return result
+
+
+# 二次聚合 prompt：把多份局部摘要综合成一份完整纪要
+_SYNTHESIZE_PROMPT = """综合以下多份局部会议摘要 JSON 数组，合并成一份完整的会议纪要。
+
+要求：
+1. 相同议题合并为一条 sections，相同行动项/决定去重
+2. sections 按讨论逻辑或重要性排序
+3. overall_summary 覆盖完整会议
+4. action_items / decisions / open_questions 从所有段落抽取合并
+5. participants 格式为 [{{"spk": "spk=N", "role": "角色"}}]，综合各 chunk 推断
+
+严格沿用下方 JSON 结构，仅输出 JSON。
+
+--- 原始摘要 ---
+{summaries_json}
+
+--- 输出 JSON 结构 ---
+{{
+  "meeting_title": "一句话会议主题",
+  "participants": [{{"spk": "spk=N", "role": "角色推断"}}],
+  "overall_summary": "3-5 句总览",
+  "sections": [
+    {{
+      "topic": "议题名称",
+      "summary": "2-5 句提炼后的结论",
+      "key_points": ["要点"],
+      "quotes": [{{"speaker": "spk=N", "timestamp": "MM:SS", "text": "原话"}}],
+      "decisions": ["决定"],
+      "action_items": [{{"task":"任务", "owner":"角色或spk=N", "deadline":"时间"}}],
+      "risks_or_todos": ["风险/待确认"]
+    }}
+  ],
+  "open_questions": ["会后待确认"],
+  "consolidated_next_steps": ["最终行动项汇总（5-15 条）"],
+  "one_sentence_summary": "一句话概括"
+}}"""
+
+
+def _llm_synthesize_summaries(
+    summaries: list[str],
+    original_prompt: str,
+    *,
+    base_url: str,
+    api_key: str,
+    model: str,
+) -> dict:
+    """用 LLM 做二次聚合：把各 chunk 摘要综合成一份完整纪要。失败返回 {}。"""
+    try:
+        # 把各段摘要解析后拼成 JSON 数组
+        parsed_list = []
+        failed_count = 0
+        for s in summaries:
+            parsed = _parse_json_response(s)
+            if parsed is not None:
+                parsed_list.append(parsed)
+            else:
+                failed_count += 1
+        if failed_count:
+            logger.warning(
+                "_llm_synthesize_summaries: %d/%d 段摘要 JSON 解析失败，"
+                "二次聚合将基于成功的 %d 段",
+                failed_count, len(summaries), len(parsed_list),
+            )
+        if not parsed_list:
+            return {}
+
+        summaries_json = json.dumps(parsed_list, ensure_ascii=False, indent=2)
+        # 环形截断：首尾各保留一半，中间省略。避免只砍尾部导致后半段关键内容丢失。
+        _SYNTHESIZE_MAX = 20000
+        if len(summaries_json) > _SYNTHESIZE_MAX:
+            head = summaries_json[:_SYNTHESIZE_MAX // 2]
+            tail = summaries_json[-_SYNTHESIZE_MAX // 2:]
+            summaries_json = head + "\n... (中间 chunk 摘要省略)\n" + tail
+
+        prompt = _SYNTHESIZE_PROMPT.format(summaries_json=summaries_json)
+        result = call_llm(prompt, base_url=base_url, api_key=api_key, model=model)
+        if not result:
+            logger.warning("_llm_synthesize_summaries: call_llm 返回空")
+            return {}
+        parsed = _parse_json_response(result)
+        if parsed is None:
+            logger.warning("_llm_synthesize_summaries: 二次聚合返回的 JSON 解析失败")
+            return {}
+        # 验证结构合法性：至少要有 overall_summary 或 sections
+        if parsed.get("overall_summary") or parsed.get("sections"):
+            parsed["_synthesized"] = True
+            return parsed
+        return {}
+    except Exception as e:
+        logger.warning("二次聚合 LLM 调用失败：%s", e)
+        return {}
+
+
+# mindmap 二次聚合：让 LLM 综合多个 chunk 各自产出的子导图
+_MINDMAP_SYNTHESIZE_PROMPT = """你现在的任务是**综合多个局部思维导图**，合并成一份完整的会议导图。
+
+输入是同一场会议不同段落各自产出的思维导图 JSON 数组。请：
+1. **去重合并**：相同或相近的议题合并为一条顶层 children
+2. **控制规模**：顶层议题（children）不超过 8 个，深度不超过 3 层
+3. **提炼概括**：保留关键要点，去掉细碎末节；节点 title 简洁有力
+
+严格沿用下方的 JSON 结构，仅输出 JSON。
+
+--- 原始子导图 JSON 数组 ---
+{mindmaps_json}
+
+--- 你需要输出的 JSON 结构 ---
+{{
+  "title": "会议主题（一句话）",
+  "children": [
+    {{
+      "title": "议题名称（简洁）",
+      "children": [
+        {{ "title": "关键要点 1" }},
+        {{ "title": "关键要点 2" }}
+      ]
+    }}
+  ]
+}}"""
+
+
+def _llm_synthesize_mindmap(
+    sub_roots: list[dict],
+    *,
+    base_url: str,
+    api_key: str,
+    model: str,
+) -> dict:
+    """用 LLM 做 mindmap 二次聚合。失败返回 {}。"""
+    try:
+        if not sub_roots:
+            return {}
+        mindmaps_json = json.dumps(sub_roots, ensure_ascii=False, indent=2)
+        _MM_MAX = 20000
+        if len(mindmaps_json) > _MM_MAX:
+            head = mindmaps_json[:_MM_MAX // 2]
+            tail = mindmaps_json[-_MM_MAX // 2:]
+            mindmaps_json = head + "\n... (中间 chunk 导图省略)\n" + tail
+
+        prompt = _MINDMAP_SYNTHESIZE_PROMPT.format(mindmaps_json=mindmaps_json)
+        result = call_llm(prompt, base_url=base_url, api_key=api_key, model=model)
+        if not result:
+            logger.warning("_llm_synthesize_mindmap: call_llm 返回空")
+            return {}
+        parsed = _parse_json_response(result)
+        if parsed is None:
+            logger.warning("_llm_synthesize_mindmap: 二次聚合返回的 JSON 解析失败")
+            return {}
+        if parsed.get("title") or parsed.get("children"):
+            parsed["_synthesized"] = True
+            return parsed
+        return {}
+    except Exception as e:
+        logger.warning("mindmap 二次聚合 LLM 调用失败：%s", e)
+        return {}
