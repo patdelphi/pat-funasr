@@ -78,6 +78,63 @@ class _PadTokenIdFilter(logging.Filter):
 # 过滤所有 logger 中的 pad_token_id 警告
 logging.getLogger().addFilter(_PadTokenIdFilter())
 
+
+# ============ Summary / Mindmap Prompt 常量 ============
+# 核心原则：LLM 本身能力足够，prompt 只需要：
+# 1. 明确输入格式（转写带 spk=N 标签）
+# 2. 明确输出 JSON schema
+# 3. 不要瞎编 participants（从 spk=N 推断）
+
+_SUMMARY_INPUT_HINT = """输入格式说明：
+- 开头有"=== 说话人统计 ==="，列出每个 spk=N 的发言比例和首句
+- 转写每行格式：[MM:SS] [spk=N] 文本内容
+- participants 必须从 spk=N 推断角色，**不要瞎编真实人名**"""
+
+_SUMMARY_SCHEMA = """返回 JSON 结构（字段名必须完全匹配）：
+{
+  "meeting_title": "一句话会议主题",
+  "participants": [{"spk": "spk=N", "role": "角色推断，不确定则留空"}],
+  "overall_summary": "3-5 句总览：会议目的、核心结论、最重要的决定",
+  "sections": [
+    {
+      "topic": "议题名称",
+      "summary": "本议题的讨论内容和结论，2-5 句，提炼语气",
+      "key_points": ["关键要点"],
+      "quotes": [{"speaker": "spk=N", "timestamp": "MM:SS", "text": "原话引用"}],
+      "decisions": ["明确达成的决定"],
+      "action_items": [{"task": "具体任务", "owner": "角色或 spk=N", "deadline": "时间"}],
+      "risks_or_todos": ["风险/分歧/待确认点"]
+    }
+  ],
+  "open_questions": ["会后仍需确认的问题"],
+  "consolidated_next_steps": ["按优先级排序的最终行动项汇总（5-15 条）"],
+  "one_sentence_summary": "一句话概括整个会议"
+}"""
+
+_SUMMARY_PROMPT_MEETING = f"""请根据以下会议转录记录，产出会议纪要。
+
+{_SUMMARY_INPUT_HINT}
+
+{_SUMMARY_SCHEMA}
+
+仅输出 JSON，不要任何额外解释。"""
+
+_SUMMARY_PROMPT_DEFAULT = f"""请根据以下转录记录，产出摘要。
+
+{_SUMMARY_INPUT_HINT}
+
+{_SUMMARY_SCHEMA}
+
+仅输出 JSON。"""
+
+_SUMMARY_PROMPT_STRICT = f"""请根据以下转录记录，**仅依据明确出现的内容**产出摘要，不推测、不脑补。
+
+{_SUMMARY_INPUT_HINT}
+
+{_SUMMARY_SCHEMA}
+
+仅输出 JSON。"""
+
 # #region debug-point C:debug-report
 def is_debug_report_enabled() -> bool:
     """判断是否启用本地调试事件上报；默认关闭，避免常规运行时访问调试端口。"""
@@ -418,25 +475,42 @@ def _model_cache_roots() -> list[Path]:
 
 
 def _resolve_runtime_models_to_local(cfg: dict) -> dict:
-    """把模型及依赖解析为本地路径；缺失时拒绝静默下载。"""
+    """把模型及依赖解析为本地路径；缺失时不强制 raise（让 FunASR 内部自己解析）。
+
+    双重防联网策略：
+    1. cfg["check_latest"] = False → download_from_ms 里 check_latest=False 跳过远端校验
+    2. 能找到本地路径时加 model_path / vad_model_path 等 → download_from_ms 看到 "model_path" in kwargs 就跳过 snapshot_download
+    找不到时只打 warning（FunASR 内部有完整 alias 表 + 缓存查找逻辑）。
+    """
     missing: list[str] = []
-    for key in ("model", "vad_model", "punc_model", "spk_model", "forced_aligner"):
-        configured_model = str(cfg.get(key) or "").strip()
-        if not configured_model:
+    # 主模型：保留注册 key，尝试加 model_path
+    configured = str(cfg.get("model") or "").strip()
+    if configured:
+        if os.path.exists(configured):
+            cfg["model_path"] = str(Path(configured).resolve())
+        else:
+            local_path = resolve_local_model_path(configured, _model_cache_roots())
+            if local_path is not None:
+                cfg["model_path"] = str(local_path)
+            else:
+                logger.info("主模型 %s 未在 resolve_local_model_path 命中，交由 FunASR 内部解析", configured)
+    # 辅助模型：原 key 保留，尝试加 xxx_path
+    for key in ("vad_model", "punc_model", "spk_model", "forced_aligner"):
+        val = str(cfg.get(key) or "").strip()
+        if not val:
             continue
-        if os.path.exists(configured_model):
-            cfg[key] = str(Path(configured_model).resolve())
-            continue
-        local_path = resolve_local_model_path(configured_model, _model_cache_roots())
-        if local_path is None:
-            missing.append(f"{key}={configured_model}")
-            continue
-        cfg[key] = str(local_path)
-        logger.info("Using local %s: %s", key, local_path)
-    if missing:
-        raise ModelNotDownloadedError(
-            "模型文件未下载，已阻止联网加载：" + ", ".join(missing)
-        )
+        if os.path.exists(val):
+            cfg[f"{key}_path"] = str(Path(val).resolve())
+        else:
+            local_path = resolve_local_model_path(val, _model_cache_roots())
+            if local_path is not None:
+                cfg[f"{key}_path"] = str(local_path)
+                logger.info("Using local %s: %s", key, local_path)
+            else:
+                missing.append(f"{key}={val}")
+                logger.warning("%s 未在本地缓存命中，FunASR 将内部解析（check_latest=False 可阻止联网）", key)
+    # 不再 raise —— FunASR 内部有完整 alias 表 + get_or_download_model_dir 查缓存
+    # 配合 check_latest=False + 已下载的模型不会真的联网
     cfg["check_latest"] = False
     return cfg
 
@@ -1169,6 +1243,28 @@ def build_native_mic_stream_html() -> str:
 """
 
 
+# 不同模型的默认 batch_size_s（秒），控制 FunASR AutoModel 内部 VAD 后逐段打包的总时长预算。
+# 原理：FunASR AutoModel 挂载 fsmn-vad 时走 inference_with_vad() 路由，
+#       VAD 先把长音频切成 ~30s 语音段，再按 batch_size_s 预算把若干段打包成 batch 推理。
+#       batch_size_s 太小 → 段太多 → forward 次数爆炸（之前的双层分块问题）；
+#       太大 → 单次 forward 内存压力大。
+# 流式模型（paraformer-zh-streaming）排除——流式推理天然不需要批预算。
+_ASR_DEFAULT_BATCH_S = {
+    "qwen3-asr": 60,            # 高精度模型，适当放大 batch 预算减少 forward 次数
+    "qwen3-asr-0.6b": 60,       # 轻量模型，60s 预算内存安全
+    "sensevoice": 15,           # 非自回归快模型，batch 小些无妨
+    "paraformer": 20,
+    "paraformer-en": 20,
+    "fun-asr-nano": 15,
+}
+
+def _default_batch_size_s(model: str) -> Optional[int]:
+    """按模型返回默认 batch_size_s；流式/非 ASR 模型返回 None 让库自己处理。"""
+    if model in _ASR_DEFAULT_BATCH_S:
+        return _ASR_DEFAULT_BATCH_S[model]
+    return None
+
+
 def build_generate_kwargs(
     *,
     tmp_path: str,
@@ -1193,6 +1289,9 @@ def build_generate_kwargs(
         generate_kwargs["hotword"] = hotword
     if use_itn is not None:
         generate_kwargs["use_itn"] = use_itn
+    # 用户没显式传 batch_size_s 时，按模型给默认值，避免长音频过度分块
+    if batch_size_s is None:
+        batch_size_s = _default_batch_size_s(model)
     if batch_size_s is not None:
         if int(batch_size_s) <= 0:
             raise ValueError("batch_size_s must be > 0")
@@ -1212,6 +1311,112 @@ def build_generate_kwargs(
         merge_length_s=merge_length_s,
         vad_max_single_segment_time=vad_max_single_segment_time,
     )
+
+
+def _safe_generate(asr_model, generate_kwargs: dict) -> list:
+    """公共函数：调 FunASR generate()，自动处理 'timestamp' KeyError 回退。
+
+    某些 model + batch_size_s 组合在传 sentence_timestamp=True 时会 KeyError，
+    去掉 sentence_timestamp 重试即可。多处调用点都有同样的 try/except，统一在这里。
+    """
+    try:
+        return asr_model.generate(**generate_kwargs)
+    except KeyError as ke:
+        if str(ke) == "'timestamp'" and "sentence_timestamp" in generate_kwargs:
+            generate_kwargs.pop("sentence_timestamp", None)
+            return asr_model.generate(**generate_kwargs)
+        raise
+
+
+def _run_asr(
+    *,
+    asr_model,
+    source_path: str,
+    generate_kwargs_base: dict,
+    chunk_enabled: bool = False,
+    chunk_seconds: float = 240,
+    overlap_seconds: float = 10,
+    total_duration_s: float = 0.0,
+):
+    """公共函数：执行 ASR，支持自动 chunking，返回 text/segments/elapsed/rtf。
+
+    被 transcribe API（快速转录）和 _workflow_transcribe_model（精细转录）共用，
+    彻底消除两套独立的 chunking + generate + elapsed 维护隐患。
+
+    Returns:
+        dict: {text, segments, elapsed_s, duration_s, rtf}
+    """
+    import time as _time
+    t0 = _time.time()
+
+    if chunk_enabled:
+        # ---- chunking 模式 ----
+        from pat_funasr_webui.fine_transcription.transcription_pipeline import (
+            _split_audio_ffmpeg,
+            _merge_chunk_segments,
+        )
+        chunks = _split_audio_ffmpeg(
+            source_path,
+            chunk_seconds=chunk_seconds,
+            overlap_seconds=overlap_seconds,
+        )
+        all_segs: list[list[dict]] = []
+        offsets: list[float] = []
+        total_text_parts: list[str] = []
+        for chunk_path, offset in chunks:
+            ck = dict(generate_kwargs_base)
+            ck["input"] = chunk_path
+            cresult = _safe_generate(asr_model, ck)
+            c0 = cresult[0] if cresult else {"text": ""}
+            chunk_dur = segmentation.ffprobe_duration_s(chunk_path)
+            seg = segmentation.build_segments(
+                result0=c0, duration_s=chunk_dur, clean_text=clean_text
+            )
+            for s in seg:
+                s["start"] = float(s.get("start", 0)) + offset
+                s["end"] = float(s.get("end", 0)) + offset
+            all_segs.append(seg)
+            offsets.append(offset)
+            total_text_parts.append(clean_text(c0.get("text", "")))
+        segments = _merge_chunk_segments(all_segs, offsets, overlap_seconds=overlap_seconds)
+        # 去重合并文本（重叠窗口内相同文本跳过）
+        merged_parts: list[str] = []
+        seen: dict[str, float] = {}
+        for text_part, offset in zip(total_text_parts, offsets):
+            short = text_part[:40].strip()
+            if short and short in seen:
+                continue
+            if short:
+                seen[short] = offset
+            merged_parts.append(text_part)
+        text = "".join(merged_parts)
+    else:
+        # ---- 单次 generate 模式 ----
+        result = _safe_generate(asr_model, dict(generate_kwargs_base))
+        result0 = result[0] if result else {"text": ""}
+        text = clean_text(result0.get("text", ""))
+        segments = segmentation.build_segments(
+            result0=result0, duration_s=total_duration_s, clean_text=clean_text
+        )
+        if not segments:
+            segments = [
+                {"start": 0.0, "end": round(total_duration_s, 3), "text": text, "speaker": None}
+            ]
+
+    elapsed = _time.time() - t0
+    duration_s = total_duration_s if total_duration_s > 0 else elapsed
+    try:
+        rtf = elapsed / duration_s if duration_s > 0 else 0.0
+    except Exception:
+        rtf = 0.0
+
+    return {
+        "text": text,
+        "segments": segments,
+        "elapsed_s": elapsed,
+        "duration_s": duration_s,
+        "rtf": rtf,
+    }
 
 
 def build_emotion_payload(
@@ -1313,15 +1518,17 @@ def _workflow_transcribe_model(
 ) -> dict:
     """复用模型加载、参数白名单和分段器执行工作流中的一次 ASR。"""
     load_kwargs = {"punc_mode": model_config.punc_mode}
+    # 空 asr_model = 让 primary 模型（config.transcription.primary.model）承担 diarization
+    # 非空 = 只对指定模型启用（旧行为，兼容显式配置）
+    target_asr = config.diarization.asr_model or config.transcription.primary.model
     reuse_for_diarization = (
         config.diarization.enabled
-        and model_config.model == config.diarization.asr_model
-        and not config.segmentation.chunk_enabled
+        and model_config.model == target_asr
     )
     effective_spk_mode = ""
     if reuse_for_diarization:
         effective_spk_mode = resolve_diarization_spk_mode(
-            config.diarization.asr_model,
+            model_config.model,        # ← 用实际在跑的模型名，不是 config 里的字符串
             config.diarization.spk_mode,
         )
         load_kwargs["spk_model"] = config.diarization.speaker_model
@@ -1387,14 +1594,7 @@ def _workflow_transcribe_model(
                     generate_kwargs["preset_spk_num"] = int(
                         config.diarization.preset_speaker_count
                     )
-            try:
-                generated = asr_model.generate(**generate_kwargs)
-            except KeyError as exc:
-                if str(exc) == "'timestamp'" and "sentence_timestamp" in generate_kwargs:
-                    generate_kwargs.pop("sentence_timestamp", None)
-                    generated = asr_model.generate(**generate_kwargs)
-                else:
-                    raise
+            generated = _safe_generate(asr_model, generate_kwargs)
             result0 = generated[0] if generated else {"text": ""}
             duration_s = segmentation.ffprobe_duration_s(chunk_path)
             text = clean_text(result0.get("text", ""))
@@ -1521,6 +1721,7 @@ def _workflow_diarize(source_path: str, diarization_config) -> dict:
     if diarization_config.asr_model == "sensevoice" and effective_spk_mode == "vad_segment":
         load_kwargs["punc_mode"] = "disabled"
     asr_model = load_model(diarization_config.asr_model, **load_kwargs)
+    # diarization 模型也是 ASR 模型，同样需要合理的 chunk 大小
     generate_kwargs = {
         "input": source_path,
         "batch_size": 1,
@@ -1528,6 +1729,9 @@ def _workflow_diarize(source_path: str, diarization_config) -> dict:
         "return_spk_res": True,
         "output_timestamp": True,
     }
+    _bs = _default_batch_size_s(diarization_config.asr_model)
+    if _bs is not None:
+        generate_kwargs["batch_size_s"] = _bs
     if diarization_config.preset_speaker_count is not None:
         generate_kwargs["preset_spk_num"] = int(diarization_config.preset_speaker_count)
     generated = asr_model.generate(**generate_kwargs)
@@ -1555,8 +1759,11 @@ def _resolve_workflow_llm(stage_config):
     return llm_config, selected_model
 
 
-def _workflow_llm_stage(stage_name: str, text: str, stage_config):
-    """调用已配置的 LLM 执行校对、纪要或思维导图。"""
+def _workflow_llm_stage(stage_name: str, text: str, stage_config, *, context_title: str = ""):
+    """调用已配置的 LLM 执行校对、纪要或思维导图。
+
+    context_title: 可选，mindmap 时传入 summary 的 meeting_title，保证标题一致。
+    """
     from pat_funasr_webui.fine_transcription.summary_processor import (
         generate_mindmap,
         generate_summary,
@@ -1580,19 +1787,25 @@ def _workflow_llm_stage(stage_name: str, text: str, stage_config):
         return refine_transcript(text, prompt, **common)
     if stage_name == "summary":
         prompts = {
-            "default": "根据转写生成结构化 JSON 摘要，包含 summary、decisions、action_items 和 notes。",
-            "strict": "仅依据转写生成结构化 JSON 摘要；不推测缺失信息，包含 summary、decisions、action_items 和 notes。",
-            "meeting": "根据会议转写生成结构化 JSON 纪要，包含 summary、decisions、action_items 和 notes。",
+            "default": _SUMMARY_PROMPT_DEFAULT,
+            "strict": _SUMMARY_PROMPT_STRICT,
+            "meeting": _SUMMARY_PROMPT_MEETING,
         }
         prompt = prompts[template_id]
         return generate_summary(text, prompt, **common)
     if stage_name == "mindmap":
+        _MM_BASE = "从以下带说话人标签的转写生成 JSON 思维导图，格式为 {title, children:[...]}，层级不超过 3 级。仅输出 JSON。"
+        _MM_MEETING = "根据会议转写按议题、决定和行动项生成 JSON 思维导图。"
+        _MM_STRICT = "仅依据转写生成 JSON 思维导图，不补充未知事实。"
         prompts = {
-            "default": "根据转写生成 JSON 思维导图，格式为 title 与 children，禁止输出 JSON 之外的内容。",
-            "strict": "仅依据转写生成 JSON 思维导图，格式为 title 与 children，不补充未知事实，禁止输出 JSON 之外的内容。",
-            "meeting": "根据会议转写按议题、决定和行动项生成 JSON 思维导图，格式为 title 与 children，禁止输出 JSON 之外的内容。",
+            "default": _MM_BASE,
+            "strict": _MM_STRICT + " " + _MM_BASE,
+            "meeting": _MM_MEETING + " " + _MM_BASE,
         }
         prompt = prompts[template_id]
+        # 如果有 summary 的 meeting_title，要求 mindmap 用同一个标题
+        if context_title:
+            prompt += f"\n\n**重要**：思维导图的 title 必须使用以下会议标题，**不要自己起标题**：\n{context_title}"
         return generate_mindmap(text, prompt, **common)
     raise RuntimeError(f"未知 LLM 阶段：{stage_name}")
 
@@ -1814,86 +2027,69 @@ async def transcribe(
                 },
             )
 
-            # 长音频分块：默认 >5min 自动启用，可通过 chunk_enabled 显式控制
+            # ---- 统一用公共函数 _run_asr（transcribe API 和 workflow 共用）----
             _chunk_seconds = chunk_seconds if chunk_seconds is not None else 240
             _overlap = overlap_seconds if overlap_seconds is not None else 10
+
+            # ---- 外层 ffmpeg chunking 自动判定 ----
+            # 外层 chunking 是「兜底机制」，只在模型自身无法处理长音频时才启用。
+            #
+            # 各模型原生长音频能力（基于官方文档 + 源码验证）：
+            #
+            #  qwen3-asr / qwen3-asr-0.6b：
+            #     qwen-asr 包原生 split_audio_into_chunks(MAX_ASR_INPUT_SECONDS=1200s, 静音边界切块)
+            #     + MODEL_CONFIGS 已去掉 vad_model（让 qwen-asr 自己管，避免三层分块）
+            #     → 外层 chunking **默认完全关闭**
+            #
+            #  paraformer-zh-streaming：
+            #     流式模型，天然支持任意长度音频，硬切会破坏流式语义
+            #     → 外层 chunking **强制关闭**
+            #
+            #  sensevoice / paraformer / paraformer-en / fun-asr-nano：
+            #     FunASR AutoModel 挂载 fsmn-vad + batch_size_s 控制分块
+            #     一般长音频（< 90min）AutoModel 能扛住，极端长时外层兜底避免 OOM
+            #     → 外层 chunking **仅 > 5400s (90min) 才启用**
+            #
+            # 调用方显式传 chunk_enabled=true/false 时优先尊重。
+            _NATIVE_CHUNK_MODELS = {"qwen3-asr", "qwen3-asr-0.6b"}  # 包原生静音边界切块
+            _STREAMING_MODELS = {"paraformer-zh-streaming"}
             if chunk_enabled is not None:
-                auto_chunk = chunk_enabled  # 显式覆盖
+                _auto_chunk = chunk_enabled                  # 用户显式指定 → 尊重
+            elif model in _STREAMING_MODELS:
+                _auto_chunk = False                          # 流式 → 永远不切
+            elif model in _NATIVE_CHUNK_MODELS:
+                _auto_chunk = False                          # 原生分块 → 外层不干预
             else:
-                auto_chunk = duration_s > 300  # 默认：>5min 自动
-            if auto_chunk:
-                from pat_funasr_webui.fine_transcription.transcription_pipeline import (
-                    _split_audio_ffmpeg,
-                    _merge_chunk_segments,
-                )
+                _auto_chunk = duration_s > 5400              # 其他 VAD+batch 模型：>90min 兜底
 
-                chunks = _split_audio_ffmpeg(tmp_path, chunk_seconds=_chunk_seconds, overlap_seconds=_overlap)
-                logger.info(f"Auto chunk: duration={duration_s:.1f}s → {len(chunks)} chunks ({_chunk_seconds}s/块, {_overlap}s 重叠)")
-                all_segs: list[list[dict]] = []
-                offsets: list[float] = []
-                total_text_parts: list[str] = []
-                for chunk_path, offset in chunks:
-                    ck = dict(generate_kwargs)
-                    ck["tmp_path"] = chunk_path
-                    try:
-                        cresult = await run_in_threadpool(partial(asr_model.generate, **ck))
-                    except KeyError as ke:
-                        if str(ke) == "'timestamp'" and "sentence_timestamp" in ck:
-                            ck.pop("sentence_timestamp", None)
-                            cresult = await run_in_threadpool(partial(asr_model.generate, **ck))
-                        else:
-                            raise
-                    c0 = cresult[0] if cresult else {"text": ""}
-                    seg = segmentation.build_segments(result0=c0, duration_s=240, clean_text=clean_text(c0.get("text", "")))
-                    # 给每段加 offset（workflow 的 _merge_chunk_segments 会统一处理）
-                    for s in seg:
-                        s["start"] = float(s.get("start", 0)) + offset
-                        s["end"] = float(s.get("end", 0)) + offset
-                    all_segs.append(seg)
-                    offsets.append(offset)
-                    total_text_parts.append(clean_text(c0.get("text", "")))
-                # 合并：去重 + 按时间排序
-                segments = _merge_chunk_segments(all_segs, offsets, overlap_seconds=_overlap)
-                # 合并全文：去重窗口内的文本只保留第一次
-                merged_text_parts: list[str] = []
-                seen_text: dict[str, float] = {}
-                for text_part, offset in zip(total_text_parts, offsets):
-                    # 重叠窗口内相同文本跳过（用前 40 字指纹）
-                    short = text_part[:40].strip()
-                    if short and short in seen_text:
-                        continue
-                    if short:
-                        seen_text[short] = offset
-                    merged_text_parts.append(text_part)
-                text = "".join(merged_text_parts)
-            else:
-                try:
-                    result = await run_in_threadpool(partial(asr_model.generate, **generate_kwargs))
-                except KeyError as ke:
-                    if str(ke) == "'timestamp'" and "sentence_timestamp" in generate_kwargs:
-                        generate_kwargs.pop("sentence_timestamp", None)
-                        result = await run_in_threadpool(partial(asr_model.generate, **generate_kwargs))
-                    else:
-                        raise
-                elapsed = time.time() - t0
-
-                duration_s = duration_s if duration_s > 0 else elapsed
-                try:
-                    rtf = elapsed / duration_s if duration_s > 0 else 0.0
-                except Exception:
-                    rtf = 0.0
-                logger.info(
-                    "Transcription done: "
-                    f"model={model}, "
-                    f"elapsed_s={elapsed:.2f}, "
-                    f"duration_s={duration_s:.2f}, "
-                    f"rtf={rtf:.3f}"
+            # generate_kwargs 已有 "input": tmp_path，chunking 时 _run_asr 会覆盖为 chunk_path
+            _run_result = await run_in_threadpool(
+                partial(
+                    _run_asr,
+                    asr_model=asr_model,
+                    source_path=tmp_path,
+                    generate_kwargs_base=generate_kwargs,
+                    chunk_enabled=_auto_chunk,
+                    chunk_seconds=_chunk_seconds,
+                    overlap_seconds=_overlap,
+                    total_duration_s=duration_s,
                 )
-                result0 = result[0] if result else {"text": ""}
-                text = clean_text(result0.get("text", ""))
-                segments = segmentation.build_segments(result0=result0, duration_s=duration_s, clean_text=clean_text)
-                if not segments:
-                    segments = [{"start": 0.0, "end": round(duration_s, 3), "text": text, "speaker": None}]
+            )
+            text = _run_result["text"]
+            segments = _run_result["segments"]
+            elapsed = _run_result["elapsed_s"]
+            duration_s = _run_result["duration_s"]
+            rtf = _run_result["rtf"]
+
+            logger.info(
+                "Transcription done: "
+                f"model={model}, "
+                f"elapsed_s={elapsed:.2f}, "
+                f"duration_s={duration_s:.2f}, "
+                f"rtf={rtf:.3f}"
+            )
+            if _auto_chunk:
+                logger.info(f"Auto chunk: duration={duration_s:.1f}s → chunking mode enabled")
             _dbg_report(
                 hypothesis_id="D",
                 msg="api_generate_done",
@@ -2149,6 +2345,7 @@ async def recognize_diarization(
             if model == "sensevoice" and effective_spk_mode == "vad_segment":
                 load_kwargs["punc_mode"] = "disabled"
             asr_model = await run_in_threadpool(partial(load_model, model, **load_kwargs))
+            # diarization 模型也是 ASR 模型，同样需要合理的 chunk 大小
             generate_kwargs = {
                 "input": tmp_path,
                 "batch_size": 1,
@@ -2156,6 +2353,9 @@ async def recognize_diarization(
                 "return_spk_res": True,
                 "output_timestamp": True,
             }
+            _bs = _default_batch_size_s(model)
+            if _bs is not None:
+                generate_kwargs["batch_size_s"] = _bs
             if preset_spk_num is not None:
                 generate_kwargs["preset_spk_num"] = int(preset_spk_num)
             result = await run_in_threadpool(partial(asr_model.generate, **generate_kwargs))
@@ -2186,6 +2386,8 @@ def _parse_workflow_payload(raw: str | dict) -> workflow_service.WorkflowConfig:
     config = workflow_service.parse_workflow_config(payload)
     # 自动补全强制对齐：字词级时间戳 → forced_alignment=True + 默认模型
     workflow_service.auto_fill_forced_alignment(config)
+    # 自动补全转录模式：reviewers 非空 → multi_model
+    workflow_service.auto_fill_transcription_mode(config)
     return config
 
 
@@ -2599,7 +2801,13 @@ def main():
     logger.info(f"  Device: {DEVICE}")
     logger.info(f"  Models: {list(MODEL_CONFIGS.keys())}")
     logger.info(f"  Docs:   http://{args.host}:{args.port}/docs")
-    uvicorn.run(app, host=args.host, port=args.port)
+    uvicorn.run(
+        app,
+        host=args.host,
+        port=args.port,
+        log_level="warning",  # 只输出 WARNING/ERROR，屏蔽 INFO 级别的 access log 和轮询请求
+        access_log=False,     # 关闭 access log（/events 轮询刷屏主要来源）
+    )
 
 
 if __name__ == "__main__":

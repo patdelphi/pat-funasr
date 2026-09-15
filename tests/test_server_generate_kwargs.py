@@ -65,6 +65,7 @@ class TestServerGenerateKwargs(unittest.TestCase):
         self.assertIn("max_end_silence_time", got)
 
     def test_build_generate_kwargs_skips_optional_empty_values(self):
+        # 不传 batch_size_s 时，按模型给默认值（sensevoice → 15）
         got = self.server.build_generate_kwargs(
             tmp_path="demo.wav",
             model="sensevoice",
@@ -84,8 +85,38 @@ class TestServerGenerateKwargs(unittest.TestCase):
             {
                 "input": "demo.wav",
                 "batch_size": 1,
+                "batch_size_s": 15,  # sensevoice 默认 15s/chunk
             },
         )
+
+    def test_build_generate_kwargs_model_default_batch_size(self):
+        """不同模型应该有不同的默认 batch_size_s。"""
+        for model, expected_bs in [
+            ("qwen3-asr-0.6b", 60),
+            ("sensevoice", 15),
+            ("paraformer", 20),
+            ("fun-asr-nano", 15),
+        ]:
+            got = self.server.build_generate_kwargs(
+                tmp_path="demo.wav",
+                model=model,
+                language=None, hotword=None, use_itn=None,
+                vad_preset=None, merge_vad=None, merge_length_s=None,
+                batch_size_s=None, batch_size_threshold_s=None,
+                vad_max_single_segment_time=None,
+            )
+            self.assertEqual(got["batch_size_s"], expected_bs, f"{model} should default to {expected_bs}")
+
+    def test_build_generate_kwargs_streaming_no_batch_size(self):
+        """流式模型不应注入 batch_size_s。"""
+        got = self.server.build_generate_kwargs(
+            tmp_path="demo.wav", model="paraformer-zh-streaming",
+            language=None, hotword=None, use_itn=None,
+            vad_preset=None, merge_vad=None, merge_length_s=None,
+            batch_size_s=None, batch_size_threshold_s=None,
+            vad_max_single_segment_time=None,
+        )
+        self.assertNotIn("batch_size_s", got)
 
     def test_build_generate_kwargs_rejects_invalid_batch_threshold(self):
         with self.assertRaises(ValueError):

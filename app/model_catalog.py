@@ -54,16 +54,20 @@ MODEL_CONFIGS = {
         "hub": "ms",
         "trust_remote_code": True,
         "dtype": "fp16",
-        # forced_aligner 不默认填——仅当用户显式启用字级时间戳时才通过
-        # aligner_model 参数注入，避免不必要的模型下载依赖
+        # 挂载 fsmn-vad：让 FunASR inference_with_vad 先切 ~30s 语音段 + batch_size_s 打包
+        # → 每段语音足够短，max_new_tokens=512 不会截断
+        # 外层 ffmpeg chunking 默认关闭（只对 >90min 极端长兜底）
         "vad_model": "fsmn-vad",
         "vad_kwargs": {"max_single_segment_time": 30000},
+        # forced_aligner 不默认填——仅当用户显式启用字级时间戳时才通过
+        # aligner_model 参数注入，避免不必要的模型下载依赖
     },
     "qwen3-asr-0.6b": {
         "model": "Qwen/Qwen3-ASR-0.6B",
         "hub": "ms",
         "trust_remote_code": True,
         "dtype": "fp16",
+        # 同上：挂载 vad_model 让 FunASR VAD 切短段，避免 qwen-asr 原生分块 1200s 被 max_new_tokens 截断
         "vad_model": "fsmn-vad",
         "vad_kwargs": {"max_single_segment_time": 30000},
     },
