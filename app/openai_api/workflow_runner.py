@@ -15,10 +15,105 @@ from typing import Any, Callable
 import alignment_service
 import artifact_service
 import reconciliation_service
-from workflow_service import ModelRunConfig, WorkflowConfig, WorkflowRunContext, auto_fill_forced_alignment, parse_workflow_config
+from workflow_service import ModelRunConfig, WorkflowConfig, WorkflowRunContext, auto_fill_forced_alignment, auto_fill_transcription_mode, parse_workflow_config
 
 
 TranscribeFn = Callable[[str, ModelRunConfig, WorkflowConfig, Callable[[int, int, str], None]], dict[str, Any]]
+
+
+def _merge_adjacent_same_speaker(segments: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """合并相邻且 speaker 相同的段。
+
+    FunASR 的 VAD 分块 + chunk runner 经常把同一个人切成很多 3s 小段，
+    用户阅读体验差。此函数做轻量合并：相邻段 speaker 相同（都非 None）时
+    把 text 拼起来、end 取后者 end、words 合并，其他字段保留第一段。
+    """
+    if len(segments) <= 1:
+        return segments
+    merged: list[dict[str, Any]] = []
+    for seg in segments:
+        if not merged:
+            merged.append(dict(seg))
+            continue
+        prev = merged[-1]
+        prev_spk = prev.get("speaker")
+        cur_spk = seg.get("speaker")
+        # 只合并两个都有 speaker 且相同的
+        if prev_spk is not None and cur_spk is not None and prev_spk == cur_spk:
+            # 拼 text
+            prev_text = str(prev.get("text") or "")
+            cur_text = str(seg.get("text") or "")
+            prev["text"] = prev_text + cur_text
+            # 延长 end
+            cur_end = seg.get("end")
+            if isinstance(cur_end, (int, float)):
+                prev_end = prev.get("end")
+                if not isinstance(prev_end, (int, float)) or cur_end > prev_end:
+                    prev["end"] = cur_end
+            # 合并 words（如果有）
+            prev_words = prev.get("words")
+            cur_words = seg.get("words")
+            if isinstance(prev_words, list) and isinstance(cur_words, list):
+                prev["words"] = prev_words + cur_words
+        else:
+            merged.append(dict(seg))
+    return merged
+
+
+def _build_stage_input(
+    stage_name: str,
+    segments: list[dict[str, Any]],
+    scope: str,
+) -> str:
+    """按 stage 类型构建输入文本。
+
+    summary/mindmap 需要 speaker + 时间戳 + 说话人统计，否则 LLM 瞎编
+    participants、丢失数字锚点、无法归属说话人。
+    llm_proofread 保持纯文本（校对不需要 speaker 标签）。
+    """
+    if not segments:
+        return ""
+    if stage_name in {"summary", "mindmap"}:
+        from collections import Counter
+        spk_counts: Counter = Counter()
+        spk_chars: dict[str, int] = {}
+        spk_first: dict[str, str] = {}
+        for seg in segments:
+            spk = seg.get("speaker")
+            spk_str = f"spk={spk}" if spk is not None else "spk=?"
+            spk_counts[spk_str] += 1
+            txt = str(seg.get("text") or "")
+            spk_chars[spk_str] = spk_chars.get(spk_str, 0) + len(txt)
+            if spk_str not in spk_first and txt.strip():
+                spk_first[spk_str] = txt.strip()[:80]
+        total_chars = sum(spk_chars.values()) or 1
+        spk_lines = ["=== 说话人统计 ==="]
+        for spk_str in sorted(spk_counts.keys()):
+            cnt = spk_counts[spk_str]
+            chars = spk_chars.get(spk_str, 0)
+            pct = chars * 100.0 / total_chars
+            first = spk_first.get(spk_str, "")
+            spk_lines.append(
+                f"  {spk_str}: {cnt}段, {chars}字({pct:.0f}%), 首句: {first}"
+            )
+
+        def _fmt_ts(t: float | None) -> str:
+            if not isinstance(t, (int, float)):
+                return "?"
+            m, s = divmod(int(t), 60)
+            return f"{m:02d}:{s:02d}"
+
+        tx_lines = ["=== 带说话人标签的转写 ==="]
+        for seg in segments:
+            spk = seg.get("speaker")
+            spk_tag = f"[spk={spk}]" if spk is not None else "[spk=?]"
+            ts = _fmt_ts(seg.get("start"))
+            text = str(seg.get("text") or "").strip()
+            if text:
+                tx_lines.append(f"[{ts}] {spk_tag} {text}")
+        return "\n".join(spk_lines) + "\n\n" + "\n".join(tx_lines)
+    # 默认：纯文本（给 llm_proofread 用）
+    return "".join(str(item.get("text") or "") for item in segments)
 
 
 @dataclass
@@ -380,9 +475,17 @@ def _run_llm_stages(
             elif stage_config.scope in {"all", "refined"}:
                 stage_input = str(result.get("refined_text") or result.get("text") or "")
             else:
-                stage_input = "".join(
-                    str(item.get("text") or "") for item in result.get("segments") or []
+                # summary/mindmap 需要 speaker + 时间戳，否则 LLM 瞎编 participants
+                stage_input = _build_stage_input(
+                    stage_name, result.get("segments") or [], stage_config.scope
                 )
+            # mindmap 时拼入 summary 的 meeting_title，保证标题一致
+            if stage_name == "mindmap":
+                _sm = result.get("summary")
+                if isinstance(_sm, dict) and _sm.get("meeting_title"):
+                    stage_input = (
+                        f"=== summary 会议标题 ===\n{_sm['meeting_title']}\n\n"
+                    ) + stage_input
             stage_output = runtime.llm_stage(stage_name, stage_input, stage_config)
             result[output_key] = stage_output
             if stage_name == "llm_proofread":
@@ -410,6 +513,8 @@ def run_workflow(context: WorkflowRunContext, runtime: WorkflowRuntime) -> dict[
     config = parse_workflow_config(context.config)
     # 自动推断强制对齐：字词级时间戳 → 自动启用 forced_alignment + 默认模型
     auto_fill_forced_alignment(config)
+    # 自动推断多模型模式：reviewers 非空 → mode=multi_model
+    auto_fill_transcription_mode(config)
     source_path = context.source_path
     output_dir = str(Path(source_path).resolve().parent / "artifacts")
     context.raise_if_cancelled()
@@ -461,25 +566,32 @@ def run_workflow(context: WorkflowRunContext, runtime: WorkflowRuntime) -> dict[
             message="正在生成独立说话人时间轴",
             model=config.diarization.speaker_model,
         )
+        # 优先从各模型的 result 里直接复用 diarization（避免单独跑 3D-Speaker 的 80 batch forward）
+        # 空 asr_model → 先按 primary 模型名匹配，再 fall back 到任意带 diarization 的模型
+        target_asr = config.diarization.asr_model or config.transcription.primary.model
+        candidates = [item for item in (primary, *reviewers)
+                      if isinstance(item.get("diarization"), dict)]
+        # 精确匹配优先，fallback 到第一个有 diarization 的
         diarization = next(
-            (
-                item["diarization"]
-                for item in (primary, *reviewers)
-                if str(item.get("model") or "") == config.diarization.asr_model
-                and isinstance(item.get("diarization"), dict)
-            ),
-            None,
+            (item["diarization"] for item in candidates
+             if str(item.get("model") or "") == target_asr),
+            candidates[0]["diarization"] if candidates else None,
         )
         if diarization is None:
             diarization = runtime.diarize(source_path, config.diarization)
         else:
+            matched_model = next(
+                (str(item.get("model") or "") for item in (primary, *reviewers)
+                 if item.get("diarization") is diarization),
+                "",
+            )
             _emit_stage(
                 context,
                 stage="diarization",
                 progress=0.7,
-                message="复用已完成转录模型的说话人结果，避免重复加载与推理",
+                message=f"复用 {matched_model} 的说话人结果，跳过 3D-Speaker",
                 level="info",
-                model=config.diarization.asr_model,
+                model=matched_model,
             )
         result["diarization"] = diarization
         result["segments"] = alignment_service.align_speakers_to_segments(
@@ -523,6 +635,27 @@ def run_workflow(context: WorkflowRunContext, runtime: WorkflowRuntime) -> dict[
                 segment.pop(key, None)
         result.pop("words", None)
     result["timestamp_level"] = config.timestamps.level
+
+    # ---- 后置清理 ----
+    # 1. 相邻相同 speaker 段合并（842/934 是相邻同 speaker，用户体验差）
+    segments = result.get("segments") or []
+    if len(segments) > 1:
+        result["segments"] = _merge_adjacent_same_speaker(segments)
+
+    # 2. 补 duration：从 segments 推算（最早 start → 最晚 end）
+    if not result.get("duration"):
+        starts = [s.get("start") for s in segments if isinstance(s.get("start"), (int, float))]
+        ends = [s.get("end") for s in segments if isinstance(s.get("end"), (int, float))]
+        if starts and ends:
+            result["duration"] = round(max(ends) - min(starts), 3)
+
+    # 3. diarization.duration 也补（如果缺失）
+    diar = result.get("diarization")
+    if isinstance(diar, dict) and not diar.get("duration"):
+        d_starts = [s.get("start") for s in (diar.get("segments") or []) if isinstance(s.get("start"), (int, float))]
+        d_ends = [s.get("end") for s in (diar.get("segments") or []) if isinstance(s.get("end"), (int, float))]
+        if d_starts and d_ends:
+            diar["duration"] = round(max(d_ends) - min(d_starts), 3)
 
     context.raise_if_cancelled()
     _emit_stage(context, stage="export", progress=0.96, message="正在生成导出产物")

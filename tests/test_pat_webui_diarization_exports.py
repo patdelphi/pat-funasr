@@ -343,7 +343,8 @@ class TestPatWebUiDiarizationExports(unittest.TestCase):
         original_transcribe_audio_with_exports = gradio_app.transcribe_audio_with_exports
         try:
             gradio_app.transcribe_audio_with_exports = lambda **_kwargs: expected
-            result = gradio_app.safe_transcribe_with_exports(
+            # safe_transcribe_with_exports 现在是 generator，yield (status, *result)
+            gen = gradio_app.safe_transcribe_with_exports(
                 base_url="http://127.0.0.1:8000",
                 audio_path=str(temp_file),
                 model="paraformer",
@@ -367,6 +368,10 @@ class TestPatWebUiDiarizationExports(unittest.TestCase):
                 log_level=None,
                 disable_pbar=None,
             )
+            last_yield = list(gen)[-1]
+            # yield 现在是 10 元素: [status, event_log_html, transcript, state, json, txt, srt, vtt, tsv, zip]
+            # 跳过 status[0] + event_log[1]，剩下 8 个和 expected 对齐
+            result = last_yield[2:]
         finally:
             gradio_app.transcribe_audio_with_exports = original_transcribe_audio_with_exports
 

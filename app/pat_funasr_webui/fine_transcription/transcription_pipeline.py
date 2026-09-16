@@ -705,30 +705,58 @@ def _parse_json_safe(text: str) -> dict:
 # ------------------------------------------------------------------
 
 def format_transcript_text(segments: list, refined_text: str = "") -> str:
-    """格式化转写文本用于显示"""
-    if refined_text:
-        return refined_text
+    """格式化转写文本用于显示。
 
-    lines = []
-    for seg in segments:
-        speaker = seg.get("speaker", "")
-        text = seg.get("text", "").strip()
-        start = seg.get("start", 0)
-        mm = int(start // 60)
-        ss = int(start % 60)
-        timestamp = f"[{mm:02d}:{ss:02d}]"
-        if speaker:
-            lines.append(f"{timestamp} {speaker}: {text}")
-        else:
-            lines.append(f"{timestamp} {text}")
-    return "\n".join(lines)
+    优先用 segments 格式化（带时间戳 + speaker），因为用户想看时间戳和说话人。
+    refined_text 是 LLM 润色后的纯文本，但丢了时间戳和 speaker 标签。
+    """
+    # segments 可用 → 格式化（带时间戳 + speaker）
+    if segments:
+        lines = []
+        for seg in segments:
+            speaker = seg.get("speaker", "")
+            text = seg.get("text", "").strip()
+            start = seg.get("start", 0)
+            try:
+                start = float(start)
+            except (TypeError, ValueError):
+                start = 0
+            mm = int(start // 60)
+            ss = int(start % 60)
+            timestamp = f"[{mm:02d}:{ss:02d}]"
+            if speaker:
+                lines.append(f"{timestamp} {speaker}: {text}")
+            else:
+                lines.append(f"{timestamp} {text}")
+        return "\n".join(lines)
+    # 没有 segments 才退回 refined_text
+    return refined_text or ""
 
 
 def format_summary_display(summary: dict) -> str:
-    """格式化纪要 JSON 为可读文本"""
+    """格式化纪要 JSON 为可读 Markdown。
+
+    统一委托给 artifact_service._render_summary_markdown，确保 UI 展示与
+    导出文件（summary_*.md）用同一套渲染逻辑。
+    """
     if not summary:
         return "（未生成纪要）"
+    try:
+        from openai_api import artifact_service
+        md = artifact_service._render_summary_markdown(summary)
+        if md.strip():
+            return md
+    except Exception:
+        pass
+    # 兜底：原始 dict 直接转 JSON
+    import json as _json
+    return _json.dumps(summary, ensure_ascii=False, indent=2)
 
+
+def _format_summary_display_legacy_kept_for_reference(summary: dict) -> str:
+    """旧简化渲染器（已弃用，保留备查）"""
+    if not summary:
+        return "（未生成纪要）"
     if summary.get("aggregated"):
         parts = summary.get("parts", [])
         lines = [f"### 纪要（{len(parts)} 段聚合）\n"]

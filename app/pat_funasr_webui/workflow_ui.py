@@ -35,8 +35,11 @@ def build_workflow_config(values: dict[str, Any]) -> dict[str, Any]:
     """把前端字段映射为后端严格 workflow schema，所有选择均显式保留。"""
     reviewer_models = list(values.get("reviewer_models") or [])
     transcription_mode = str(values.get("transcription_mode") or "single_model")
-    if transcription_mode == "single_model":
-        reviewer_models = []
+    # 自动推断：用户选了校对模型 → 自动切 multi_model；没选 → 尊重用户选项
+    if reviewer_models and transcription_mode != "multi_model":
+        transcription_mode = "multi_model"
+    elif not reviewer_models and transcription_mode == "multi_model":
+        transcription_mode = "single_model"
     primary_model = str(values.get("primary_model") or "sensevoice")
     primary_weight = float(values.get("primary_weight") or 1.0)
     reviewer_weight = float(values.get("reviewer_weight") or 1.0)
@@ -92,7 +95,7 @@ def build_workflow_config(values: dict[str, Any]) -> dict[str, Any]:
         "diarization": {
             "enabled": bool(values.get("diarization_enabled", False)),
             "strategy": str(values.get("diarization_strategy") or "separate_align"),
-            "asr_model": str(values.get("diarization_asr_model") or "paraformer"),
+            "asr_model": str(values.get("diarization_asr_model") or ""),
             "speaker_model": str(values.get("speaker_model") or "cam++"),
             "spk_mode": str(values.get("spk_mode") or "punc_segment"),
             "preset_speaker_count": values.get("preset_speaker_count"),
@@ -145,6 +148,19 @@ def build_workflow_config(values: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _fmt_ts(ts: str | None) -> str:
+    """把后端 UTC ISO 时间戳转本地 HH:MM:SS；缺失时返回空。"""
+    if not ts:
+        return ""
+    try:
+        from datetime import datetime, timezone
+
+        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        return dt.astimezone().strftime("%H:%M:%S")
+    except Exception:
+        return ""
+
+
 def render_workflow_events(events: list[dict[str, Any]]) -> str:
     """将追加式状态事件渲染为可复制日志，保留 warning/error 和错误码。"""
     lines: list[str] = []
@@ -155,8 +171,10 @@ def render_workflow_events(events: list[dict[str, Any]]) -> str:
         stage = str(event.get("stage") or "workflow")
         model = f" [{event['model']}]" if event.get("model") else ""
         code = f" ({event['error_code']})" if event.get("error_code") else ""
+        ts = _fmt_ts(event.get("timestamp"))
+        ts_part = f"{ts} " if ts else ""
         lines.append(
-            f"#{event.get('event_id', '-')} {progress_text} {level:<8} {stage}{model}: "
+            f"{ts_part}#{event.get('event_id', '-')} {progress_text} {level:<8} {stage}{model}: "
             f"{event.get('message', '')}{code}"
         )
     return "\n".join(lines)

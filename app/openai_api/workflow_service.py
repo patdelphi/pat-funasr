@@ -39,6 +39,55 @@ def _safe_error_message(error: Exception) -> str:
     return message[:1000]
 
 
+def _format_duration(seconds: float) -> str:
+    """把秒数格式化为人可读时长：12.3s / 2m15s / 1h30m05s。"""
+    s = int(seconds)
+    if s < 60:
+        return f"{s}s"
+    m, s = divmod(s, 60)
+    if m < 60:
+        return f"{m}m{s:02d}s"
+    h, m = divmod(m, 60)
+    return f"{h}h{m:02d}m{s:02d}s"
+
+
+def _build_summary_message(
+    created_at_iso: str,
+    now_iso: str,
+    *,
+    status_label: str,
+    stage_timings: list[dict[str, Any]] | None = None,
+) -> str:
+    """生成统一格式的任务汇总：开始时间 / 结束时间 / 耗时 + 分阶段耗时。"""
+    try:
+        start = datetime.fromisoformat(created_at_iso.replace("Z", "+00:00"))
+        end = datetime.fromisoformat(now_iso.replace("Z", "+00:00"))
+    except Exception:
+        return f"[{status_label}] 任务结束"
+    local_fmt = "%H:%M:%S"
+    start_str = start.astimezone().strftime(local_fmt)
+    end_str = end.astimezone().strftime(local_fmt)
+    elapsed = (end - start).total_seconds()
+    header = f"[{status_label}] 开始 {start_str} → 结束 {end_str}，共耗时 {_format_duration(elapsed)}"
+    # 分阶段耗时
+    if stage_timings:
+        parts: list[str] = []
+        for t in stage_timings:
+            stage = t.get("stage", "?")
+            model = t.get("model", "")
+            dur = _format_duration(t.get("duration_s", 0))
+            label = f"{stage}[{model}]" if model else stage
+            parts.append(f"{label}={dur}")
+        # 合并同类 stage（如多个 reviewer 都是 transcription.reviewers）
+        merged: dict[str, float] = {}
+        for t in stage_timings:
+            key = f"{t.get('stage','?')}[{t.get('model','')}]" if t.get("model") else t.get("stage", "?")
+            merged[key] = merged.get(key, 0) + float(t.get("duration_s", 0))
+        detail_parts = [f"{k}={_format_duration(v)}" for k, v in merged.items()]
+        return header + "\n  " + "，".join(detail_parts)
+    return header
+
+
 class _StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -112,10 +161,25 @@ def auto_fill_forced_alignment(config: WorkflowConfig) -> None:
         ts.forced_alignment = False
 
 
+def auto_fill_transcription_mode(config: WorkflowConfig) -> None:
+    """校对模型非空时自动把转录模式切到 multi_model。
+
+    前端选了 reviewer 但忘了切模式（或 API 直调）时，后端兜底。
+    """
+    tr = config.transcription
+    has_reviewers = bool(tr.reviewers)
+    if has_reviewers and tr.mode != "multi_model":
+        tr.mode = "multi_model"
+    elif not has_reviewers and tr.mode == "multi_model":
+        tr.mode = "single_model"
+
+
 class DiarizationConfig(_StrictModel):
     enabled: bool = False
     strategy: Literal["joint", "separate_align"] = "separate_align"
-    asr_model: str = "paraformer"
+    # 空字符串 = 优先复用 primary 的 ASR 结果（省掉单独跑 3D-Speaker 的时间）
+    # 只有当 primary 没带 diarization 或用户明确指定了别的模型时才单独跑
+    asr_model: str = ""
     speaker_model: str = "cam++"
     spk_mode: Literal["default", "vad_segment", "punc_segment"] = "punc_segment"
     preset_speaker_count: int | None = Field(default=None, ge=1, le=100)
@@ -154,7 +218,7 @@ class EmotionStageConfig(_StrictModel):
 
 class ExportConfig(_StrictModel):
     formats: list[Literal["json", "txt", "srt", "vtt", "tsv", "all"]] = Field(
-        default_factory=lambda: ["json", "txt"]
+        default_factory=lambda: ["json", "txt", "srt", "vtt", "tsv"]
     )
     include_raw_candidates: bool = False
     include_config_snapshot: bool = True
@@ -553,6 +617,8 @@ class WorkflowJobManager:
                 "cancel_event": threading.Event(),
                 "next_event_id": 1,
                 "future": None,
+                "stage_timings": [],       # [{stage, model, start, end, duration_s}]
+                "_active_timing": None,    # 当前正在计时的 {stage, model, start_dt}
             }
             self._emit_locked(
                 job_id,
@@ -589,6 +655,16 @@ class WorkflowJobManager:
             with self._lock:
                 job = self._jobs[job_id]
                 job["result"] = result or {}
+            # 汇总事件：开始时间 / 结束时间 / 总耗时 + 分阶段耗时
+            now_iso = datetime.now(timezone.utc).isoformat()
+            with self._lock:
+                timings = self._finalize_stage_timing(job_id, now_iso)
+                # 把 stage_timings 保存到 job 供 snapshot 返回
+                job["stage_timings"] = timings
+            summary = _build_summary_message(
+                job["created_at"], now_iso, status_label="完成", stage_timings=timings
+            )
+            context.emit(level="info", stage="summary", stage_status="success", progress=None, message=summary)
             context.emit(
                 level="success",
                 stage="workflow",
@@ -605,6 +681,14 @@ class WorkflowJobManager:
                 job = self._jobs[job_id]
                 job["status"] = "cancelled"
                 job["error"] = safe_message
+            now_iso = datetime.now(timezone.utc).isoformat()
+            with self._lock:
+                timings = self._finalize_stage_timing(job_id, now_iso)
+                job["stage_timings"] = timings
+            summary = _build_summary_message(
+                job["created_at"], now_iso, status_label="取消", stage_timings=timings
+            )
+            context.emit(level="info", stage="summary", stage_status="cancelled", progress=None, message=summary)
             context.emit(
                 level="warning",
                 stage="workflow",
@@ -620,6 +704,14 @@ class WorkflowJobManager:
                 job = self._jobs[job_id]
                 job["status"] = "failed"
                 job["error"] = safe_message
+            now_iso = datetime.now(timezone.utc).isoformat()
+            with self._lock:
+                timings = self._finalize_stage_timing(job_id, now_iso)
+                job["stage_timings"] = timings
+            summary = _build_summary_message(
+                job["created_at"], now_iso, status_label="失败", stage_timings=timings
+            )
+            context.emit(level="info", stage="summary", stage_status="error", progress=None, message=summary)
             context.emit(
                 level="error",
                 stage="workflow",
@@ -667,6 +759,27 @@ class WorkflowJobManager:
         details: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         job = self._jobs[job_id]
+        # ---- 自动 stage 计时 ----
+        now_dt = datetime.now(timezone.utc)
+        now_iso = now_dt.isoformat()
+        stage_key = str(stage)
+        model_key = str(model or "")
+        active = job.get("_active_timing")
+        if active is None:
+            # 首次 emit，开启计时
+            job["_active_timing"] = {"stage": stage_key, "model": model_key, "start_dt": now_dt}
+        elif active["stage"] != stage_key or active["model"] != model_key:
+            # stage/model 切换，关掉上一个
+            duration = (now_dt - active["start_dt"]).total_seconds()
+            job["stage_timings"].append({
+                "stage": active["stage"],
+                "model": active["model"],
+                "start": active["start_dt"].isoformat(),
+                "end": now_iso,
+                "duration_s": round(duration, 3),
+            })
+            job["_active_timing"] = {"stage": stage_key, "model": model_key, "start_dt": now_dt}
+        # ---- 计时结束 ----
         if progress is not None:
             progress = max(float(job.get("progress", 0.0)), min(1.0, float(progress)))
             job["progress"] = progress
@@ -677,16 +790,15 @@ class WorkflowJobManager:
             "warning": "warning",
             "error": "error",
         }
-        now = datetime.now(timezone.utc).isoformat()
         item = {
             "event_id": job["next_event_id"],
             "job_id": job_id,
-            "timestamp": now,
+            "timestamp": now_iso,
             "level": str(level),
-            "stage": str(stage),
+            "stage": stage_key,
             "stage_status": stage_status or status_map.get(str(level), "running"),
             "progress": progress,
-            "model": str(model or ""),
+            "model": model_key,
             "current": current,
             "total": total,
             "message": str(message),
@@ -697,10 +809,29 @@ class WorkflowJobManager:
         }
         job["next_event_id"] += 1
         job["events"].append(item)
-        job["updated_at"] = now
-        job["current_stage"] = str(stage)
-        job["current_model"] = str(model or "")
+        job["updated_at"] = now_iso
+        job["current_stage"] = stage_key
+        job["current_model"] = model_key
         return copy.deepcopy(item)
+
+    def _finalize_stage_timing(self, job_id: str, end_iso: str) -> list[dict[str, Any]]:
+        """关最后一个计时段，返回完整 stage_timings 列表。"""
+        job = self._jobs[job_id]
+        active = job.pop("_active_timing", None)
+        if active is not None:
+            try:
+                end_dt = datetime.fromisoformat(end_iso.replace("Z", "+00:00"))
+            except Exception:
+                end_dt = datetime.now(timezone.utc)
+            duration = (end_dt - active["start_dt"]).total_seconds()
+            job["stage_timings"].append({
+                "stage": active["stage"],
+                "model": active["model"],
+                "start": active["start_dt"].isoformat(),
+                "end": end_iso,
+                "duration_s": round(duration, 3),
+            })
+        return job["stage_timings"]
 
     def get_snapshot(
         self,
@@ -717,7 +848,7 @@ class WorkflowJobManager:
             snapshot = {
                 key: copy.deepcopy(value)
                 for key, value in job.items()
-                if key not in {"cancel_event", "future", "next_event_id", "source_path"}
+                if key not in {"cancel_event", "future", "next_event_id", "source_path", "_active_timing"}
             }
         if not include_internal:
             for artifact in (snapshot.get("result") or {}).get("artifacts") or []:

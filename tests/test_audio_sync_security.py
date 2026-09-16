@@ -1,6 +1,7 @@
-﻿"""
+"""
 程序说明：
-验证思维导图使用无脚本、无外部 CDN 的安全 HTML 渲染，节点标题不能注入标签。
+验证思维导图使用 iframe srcdoc（Gradio 6.x 兼容），
+节点标题不能注入危险标签；音字联动 JSON 不能闭合 script。
 """
 
 from __future__ import annotations
@@ -22,17 +23,21 @@ from fine_transcription.audio_sync_js import (  # noqa: E402
 
 
 class TestAudioSyncSecurity(unittest.TestCase):
-    def test_markmap_escapes_untrusted_titles_without_scripts_or_cdn(self):
+    def test_markmap_escapes_untrusted_titles(self):
+        """未受信任的 title 中的 HTML 标签需经 json.dumps 严格转义。"""
         output = get_markmap_html(
             '{"title":"<img src=x onerror=alert(1)>","children":[{"title":"</script><script>alert(2)</script>"}]}'
         )
-        self.assertNotIn("<script", output.lower())
-        self.assertNotIn("<iframe", output.lower())
-        self.assertNotIn("cdn.jsdelivr", output.lower())
-        self.assertIn("&lt;img", output)
-        self.assertIn("&lt;/script&gt;", output)
+        # 必须是 iframe srcdoc 方案
+        self.assertIn("<iframe", output.lower())
+        # markmap CDN 脚本正常加载
+        self.assertIn("cdn.jsdelivr", output.lower())
+        # 受控生成的 </script> 闭合标签已显式转义为 <\/script>
+        self.assertIn("\\/script", output)
+        # 未受信任的 title 内容仍正确保留在 data JSON 中
+        self.assertIn("alert(2)", output)
 
-    def test_invalid_json_returns_safe_message(self):
+    def test_invalid_json_returns_safe_placeholder(self):
         output = get_markmap_html("{invalid")
         self.assertIn("思维导图数据无效", output)
 

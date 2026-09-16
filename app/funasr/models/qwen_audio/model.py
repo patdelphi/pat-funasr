@@ -7,7 +7,9 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor
 from torch import nn
-import whisper
+# 原代码有 import whisper 但后续从未使用，会导致 FunASR 启动时 qwen_audio 模块
+# 因缺 whisper 依赖而导入失败 → Qwen3ASR 不在注册 key 里（见 Registered model keys 报错）。
+# FunASR 的 AutoModel 能根据注册 key 自动解析本地路径，不需要这个冗余 import。
 from funasr.utils.load_utils import load_audio_text_image_video, extract_fbank
 
 

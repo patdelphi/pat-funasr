@@ -1,4 +1,4 @@
-﻿"""
+"""
 程序说明：
 验证精细转录工作流产物统一导出，确保格式、配置快照与事件日志可审计。
 """
@@ -51,11 +51,17 @@ class TestArtifactService(unittest.TestCase):
 
             json_path = Path(tmpdir) / "transcript.json"
             raw = json_path.read_bytes()
-            self.assertTrue(raw.startswith(b"\xef\xbb\xbf"))
+            # JSON 文件不加 BOM（只有 Excel 友好格式 txt/tsv/srt/vtt 加 BOM）
+            self.assertFalse(raw.startswith(b"\xef\xbb\xbf"))
             self.assertNotIn(b"\n", raw.replace(b"\r\n", b""))
-            payload = json.loads(raw.decode("utf-8-sig"))
+            payload = json.loads(raw.decode("utf-8"))
             self.assertNotIn("model_runs", payload)
             self.assertEqual(payload["segments"][0]["speaker"], "S1")
+
+            # SRT 应该有 BOM（Excel 友好）
+            srt_path = Path(tmpdir) / "transcript.srt"
+            srt_raw = srt_path.read_bytes()
+            self.assertTrue(srt_raw.startswith(b"\xef\xbb\xbf"))
 
     def test_all_expands_to_five_transcript_formats(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -98,14 +104,18 @@ class TestArtifactService(unittest.TestCase):
             self.assertEqual(len(lines), 3)
             self.assertEqual(json.loads(lines[-1])["message"], "任务完成")
 
-    def test_txt_uses_final_text_when_whole_text_proofread_changed_it(self):
+    def test_txt_uses_segments_rendered_for_speaker_tags(self):
+        """TXT 应该用 render_txt(segments) 保留说话人标签和段落空行，而非 refined_text 纯文本。"""
         with tempfile.TemporaryDirectory() as tmpdir:
             artifact_service.write_workflow_artifacts(
                 output_dir=tmpdir,
                 result={
                     "text": "校对后的最终文本",
                     "refined_text": "校对后的最终文本",
-                    "segments": [{"text": "原始文本", "start": 0, "end": 1}],
+                    "segments": [
+                        {"text": "你好世界", "start": 0, "end": 1, "speaker": 1},
+                        {"text": "好的再见", "start": 1, "end": 2, "speaker": 0},
+                    ],
                 },
                 config={},
                 events=[],
@@ -116,7 +126,36 @@ class TestArtifactService(unittest.TestCase):
 
             output = (Path(tmpdir) / "transcript.txt").read_text(encoding="utf-8-sig")
 
-        self.assertEqual(output.strip(), "校对后的最终文本")
+        # 必须有说话人标签（说明走了 render_txt(segments)）
+        self.assertIn("[spk=1]", output)
+        self.assertIn("[spk=0]", output)
+        self.assertIn("你好世界", output)
+        self.assertIn("好的再见", output)
+        # 段落之间应该有空行
+        self.assertIn("\r\n\r\n", output.replace("\n\n", "\r\n\r\n"))
+
+    def test_refined_text_as_separate_transcript_refined(self):
+        """refined_text 应作为 transcript_refined.txt 单独导出（非主 transcript.txt）。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            artifact_service.write_workflow_artifacts(
+                output_dir=tmpdir,
+                result={
+                    "text": "原始全文",
+                    "refined_text": "校对润色后的全文",
+                    "segments": [{"text": "原始段", "start": 0, "end": 1}],
+                },
+                config={},
+                events=[],
+                formats=["txt"],
+                include_raw_candidates=False,
+                include_config_snapshot=False,
+            )
+
+            names = {p.name for p in Path(tmpdir).glob("*.txt")}
+            self.assertIn("transcript.txt", names)
+            self.assertIn("transcript_refined.txt", names)
+            refined_content = (Path(tmpdir) / "transcript_refined.txt").read_text(encoding="utf-8-sig")
+            self.assertEqual(refined_content.strip(), "校对润色后的全文")
 
 
 if __name__ == "__main__":

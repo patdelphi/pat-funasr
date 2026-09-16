@@ -87,15 +87,70 @@ def _with_speaker_prefix(seg: Dict[str, Any], text: str) -> str:
     return f"[spk={speaker}] {text}"
 
 
+def _clean_segment_text(seg: Dict[str, Any]) -> str:
+    """从 segment 提取 text 并清理：去首尾空白、内部 \\n\\n 合并、内部 \\n 变空格。
+
+    ASR/LMM proofread 后 segment text 里可能残留 \\n（LLM 合并碎片时没清），
+    直接放进 SRT/VTT 会导致 cue 里出现多行、甚至变成"孤儿行"破坏字幕结构。
+    """
+    text = str(seg.get("text", "") or "")
+    # CRLF / LF 统一
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    # 多个换行 → 单空格
+    import re as _re
+    text = _re.sub(r"\n+", " ", text)
+    # 多空格 → 单空格
+    text = _re.sub(r" {2,}", " ", text)
+    return text.strip()
+
+
 def render_txt(segments: List[Dict[str, Any]], *, max_line_width: Optional[int] = None) -> str:
+    """渲染带 speaker 标签的纯文本。
+
+    分段策略（比原实现更智能）：
+    - **同一个 speaker 连续的 segment 合并成一段**（用空格拼接）
+    - **speaker 切换时开新段落**（空行分隔）
+    - 解决原实现"3秒一刀切导致同 speaker 被切成十几段"的问题
+    """
+    if not segments:
+        return ""
+
+    # 先清理所有 text
+    cleaned = [
+        (_clean_segment_text(seg), seg.get("speaker"))
+        for seg in segments
+    ]
+    cleaned = [(t, s) for t, s in cleaned if t]  # 丢掉空的
+
     parts: List[str] = []
-    for seg in segments:
-        seg_text = str(seg.get("text", "") or "").strip()
-        if not seg_text:
-            continue
-        seg_text = _with_speaker_prefix(seg, seg_text)
-        parts.append(_wrap_text(seg_text, max_line_width))
-    return "\n\n".join(parts).strip() + ("\n" if parts else "")
+    cur_speaker = None
+    cur_buffer: List[str] = []
+
+    for text, speaker in cleaned:
+        if cur_speaker is None:
+            # 第一段
+            cur_speaker = speaker
+            cur_buffer.append(text)
+        elif speaker != cur_speaker:
+            # speaker 切换 → flush 当前 buffer
+            parts.append(_with_speaker_prefix(
+                {"speaker": cur_speaker}, " ".join(cur_buffer)
+            ))
+            cur_speaker = speaker
+            cur_buffer = [text]
+        else:
+            # 同 speaker → 追加
+            cur_buffer.append(text)
+
+    # flush 最后一段
+    if cur_buffer:
+        parts.append(_with_speaker_prefix(
+            {"speaker": cur_speaker}, " ".join(cur_buffer)
+        ))
+
+    # 应用行宽
+    parts = [_wrap_text(p, max_line_width) for p in parts]
+    return "\n\n".join(parts).strip() + "\n"
 
 
 def render_tsv(segments: List[Dict[str, Any]]) -> str:
@@ -103,7 +158,7 @@ def render_tsv(segments: List[Dict[str, Any]]) -> str:
     for seg in segments:
         start = _clamp_seconds(seg.get("start", 0.0))
         end = _clamp_seconds(seg.get("end", 0.0))
-        text = str(seg.get("text", "") or "").replace("\n", " ").strip()
+        text = _clean_segment_text(seg)
         text = _with_speaker_prefix(seg, text)
         lines.append(f"{start:.2f}\t{end:.2f}\t{text}")
     return "\n".join(lines).strip() + ("\n" if lines else "")
@@ -113,7 +168,7 @@ def render_srt(segments: List[Dict[str, Any]], *, max_line_width: Optional[int] 
     blocks: List[str] = []
     idx = 1
     for seg in segments:
-        text = str(seg.get("text", "") or "").strip()
+        text = _clean_segment_text(seg)
         if not text:
             continue
         text = _with_speaker_prefix(seg, text)
@@ -131,7 +186,7 @@ def render_srt(segments: List[Dict[str, Any]], *, max_line_width: Optional[int] 
 def render_vtt(segments: List[Dict[str, Any]], *, max_line_width: Optional[int] = None) -> str:
     blocks: List[str] = ["WEBVTT", ""]
     for seg in segments:
-        text = str(seg.get("text", "") or "").strip()
+        text = _clean_segment_text(seg)
         if not text:
             continue
         text = _with_speaker_prefix(seg, text)
