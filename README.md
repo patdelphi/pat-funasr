@@ -1,8 +1,21 @@
-# Pat-FunASR
+﻿# Pat-FunASR
+
+[![GitHub](https://img.shields.io/badge/GitHub-patdelphi/pat--funasr-181717?logo=github)](https://github.com/patdelphi/pat-funasr)
 
 基于 [FunASR](https://github.com/modelscope/FunASR) ，进行了大幅度实用化改造，覆盖 ASR 语音识别、说话人分离、LLM 校对/纪要/脑图、跨语种翻译、情感识别的**完整流水线**。支持本地离线模型 + 外部 LLM（如阿里云通义千问）的混合模式。
 
 核心定位：**隐私优先**（ASR/翻译/情感识别模型全部本地运行）+ **专业级转录产物**（SRT/VTT/字幕时间轴 + 说话人 + 会议纪要 + 思维导图 + 多语言翻译）。
+
+## 🎙️ 配套硬件：AI 录音卡
+
+本项目可作为 [AI 录音卡](https://nextproto.top/products/ai-record-card)（NextProto 卡片式 AI 录音设备）的**自托管转写后端**：
+
+- 录音卡通过磁吸 USB / 蓝牙导出 **WAV / Opus** 录音文件，本机 32G 存储、400mAh 电池，适合会议与访谈场景
+- 将录音文件拖入本项目的离线识别 API 或 Gradio WebUI，即可获得专业级转录产物
+- 完整支持：长音频分块 ASR、说话人分离、LLM 校对 / 会议纪要 / 思维导图、跨语种翻译、情感识别
+- **隐私优先**：识别与翻译全部本地模型运行，录音文件无需上传云端
+
+> 产品页：<https://nextproto.top/products/ai-record-card>　｜　项目仓库：<https://github.com/patdelphi/pat-funasr>
 
 ## ✨ 功能特性（Feature Matrix）
 
