@@ -14,6 +14,8 @@
 - 将录音文件拖入本项目的离线识别 API 或 Gradio WebUI，即可获得专业级转录产物
 - 完整支持：长音频分块 ASR、说话人分离、LLM 校对 / 会议纪要 / 思维导图、跨语种翻译、情感识别
 - **隐私优先**：识别与翻译全部本地模型运行，录音文件无需上传云端
+  <img width="1254" height="1254" alt="image" src="https://github.com/user-attachments/assets/1f9d8554-2de4-4e89-b2b9-d2892f1e0e87" />
+
 
 > 产品页：<https://nextproto.top/products/ai-record-card>　｜　项目仓库：<https://github.com/patdelphi/pat-funasr>
 
