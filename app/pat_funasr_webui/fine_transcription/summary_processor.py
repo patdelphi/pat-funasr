@@ -35,6 +35,11 @@ _DEFAULT_MODEL = 'qwen2.5:7b'
 
 def chunk_text(text: str, chunk_size: int = 5000, overlap: int = 1000) -> list[str]:
     """将长文本分段，带 overlap"""
+    # 参数防护：chunk_size<=0 或 overlap>=chunk_size 会使切片步进不前进，导致死循环
+    if chunk_size <= 0:
+        raise ValueError("chunk_size 必须大于 0")
+    if overlap < 0 or overlap >= chunk_size:
+        raise ValueError("overlap 必须 >= 0 且小于 chunk_size")
     if len(text) <= chunk_size:
         return [text]
     chunks = []

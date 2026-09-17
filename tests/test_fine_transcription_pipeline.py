@@ -1,4 +1,4 @@
-﻿"""
+"""
 程序说明：
 精细转录管线的正确性回归测试。
 
@@ -18,7 +18,10 @@ from unittest import mock
 
 
 _ROOT = Path(__file__).resolve().parents[1]
+_APP_DIR = _ROOT / "app"
 _WEBUI_DIR = _ROOT / "app" / "pat_funasr_webui"
+if str(_APP_DIR) not in sys.path:
+    sys.path.insert(0, str(_APP_DIR))
 if str(_WEBUI_DIR) not in sys.path:
     sys.path.insert(0, str(_WEBUI_DIR))
 

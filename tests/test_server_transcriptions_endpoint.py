@@ -1,4 +1,4 @@
-﻿"""
+"""
 程序说明：
 测试 "app/openai_api/server.py" 的 "/v1/audio/transcriptions" 参数透传行为。
 
@@ -212,6 +212,176 @@ class TestServerTranscriptionsEndpoint(unittest.TestCase):
 
         self.assertEqual(resp.status_code, 400)
         self.assertEqual(resp.json()["detail"], "invalid runtime option")
+
+    def test_run_asr_chunked_segments_apply_single_offset(self):
+        """分块模式下 segments 只由 _merge_chunk_segments 加一次块偏移，
+        防止 _run_asr 手动加偏移后再合并导致时间戳翻倍（#1 回归）。"""
+        from pat_funasr_webui.fine_transcription import transcription_pipeline as tp
+
+        # 模拟两个分块：块1 偏移 0 秒，块2 偏移 250 秒
+        chunks = [("/tmp/chunk_0.wav", 0.0), ("/tmp/chunk_1.wav", 250.0)]
+
+        def fake_build_segments(result0, duration_s, clean_text):
+            return [
+                {"start": 1.0, "end": 2.0, "text": "你好"},
+                {"start": 3.0, "end": 4.0, "text": "世界"},
+            ]
+
+        orig_split = tp._split_audio_ffmpeg
+        orig_safe_generate = self.server._safe_generate
+        orig_ffprobe = self.server.segmentation.ffprobe_duration_s
+        orig_build_segments = self.server.segmentation.build_segments
+        try:
+            tp._split_audio_ffmpeg = lambda *a, **kw: chunks
+            self.server._safe_generate = lambda _model, _kwargs: [{"text": "你好世界"}]
+            self.server.segmentation.ffprobe_duration_s = lambda _path: 10.0
+            self.server.segmentation.build_segments = fake_build_segments
+            result = self.server._run_asr(
+                asr_model=object(),
+                source_path="/tmp/demo.wav",
+                generate_kwargs_base={},
+                chunk_enabled=True,
+                chunk_seconds=240.0,
+                overlap_seconds=10.0,
+                total_duration_s=260.0,
+            )
+        finally:
+            tp._split_audio_ffmpeg = orig_split
+            self.server._safe_generate = orig_safe_generate
+            self.server.segmentation.ffprobe_duration_s = orig_ffprobe
+            self.server.segmentation.build_segments = orig_build_segments
+
+        starts = sorted(s["start"] for s in result["segments"])
+        # 块1（offset=0）：1.0/3.0；块2（offset=250）：251.0/253.0；
+        # 若双重偏移，块2 会变成 501.0/503.0
+        self.assertEqual(starts, [1.0, 3.0, 251.0, 253.0])
+
+    def test_merge_chunk_segments_keeps_distant_true_duplicates(self):
+        """分块合并去重只作用于 2×overlap 窗口内，远距离真重复必须保留。"""
+        from pat_funasr_webui.fine_transcription import transcription_pipeline as tp
+
+        # 块1 "好的" start=10s；块2（offset=250）"好的" start=50+250=300s，间隔 290s >> 2*10s
+        segs = [
+            [{"start": 10.0, "end": 11.0, "text": "好的"}],
+            [{"start": 50.0, "end": 51.0, "text": "好的"}],
+        ]
+        merged = tp._merge_chunk_segments(segs, [0.0, 250.0], overlap_seconds=10)
+        self.assertEqual(len(merged), 2, "远距离真重复不应被去重")
+
+    def test_merge_chunk_segments_dedupes_within_overlap_window(self):
+        """重叠窗口（2×overlap）内的相同文本 + 近似时间戳应被去重。"""
+        from pat_funasr_webui.fine_transcription import transcription_pipeline as tp
+
+        # 块1 "好的" start=230s；块2（offset=240）"好的" start=10+240=250s，间隔 20s == 2*10s → 去重
+        segs = [
+            [{"start": 230.0, "end": 232.0, "text": "好的"}],
+            [{"start": 10.0, "end": 12.0, "text": "好的"}],
+        ]
+        merged = tp._merge_chunk_segments(segs, [0.0, 240.0], overlap_seconds=10)
+        self.assertEqual(len(merged), 1, "重叠窗口内的重复文本应被去重")
+
+    def test_merge_chunk_segments_offsets_word_timestamps(self):
+        """word 级时间戳需与段级时间戳同步加块偏移。"""
+        from pat_funasr_webui.fine_transcription import transcription_pipeline as tp
+
+        # 两块：第二块带 word 级时间戳，验证统一加偏移
+        segs = [
+            [{"start": 0.0, "end": 1.0, "text": "开头"}],
+            [{"start": 0.0, "end": 2.0, "text": "你好世界",
+              "words": [{"start": 0.0, "end": 1.0, "text": "你好"}, {"start": 1.0, "end": 2.0, "text": "世界"}]}],
+        ]
+        merged = tp._merge_chunk_segments(segs, [0.0, 100.0], overlap_seconds=10)
+        second = [s for s in merged if s["start"] == 100.0][0]
+        self.assertEqual(second["end"], 102.0)
+        self.assertEqual(second["words"][0]["start"], 100.0)
+        self.assertEqual(second["words"][1]["end"], 102.0)
+
+    def test_merge_chunk_segments_empty_and_single_chunk(self):
+        """空输入返回空列表；单块直接原样返回（不加偏移）。"""
+        from pat_funasr_webui.fine_transcription import transcription_pipeline as tp
+
+        self.assertEqual(tp._merge_chunk_segments([], []), [])
+        single = [{"start": 1.0, "end": 2.0, "text": "单块"}]
+        self.assertIs(tp._merge_chunk_segments([single], [0.0]), single)
+
+    def test_run_asr_chunk_split_failure_falls_back_to_single(self):
+        """ffmpeg 分块失败（chunks=0）时 _run_asr 应回退整文件单次识别，避免空结果。"""
+        from pat_funasr_webui.fine_transcription import transcription_pipeline as tp
+
+        generate_calls = []
+
+        def fake_build_segments(result0, duration_s, clean_text):
+            return [{"start": 0.0, "end": 2.0, "text": clean_text(result0.get("text", ""))}]
+
+        orig_split = tp._split_audio_ffmpeg
+        orig_safe_generate = self.server._safe_generate
+        orig_ffprobe = self.server.segmentation.ffprobe_duration_s
+        orig_build_segments = self.server.segmentation.build_segments
+        try:
+            tp._split_audio_ffmpeg = lambda *a, **kw: []
+            # 记录 generate 收到的 input 路径，验证回退用的是整文件而非 chunk
+            self.server._safe_generate = lambda model, kwargs: (
+                generate_calls.append(kwargs.get("input")) or [{"text": "整文件识别"}]
+            )
+            self.server.segmentation.ffprobe_duration_s = lambda _path: 10.0
+            self.server.segmentation.build_segments = fake_build_segments
+            result = self.server._run_asr(
+                asr_model=object(),
+                source_path="/tmp/demo.wav",
+                generate_kwargs_base={"input": "/tmp/demo.wav"},
+                chunk_enabled=True,
+                chunk_seconds=240.0,
+                overlap_seconds=10.0,
+                total_duration_s=10.0,
+            )
+        finally:
+            tp._split_audio_ffmpeg = orig_split
+            self.server._safe_generate = orig_safe_generate
+            self.server.segmentation.ffprobe_duration_s = orig_ffprobe
+            self.server.segmentation.build_segments = orig_build_segments
+
+        self.assertEqual(generate_calls, ["/tmp/demo.wav"], "分块失败应回退整文件单次识别")
+        self.assertEqual(result["text"], "整文件识别")
+        self.assertEqual(len(result["segments"]), 1)
+
+    def test_run_asr_empty_generate_returns_empty_text_with_fallback_segment(self):
+        """ASR generate 返回空列表时：text 为空、segments 用时长兜底，不抛 IndexError。"""
+        generate_calls = []
+
+        orig_safe_generate = self.server._safe_generate
+        orig_build_segments = self.server.segmentation.build_segments
+        try:
+            self.server._safe_generate = lambda model, kwargs: (
+                generate_calls.append(True) or []
+            )
+            # build_segments 也返回空，验证最终兜底段
+            self.server.segmentation.build_segments = lambda **kw: []
+            result = self.server._run_asr(
+                asr_model=object(),
+                source_path="/tmp/demo.wav",
+                generate_kwargs_base={},
+                chunk_enabled=False,
+                total_duration_s=30.0,
+            )
+        finally:
+            self.server._safe_generate = orig_safe_generate
+            self.server.segmentation.build_segments = orig_build_segments
+
+        self.assertEqual(generate_calls, [True])
+        self.assertEqual(result["text"], "")
+        self.assertEqual(result["segments"], [{"start": 0.0, "end": 30.0, "text": "", "speaker": None}])
+
+    def test_transcriptions_rejects_chunk_overlap_gte_chunk_seconds(self):
+        """离线转写 API 校验 overlap_seconds >= chunk_seconds 时返回 400（对齐 workflow 校验）。"""
+        import io
+
+        resp = self.client.post(
+            "/v1/audio/transcriptions",
+            files={"file": ("demo.wav", io.BytesIO(b"\x00" * 4096), "audio/wav")},
+            data={"model": "sensevoice", "chunk_enabled": "true", "chunk_seconds": "30", "overlap_seconds": "30"},
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("重叠秒数必须小于每块秒数", resp.json()["detail"])
 
 
 if __name__ == "__main__":

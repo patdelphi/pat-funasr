@@ -1,4 +1,4 @@
-﻿"""
+"""
 程序说明：
 批量转写执行器（供 "run_test_all_models.ps1" 调用）。
 
@@ -47,10 +47,10 @@ def clean_text(text: str) -> str:
 
 
 def ensure_wav_16k_mono(src: Path, dst_wav: Path, log_path: Path) -> Path:
-    if src.suffix.lower() == ".wav" and dst_wav.exists():
+    # 已有转码缓存则直接复用；否则一律经 ffmpeg 转成 16k 单声道 wav
+    # （源文件即使扩展名是 .wav 也可能不是 16k/mono，统一转码保证识别质量）
+    if dst_wav.exists():
         return dst_wav
-    if src.suffix.lower() == ".wav":
-        return src
 
     cmd = [
         "ffmpeg",
@@ -145,7 +145,14 @@ def main() -> int:
 
             log_line(log_path, f"[{now()}] input={str(src)}")
 
-            wav_cache = out_dir / f"{src.stem}.wav"
+            # 用相对 repo 的路径作为输出名，保留目录层级，避免不同目录同名文件互相覆盖
+            try:
+                rel = src.resolve().relative_to(repo.resolve())
+                out_stem = Path(*rel.parts).with_suffix("")
+            except ValueError:
+                out_stem = Path(src.stem)
+
+            wav_cache = out_dir / f"{out_stem}.wav"
             wav = ensure_wav_16k_mono(src, wav_cache, log_path)
             dur = segmentation.ffprobe_duration_s(str(wav))
 
@@ -167,6 +174,9 @@ def main() -> int:
                     res = model.generate(**generate_kwargs)
                 else:
                     raise
+            if not res:
+                log_line(log_path, f"[{now()}] skip (empty result): {src}")
+                continue
             text = clean_text(res[0].get("text", ""))
             segments = segmentation.build_segments(result0=res[0], duration_s=float(dur or 0.0), clean_text=clean_text)
             if not segments:
@@ -183,7 +193,8 @@ def main() -> int:
                 },
             )
 
-            base = out_dir / f"{src.stem}"
+            base = out_dir / out_stem
+            base.parent.mkdir(parents=True, exist_ok=True)
             base.with_suffix(".txt").write_text(renderers.render_txt(segments), encoding="utf-8")
             base.with_suffix(".tsv").write_text(renderers.render_tsv(segments), encoding="utf-8")
             base.with_suffix(".srt").write_text(renderers.render_srt(segments), encoding="utf-8")

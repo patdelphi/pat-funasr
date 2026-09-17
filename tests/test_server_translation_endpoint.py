@@ -146,5 +146,76 @@ class TestServerTranslationEndpoint(unittest.TestCase):
         self.assertEqual(data["translated_text"], "[deu_Latn->spa_Latn]: Hello")
 
 
+class TestTranslationLoadsFromLocalCache(unittest.TestCase):
+    """验证 translation 分支从本地缓存（model_path）加载，而非原始模型 ID。
+
+    回归：修复前 `model_dir = model_id` 忽略了 _resolve_runtime_models_to_local
+    写入的 model_path，导致 transformers 尝试联网下载而 500。
+    """
+
+    def setUp(self):
+        self.server = _load_server_module()
+        self.server.MODEL_REGISTRY.clear()
+        self.server._MODEL_LAST_USED.clear()
+        self.server.MODEL_LOAD_STATUS.clear()
+        self.server.MODEL_LOAD_ERRORS.clear()
+
+    def tearDown(self):
+        self.server.MODEL_REGISTRY.clear()
+        self.server._MODEL_LAST_USED.clear()
+        self.server.MODEL_LOAD_STATUS.clear()
+        self.server.MODEL_LOAD_ERRORS.clear()
+        for key in list(self.server.MODEL_LOAD_EVENTS):
+            self.server.MODEL_LOAD_EVENTS.pop(key, None)
+
+    def test_translation_branch_uses_resolved_local_path(self):
+        from unittest import mock
+
+        calls = []
+
+        class _FakeModel:
+            pass
+
+        def fake_tokenizer_from_pretrained(path, *args, **kwargs):
+            calls.append(("tokenizer", str(path)))
+
+            class _Tok:
+                src_lang = "zho_Hans"
+
+                def convert_tokens_to_ids(self, token):
+                    return 1
+
+                def __call__(self, text, **kwargs):
+                    return {"input_ids": [[1, 2]], "attention_mask": [[1, 1]]}
+
+                def batch_decode(self, outputs, **kwargs):
+                    return ["hello"]
+
+            return _Tok()
+
+        def fake_model_from_pretrained(path, *args, **kwargs):
+            calls.append(("model", str(path)))
+            return _FakeModel()
+
+        with mock.patch(
+            "transformers.AutoTokenizer.from_pretrained",
+            side_effect=fake_tokenizer_from_pretrained,
+        ), mock.patch(
+            "transformers.AutoModelForSeq2SeqLM.from_pretrained",
+            side_effect=fake_model_from_pretrained,
+        ):
+            model = self.server.load_model("nllb-200-distilled-600m")
+
+        # 两次 from_pretrained 都必须拿到本地缓存绝对路径，而非原始模型 ID
+        self.assertEqual(len(calls), 2)
+        for kind, path in calls:
+            self.assertIn(".cache", path, msg=f"{kind} 未使用本地缓存路径: {path}")
+            self.assertFalse(
+                path.startswith("facebook/nllb"),
+                msg=f"{kind} 仍使用原始模型 ID: {path}",
+            )
+        self.assertTrue(hasattr(model, "translate"))
+
+
 if __name__ == "__main__":
     unittest.main()

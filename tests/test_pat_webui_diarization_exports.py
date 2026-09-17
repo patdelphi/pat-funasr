@@ -16,16 +16,31 @@ import numpy as np
 import os
 import sys
 import tempfile
+import types
 import unittest
 import zipfile
 from pathlib import Path
+from unittest import mock
 
 # 固定 artifact_service._make_timestamp 输出，确保产物名可预测
 _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT / "app"))
 sys.path.insert(0, str(_ROOT / "app" / "openai_api"))
 import artifact_service as _artifact_service  # noqa: E402
-_artifact_service._TEST_TS = "20260903_180245"
+
+
+def setUpModule():
+    """固定 artifact_service._make_timestamp 输出，确保产物名可预测。
+
+    放在 setUpModule 而非模块级：pytest 先收集全部文件的模块级代码再逐文件运行，
+    模块级赋值会被其他文件的 tearDownModule 提前清空。
+    """
+    _artifact_service._TEST_TS = "20260903_180245"
+
+
+def tearDownModule():
+    """恢复 _TEST_TS 全局后门，避免污染其他测试的时间戳命名。"""
+    _artifact_service._TEST_TS = None
 
 if hasattr(asyncio, "WindowsSelectorEventLoopPolicy"):
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
@@ -213,30 +228,6 @@ class TestPatWebUiDiarizationExports(unittest.TestCase):
         self.assertIn("ui-1", content)
         self.assertIn("ui-2", content)
 
-    def test_read_runtime_logs_ui_initializes_tick_counter(self):
-        temp_root = Path(tempfile.mkdtemp(prefix="pat-funasr-log-ui-test-"))
-        ui_log = temp_root / "funasr-ui.log"
-        ui_log.write_text("ui-line-1\nui-line-2\n", encoding="utf-8")
-
-        original_project_root = gradio_app.PROJECT_ROOT
-        had_counter = hasattr(gradio_app, "_RUNTIME_LOG_TICK_COUNTER")
-        original_counter = getattr(gradio_app, "_RUNTIME_LOG_TICK_COUNTER", None)
-        try:
-            gradio_app.PROJECT_ROOT = temp_root
-            if hasattr(gradio_app, "_RUNTIME_LOG_TICK_COUNTER"):
-                delattr(gradio_app, "_RUNTIME_LOG_TICK_COUNTER")
-            content = gradio_app.read_runtime_logs_ui(10, 64, 2000)
-            counter_value = getattr(gradio_app, "_RUNTIME_LOG_TICK_COUNTER", None)
-        finally:
-            gradio_app.PROJECT_ROOT = original_project_root
-            if had_counter:
-                gradio_app._RUNTIME_LOG_TICK_COUNTER = original_counter
-            elif hasattr(gradio_app, "_RUNTIME_LOG_TICK_COUNTER"):
-                delattr(gradio_app, "_RUNTIME_LOG_TICK_COUNTER")
-
-        self.assertIn("ui-line-1", content)
-        self.assertEqual(counter_value, 1)
-
     def test_build_diarization_export_files(self):
         payload = {
             "model": "paraformer",
@@ -278,6 +269,67 @@ class TestPatWebUiDiarizationExports(unittest.TestCase):
             )
             self.assertIn("[spk=0] 你好", zf.read(f"transcript_{_artifact_service._TEST_TS}.txt").decode("utf-8-sig"))
 
+    def test_build_speaker_audio_slices_groups_by_speaker(self):
+        """同一说话人多段应拼成一个 mp3（ffmpeg atrim+concat），不同说话人分开。"""
+        calls = []
+
+        def fake_run(cmd, capture_output=True, text=True, timeout=600):
+            calls.append(cmd)
+            out = Path(cmd[-1])
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_bytes(b"fake-mp3")
+            return types.SimpleNamespace(returncode=0, stderr="")
+
+        segments = [
+            {"start": 0.0, "end": 3.2, "text": "你好", "speaker": 0},
+            {"start": 4.0, "end": 7.5, "text": "欢迎", "speaker": 0},
+            {"start": 8.0, "end": 10.0, "text": "再见", "speaker": 1},
+            {"start": 10.0, "end": 9.0, "text": "无效段", "speaker": 1},  # end<=start 应跳过
+            {"start": 0.0, "end": 1.0, "text": "无说话人", "speaker": None},
+        ]
+        with mock.patch.object(gradio_app.subprocess, "run", side_effect=fake_run):
+            slices = gradio_app.build_speaker_audio_slices(
+                "demo.wav", segments, timestamp="20260903_180245"
+            )
+
+        self.assertEqual(set(slices.keys()), {"0", "1"})
+        self.assertEqual(len(calls), 2)
+        spk0_cmd = " ".join(next(c for c in calls if "spk_0_20260903_180245.mp3" in c[-1]))
+        self.assertIn("atrim=0.000:3.200", spk0_cmd)
+        self.assertIn("atrim=4.000:7.500", spk0_cmd)
+        self.assertIn("concat=n=2:v=0:a=1[out]", spk0_cmd)
+        self.assertTrue(Path(slices["0"]).exists())
+        self.assertTrue(Path(slices["1"]).exists())
+
+    def test_diarization_exports_appends_speaker_slices_with_audio_path(self):
+        """提供 audio_path 时 ZIP 应追加 speakers/spk_*.mp3；不提供时保持原 5 件套。"""
+        payload = {
+            "model": "paraformer",
+            "text": "你好 欢迎光临",
+            "segments": [
+                {"start": 0.0, "end": 1.2, "text": "你好", "speaker": 0},
+                {"start": 1.2, "end": 2.8, "text": "欢迎光临", "speaker": 1},
+            ],
+        }
+
+        def fake_run(cmd, capture_output=True, text=True, timeout=600):
+            out = Path(cmd[-1])
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_bytes(b"fake-mp3")
+            return types.SimpleNamespace(returncode=0, stderr="")
+
+        with mock.patch.object(gradio_app.subprocess, "run", side_effect=fake_run):
+            exports = gradio_app.build_diarization_export_files(payload, audio_path="demo.wav")
+
+        with zipfile.ZipFile(Path(exports["all"])) as zf:
+            names = set(zf.namelist())
+        self.assertTrue(
+            any(name.startswith("speakers/spk_") and name.endswith(".mp3") for name in names),
+            msg=f"ZIP 缺少说话人切片，实际: {sorted(names)}",
+        )
+        # 原 5 件套仍在
+        self.assertTrue(any(name.startswith("transcript_") and name.endswith(".json") for name in names))
+
     def test_build_transcription_export_files(self):
         payload = {
             "text": "你好，欢迎光临。",
@@ -307,11 +359,13 @@ class TestPatWebUiDiarizationExports(unittest.TestCase):
             "language": "zh",
         }
         original_request_transcription_payload = gradio_app.request_transcription_payload
+        tmp_wav = Path(tempfile.mkdtemp(prefix="pat-funasr-preview-")) / "demo.wav"
+        tmp_wav.write_bytes(b"\x00" * 1024)
         try:
             gradio_app.request_transcription_payload = lambda **_kwargs: payload
             preview_text, preview_state_json, *_downloads = gradio_app.transcribe_audio_with_exports(
                 base_url="http://127.0.0.1:8000",
-                audio_path=r"y:\NewStore\AI\FunASR-Portable-GPU\test\demo.wav",
+                audio_path=str(tmp_wav),
                 model="paraformer",
                 response_format="txt",
                 timeout=0,
@@ -540,12 +594,14 @@ class TestPatWebUiDiarizationExports(unittest.TestCase):
         self.assertIn('"speakers": [', preview_json)
 
     def test_update_media_preview_for_audio(self):
+        tmp_wav = Path(tempfile.mkdtemp(prefix="pat-funasr-preview-")) / "demo.wav"
+        tmp_wav.write_bytes(b"\x00" * 1024)
         video_update, audio_update, status = gradio_app.update_media_preview(
-            r"y:\NewStore\AI\FunASR-Portable-GPU\test\demo.wav"
+            str(tmp_wav)
         )
         self.assertEqual(video_update["visible"], False)
         self.assertEqual(audio_update["visible"], True)
-        self.assertEqual(audio_update["value"], r"y:\NewStore\AI\FunASR-Portable-GPU\test\demo.wav")
+        self.assertEqual(audio_update["value"], str(tmp_wav))
         self.assertIn("已加载音频", status)
 
     def test_format_streaming_preview_text_keeps_single_paragraph(self):

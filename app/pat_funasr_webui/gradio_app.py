@@ -182,139 +182,6 @@ def build_payload_preview(payload: dict, *, max_segments: int = 12) -> dict:
     return preview
 
 
-# #region debug-point A:debug-report
-def _dbg_report(
-    *,
-    hypothesis_id: str,
-    msg: str,
-    location: str,
-    data: dict | None = None,
-    trace_id: str | None = None,
-    run_id: str = "pre-fix",
-) -> None:
-    try:
-        env_path = PROJECT_ROOT / ".dbg" / "gradio-page-hung.env"
-        url = "http://127.0.0.1:7777/event"
-        session_id = "gradio-page-hung"
-        try:
-            content = env_path.read_text(encoding="utf-8", errors="replace")
-            for line in content.splitlines():
-                if line.startswith("DEBUG_SERVER_URL="):
-                    url = line.split("=", 1)[1].strip() or url
-                elif line.startswith("DEBUG_SESSION_ID="):
-                    session_id = line.split("=", 1)[1].strip() or session_id
-        except Exception:
-            pass
-        payload = {
-            "sessionId": session_id,
-            "runId": run_id,
-            "hypothesisId": hypothesis_id,
-            "location": location,
-            "msg": f"[DEBUG] {msg}",
-            "data": data or {},
-            "traceId": trace_id,
-            "ts": int(time.time() * 1000),
-        }
-        req = urllib.request.Request(
-            url,
-            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        urllib.request.urlopen(req, timeout=2).read()
-    except Exception:
-        return
-
-
-# #endregion
-
-
-# #region debug-point E:browser-instrumentation
-def _dbg_get_server_config() -> tuple[str, str]:
-    env_path = PROJECT_ROOT / ".dbg" / "gradio-page-hung.env"
-    url = "http://127.0.0.1:7777/event"
-    session_id = "gradio-page-hung"
-    try:
-        content = env_path.read_text(encoding="utf-8", errors="replace")
-        for line in content.splitlines():
-            if line.startswith("DEBUG_SERVER_URL="):
-                url = line.split("=", 1)[1].strip() or url
-            elif line.startswith("DEBUG_SESSION_ID="):
-                session_id = line.split("=", 1)[1].strip() or session_id
-    except Exception:
-        pass
-    return url, session_id
-
-
-def _dbg_browser_instrumentation_html() -> str:
-    url, session_id = _dbg_get_server_config()
-    payload_url = json.dumps(url, ensure_ascii=False)
-    payload_session = json.dumps(session_id, ensure_ascii=False)
-    return f"""
-<script>
-(() => {{
-  const DEBUG_URL = {payload_url};
-  const SESSION_ID = {payload_session};
-  const RUN_ID = "pre-fix";
-  const LOCATION = "browser";
-  const send = (hypothesisId, msg, data) => {{
-    try {{
-      fetch(DEBUG_URL, {{
-        method: "POST",
-        headers: {{ "Content-Type": "application/json" }},
-        body: JSON.stringify({{
-          sessionId: SESSION_ID,
-          runId: RUN_ID,
-          hypothesisId,
-          location: LOCATION,
-          msg: "[DEBUG] " + msg,
-          data: data || {{}},
-          ts: Date.now(),
-        }}),
-        keepalive: true,
-      }});
-    }} catch (e) {{}}
-  }};
-  window.addEventListener("error", (ev) => {{
-    send("E", "window_error", {{
-      message: ev && ev.message,
-      filename: ev && ev.filename,
-      lineno: ev && ev.lineno,
-      colno: ev && ev.colno,
-    }});
-  }});
-  window.addEventListener("unhandledrejection", (ev) => {{
-    send("E", "unhandledrejection", {{
-      reason: String(ev && ev.reason),
-    }});
-  }});
-  const origFetch = window.fetch;
-  window.fetch = function(input, init) {{
-    const url = (typeof input === "string") ? input : (input && input.url) || "";
-    const t0 = performance.now();
-    return origFetch.apply(this, arguments).then((resp) => {{
-      const ms = Math.round(performance.now() - t0);
-      if (url.includes("/gradio_api/queue/")) {{
-        send("F", "fetch_ok", {{ url, status: resp.status, ms }});
-      }}
-      return resp;
-    }}).catch((err) => {{
-      const ms = Math.round(performance.now() - t0);
-      if (url.includes("/gradio_api/queue/")) {{
-        send("F", "fetch_err", {{ url, err: String(err), ms }});
-      }}
-      throw err;
-    }});
-  }};
-  send("E", "client_instrumentation_ready", {{}});
-}})();
-</script>
-""".strip()
-
-
-# #endregion
-
-
 APP_CSS = """
 .pat-media-preview {
   max-width: 100%;
@@ -474,44 +341,12 @@ def read_runtime_logs(
 
 
 def read_runtime_logs_ui(max_lines: int, max_bytes_kb: int, max_section_chars: int) -> str:
-    # #region debug-point B:runtime-logs
-    global _RUNTIME_LOG_TICK_COUNTER
-    _RUNTIME_LOG_TICK_COUNTER = int(globals().get("_RUNTIME_LOG_TICK_COUNTER", 0)) + 1
-    # #endregion
     text = read_runtime_logs(
         max_lines=int(max_lines),
         max_bytes=int(max_bytes_kb) * 1024,
         max_section_chars=int(max_section_chars),
     )
-    # #region debug-point B:runtime-logs-report
-    try:
-        if _RUNTIME_LOG_TICK_COUNTER % 10 == 1:
-            _dbg_report(
-                hypothesis_id="B",
-                msg="runtime_logs_tick",
-                location="pat_funasr_webui/gradio_app.py:read_runtime_logs_ui",
-                data={
-                    "max_lines": int(max_lines),
-                    "max_kb": int(max_bytes_kb),
-                    "max_section_chars": int(max_section_chars),
-                    "len": len(text),
-                    "tick": int(_RUNTIME_LOG_TICK_COUNTER),
-                },
-            )
-    except Exception:
-        pass
-    # #endregion
     return text
-
-
-def read_runtime_logs_ui_guard(enabled: bool, max_lines: int, max_bytes_kb: int, max_section_chars: int):
-    if not enabled:
-        try:
-            import gradio as gr
-        except Exception:
-            return None
-        return gr.update()
-    return read_runtime_logs_ui(max_lines, max_bytes_kb, max_section_chars)
 
 
 def build_preview_file_state(exports: dict[str, str]) -> str:
@@ -1146,42 +981,6 @@ def toggle_system_microphone_stream(
     return new_id, "系统麦克风录制已启动，正在等待音频帧...", gr.update(value="停止录制并识别", variant="stop")
 
 
-def start_system_microphone_stream(
-    base_url: str,
-    model: str,
-    timeout: float,
-    device_value: str | None,
-    chunk_size: str,
-    encoder_chunk_look_back: int,
-    decoder_chunk_look_back: int,
-) -> tuple[str, str]:
-    """由 Gradio 原生麦克风控件开始录制事件触发系统麦克风识别。"""
-    session_id, status, _button_update = toggle_system_microphone_stream(
-        "",
-        base_url,
-        model,
-        timeout,
-        device_value,
-        chunk_size,
-        encoder_chunk_look_back,
-        decoder_chunk_look_back,
-    )
-    return session_id, status
-
-
-def stop_system_microphone_stream(session_id: str | None) -> tuple[str, str]:
-    """由 Gradio 原生麦克风控件停止录制事件触发系统麦克风停止。"""
-    current_id = str(session_id or "")
-    if not current_id:
-        return "", "系统麦克风录制已停止。"
-    with SYSTEM_MIC_STREAMS_LOCK:
-        session = SYSTEM_MIC_STREAMS.get(current_id)
-        stop_event = session.get("stop_event") if session else None
-    if stop_event is not None:
-        stop_event.set()
-    return current_id, "正在停止系统麦克风录制..."
-
-
 def poll_system_microphone_stream(session_id: str | None):
     """轮询后台系统麦克风识别状态并刷新前台。"""
     import gradio as gr
@@ -1707,6 +1506,34 @@ def safe_build_runtime_panels(base_url: str, timeout: float) -> tuple[str, str]:
         return f"### 运行资源\n\n加载失败：{error}", f"### 任务队列\n\n加载失败：{error}"
 
 
+def build_fuse_state_panel(base_url: str, timeout: float) -> str:
+    """渲染 LLM 熔断状态面板（5b），读取 /v1/funasr/llm/fuse-state 只读快照。"""
+    base_url = base_url.rstrip("/")
+    payload = request_json(f"{base_url}/v1/funasr/llm/fuse-state", timeout)
+    fuse_state = payload.get("fuse_state") or {}
+    if not fuse_state:
+        return "### LLM 熔断状态\n\n无熔断记录，所有 LLM 端点正常。"
+    lines = ["### LLM 熔断状态"]
+    for entry in fuse_state.values():
+        status = "熔断中" if entry.get("active") else "正常"
+        lines.append(
+            f"- **{entry.get('model', '')}** @ {entry.get('base_url', '')}：{status}"
+            f" | 连续失败 {entry.get('fail_streak', 0)} 次"
+        )
+        if entry.get("active"):
+            lines.append(
+                f"  - 剩余 {entry.get('remaining_seconds', 0)}s，原因：{entry.get('last_reason', '')}"
+            )
+    return "\n".join(lines)
+
+
+def safe_build_fuse_state_panel(base_url: str, timeout: float) -> str:
+    try:
+        return build_fuse_state_panel(base_url, timeout)
+    except Exception as error:
+        return f"### LLM 熔断状态\n\n加载失败：{error}"
+
+
 def build_service_dashboard_snapshot(base_url: str, timeout: float, capability_filter: str) -> tuple[str, str, str, str, str]:
     """生成服务页自动刷新所需的轻量快照。"""
     base_url = base_url.rstrip("/")
@@ -1854,33 +1681,6 @@ def _safe_transcribe_core(
     disable_pbar: str | bool | None,
 ) -> tuple[str, str, str | None, str | None, str | None, str | None, str | None, str | None]:
     """实际执行离线识别的核心函数（被 safe_transcribe_with_exports generator 包一层）。"""
-    # #region debug-point A:offline-entry
-    trace_id = uuid.uuid4().hex
-    t0 = time.monotonic()
-    try:
-        file_size = ""
-        is_video = False
-        if audio_path:
-            p = Path(audio_path)
-            if p.exists():
-                file_size = p.stat().st_size
-                is_video = is_video_file(p)
-        _dbg_report(
-            hypothesis_id="A",
-            msg="offline_transcribe_enter",
-            location="pat_funasr_webui/gradio_app.py:safe_transcribe_with_exports",
-            trace_id=trace_id,
-            data={
-                "model": model,
-                "preview_format": preview_format,
-                "file": str(Path(audio_path).name) if audio_path else "",
-                "size": file_size,
-                "is_video": bool(is_video),
-            },
-        )
-    except Exception:
-        pass
-    # #endregion
     try:
         result = transcribe_audio_with_exports(
             base_url=base_url,
@@ -1906,61 +1706,11 @@ def _safe_transcribe_core(
             log_level=log_level,
             disable_pbar=disable_pbar,
         )
-        # #region debug-point A:offline-exit
-        try:
-            preview_text, raw_json = result[0], result[1]
-            _dbg_report(
-                hypothesis_id="A",
-                msg="offline_transcribe_exit",
-                location="pat_funasr_webui/gradio_app.py:safe_transcribe_with_exports",
-                trace_id=trace_id,
-                data={
-                    "elapsed_s": round(time.monotonic() - t0, 3),
-                    "preview_len": len(preview_text or ""),
-                    "raw_json_len": len(raw_json or ""),
-                    "download_zip": result[-1] or "",
-                },
-            )
-        except Exception:
-            pass
-        # #endregion
         return result
     except urllib.error.HTTPError as error:
         detail = error.read().decode("utf-8", errors="replace")
-        # #region debug-point A:offline-http-error
-        try:
-            _dbg_report(
-                hypothesis_id="A",
-                msg="offline_transcribe_http_error",
-                location="pat_funasr_webui/gradio_app.py:safe_transcribe_with_exports",
-                trace_id=trace_id,
-                data={
-                    "elapsed_s": round(time.monotonic() - t0, 3),
-                    "code": getattr(error, "code", ""),
-                    "url": getattr(error, "url", ""),
-                    "detail_len": len(detail or ""),
-                },
-            )
-        except Exception:
-            pass
-        # #endregion
         return "", f"HTTP {error.code} from {error.url}: {detail}", None, None, None, None, None, None
     except Exception as error:
-        # #region debug-point A:offline-exception
-        try:
-            _dbg_report(
-                hypothesis_id="A",
-                msg="offline_transcribe_exception",
-                location="pat_funasr_webui/gradio_app.py:safe_transcribe_with_exports",
-                trace_id=trace_id,
-                data={
-                    "elapsed_s": round(time.monotonic() - t0, 3),
-                    "error": str(error),
-                },
-            )
-        except Exception:
-            pass
-        # #endregion
         return "", f"Transcription failed: {error}", None, None, None, None, None, None
 
 
@@ -2217,8 +1967,77 @@ def summarize_diarization_payload(payload: dict) -> str:
     return "\n".join(summary_lines)
 
 
-def build_diarization_export_files(payload: dict) -> dict[str, str]:
-    """基于 diarization JSON 生成多格式导出文件，供前端直接下载。"""
+def build_speaker_audio_slices(
+    audio_path: str,
+    segments: list[dict],
+    timestamp: str | None = None,
+) -> dict[str, str]:
+    """按说话人从原音频切出音频切片（5c）。
+
+    同一说话人的多段（start,end）用 ffmpeg atrim + concat 拼成一个 mp3，
+    返回 {spk: mp3_path}；切分失败的说话人跳过并记 warning。
+    """
+    speakers: dict[str, list[tuple[float, float]]] = {}
+    for seg in segments:
+        if not isinstance(seg, dict):
+            continue
+        spk = seg.get("speaker")
+        if spk is None:
+            continue
+        try:
+            start = float(seg.get("start") or 0)
+            end = float(seg.get("end") or 0)
+        except (TypeError, ValueError):
+            continue
+        if end <= start:
+            continue
+        speakers.setdefault(str(spk), []).append((start, end))
+
+    ts = timestamp or _artifact_service._make_timestamp()
+    outputs: dict[str, str] = {}
+    for spk in sorted(speakers):
+        spans = speakers[spk]
+        filters: list[str] = []
+        concat_inputs: list[str] = []
+        for index, (start, end) in enumerate(spans):
+            filters.append(
+                f"[0:a]atrim={start:.3f}:{end:.3f},asetpts=PTS-STARTPTS[a{index}]"
+            )
+            concat_inputs.append(f"[a{index}]")
+        filter_complex = ";".join(filters) + (
+            f";{''.join(concat_inputs)}concat=n={len(spans)}:v=0:a=1[out]"
+        )
+        out_path = (
+            Path(tempfile.gettempdir())
+            / f"pat-funasr-slices-{uuid.uuid4().hex}"
+            / f"spk_{spk}_{ts}.mp3"
+        )
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        cmd = [
+            "ffmpeg", "-y", "-v", "error",
+            "-i", audio_path,
+            "-filter_complex", filter_complex,
+            "-map", "[out]",
+            "-ac", "1",
+            str(out_path),
+        ]
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        except Exception as exc:
+            logger.warning("说话人切片失败 spk=%s: %s", spk, exc)
+            continue
+        if result.returncode == 0 and out_path.is_file() and out_path.stat().st_size > 0:
+            outputs[spk] = str(out_path)
+        else:
+            logger.warning("说话人切片失败 spk=%s: %s", spk, result.stderr[:500])
+    return outputs
+
+
+def build_diarization_export_files(payload: dict, audio_path: str | None = None) -> dict[str, str]:
+    """基于 diarization JSON 生成多格式导出文件，供前端直接下载。
+
+    audio_path 提供时额外把按说话人切分的音频切片(mp3)追加进 ZIP 的 speakers/ 目录。
+    """
     segments = payload.get("segments")
     if not isinstance(segments, list):
         segments = []
@@ -2260,6 +2079,13 @@ def build_diarization_export_files(payload: dict) -> dict[str, str]:
         / f"pat-funasr-diarization-{uuid.uuid4().hex}-diarization_{ts}.zip"
     )
     archive_path.write_bytes(archive_bytes)
+    # 5c：提供原音频时追加说话人切片（不改变未提供时的 ZIP 内容）
+    if audio_path:
+        slices = build_speaker_audio_slices(audio_path, segments, timestamp=ts)
+        if slices:
+            with zipfile.ZipFile(archive_path, "a", compression=zipfile.ZIP_DEFLATED) as zf:
+                for spk, slice_path in slices.items():
+                    zf.writestr(f"speakers/spk_{spk}_{ts}.mp3", Path(slice_path).read_bytes())
     exports["all"] = str(archive_path)
     return exports
 
@@ -2284,7 +2110,7 @@ def recognize_diarization_with_exports(
         preset_spk_num=preset_spk_num,
         timeout=timeout,
     )
-    exports = build_diarization_export_files(payload)
+    exports = build_diarization_export_files(payload, audio_path=audio_path)
     return (
         summarize_diarization_payload(payload),
         render_diarization_preview(payload, preview_format),
@@ -2296,34 +2122,6 @@ def recognize_diarization_with_exports(
         exports.get("tsv"),
         exports.get("all"),
     )
-
-
-def safe_recognize_diarization(
-    base_url: str,
-    audio_path: str | None,
-    model: str,
-    spk_model: str,
-    spk_mode: str,
-    preset_spk_num: int | None,
-    timeout: float,
-) -> tuple[str, str]:
-    """安全调用说话人分离接口。"""
-    try:
-        return recognize_diarization(
-            base_url=base_url,
-            audio_path=audio_path,
-            model=model,
-            spk_model=spk_model,
-            spk_mode=spk_mode,
-            preset_spk_num=preset_spk_num,
-            timeout=timeout,
-        )
-    except urllib.error.HTTPError as error:
-        detail = error.read().decode("utf-8", errors="replace")
-        message = f"HTTP {error.code} from {error.url}: {detail}"
-        return "", message
-    except Exception as error:
-        return "", f"Diarization failed: {error}"
 
 
 def safe_recognize_diarization_with_exports(
@@ -2469,16 +2267,6 @@ def safe_export_translation_file(
     except Exception as e:
         logger.error(f"导出翻译文件失败: {e}")
         raise gr.Error(f"导出文件失败: {e}")
-
-
-def safe_check(base_url: str, timeout: float) -> str:
-    try:
-        return check_service(base_url, timeout)
-    except urllib.error.HTTPError as error:
-        detail = error.read().decode("utf-8", errors="replace")
-        return f"HTTP {error.code} from {error.url}: {detail}"
-    except Exception as error:
-        return f"Service check failed: {error}"
 
 
 def safe_check_with_capabilities(base_url: str, timeout: float, capability_filter: str) -> tuple[str, str, str, str]:
@@ -3041,31 +2829,6 @@ def update_media_preview(file_path: str | None):
     )
 
 
-def build_reserved_feature_tab(
-    gr,
-    *,
-    title: str,
-    description: str,
-    planned_inputs: list[str],
-    planned_outputs: list[str],
-):
-    """构建后续功能的预留页骨架，便于后面直接挂真实能力。"""
-    gr.Markdown(f"### {title}")
-    gr.Markdown(description, elem_classes=["pat-placeholder-box"])
-    with gr.Row():
-        with gr.Column():
-            gr.Markdown("**计划输入参数**")
-            for item in planned_inputs:
-                gr.Textbox(label=item, placeholder="预留中", interactive=False)
-        with gr.Column():
-            gr.Markdown("**计划输出结果**")
-            for item in planned_outputs:
-                gr.Textbox(label=item, placeholder="预留中", interactive=False)
-    with gr.Row():
-        gr.Button("预留执行入口", interactive=False, variant="primary")
-        gr.Button("预留下载入口", interactive=False, variant="secondary")
-
-
 def refresh_model_dropdown(base_url: str, timeout: float):
     """刷新模型下拉框，并同步返回状态文本。"""
     try:
@@ -3174,6 +2937,17 @@ def initialize_service_dashboard(base_url: str, timeout: float, capability_filte
     )
 
 
+def _simple_status(file_path, action_label: str) -> str:
+    """文件选择后的状态提示：显示文件名与大小；无效输入回退为等待提示。"""
+    try:
+        if file_path and Path(file_path).exists():
+            size_mb = Path(file_path).stat().st_size / (1024 * 1024)
+            return f"✅ {action_label}：{Path(file_path).name}（{size_mb:.1f} MB）"
+    except OSError:
+        pass
+    return "等待上传音频文件..."
+
+
 def update_emotion_granularity_options(model: str):
     """按情感模型约束 granularity 选项，避免无效请求。"""
     try:
@@ -3225,8 +2999,6 @@ def build_app(default_base_url: str, default_timeout: float):
     initial_capability_markdown = "### 模型能力看板\n\n点击“检查服务”加载。"
     initial_target_markdown = "### 使用建议\n\n点击“检查服务”加载。"
     initial_runtime_logs = read_runtime_logs(max_lines=120, max_bytes=256 * 1024, max_section_chars=8000)
-
-    fetched_model_choices = fetch_model_choices(default_base_url, default_timeout)
 
     with gr.Blocks(title="Pat-FunASR 语音识别") as demo:
         gr.Markdown("# Pat-FunASR WebUI")
@@ -3645,7 +3417,7 @@ def build_app(default_base_url: str, default_timeout: float):
                                         ft_emotion_granularity = gr.Radio(label="情感粒度", choices=["utterance", "frame"], value="utterance")
                                     ft_export_formats = gr.CheckboxGroup(
                                         label="导出格式",
-                                        choices=["json", "txt", "srt", "vtt", "tsv", "all"],
+                                        choices=["json", "txt", "srt", "vtt", "tsv", "csv", "docx", "all"],
                                         value=["json", "txt", "srt", "vtt", "tsv"],
                                     )
                                     with gr.Row():
@@ -4362,7 +4134,9 @@ def build_app(default_base_url: str, default_timeout: float):
                         with gr.Row():
                             system_mic_device = gr.Dropdown(
                                 label="系统输入设备",
-                                choices=list_system_microphone_device_choices(),
+                                # 麦克风枚举懒加载：构建期只保留系统默认项，不扫描设备，
+                                # 点“刷新输入设备”时才枚举，避免慢机器初始化延迟
+                                choices=[("系统默认输入设备", SYSTEM_MIC_DEFAULT_DEVICE_VALUE)],
                                 value=SYSTEM_MIC_DEFAULT_DEVICE_VALUE,
                             )
                             system_mic_refresh_button = gr.Button("刷新输入设备", variant="secondary")
@@ -4373,7 +4147,6 @@ def build_app(default_base_url: str, default_timeout: float):
                         mic_download_button = gr.Button("生成 Mic 结果下载", variant="secondary")
                         mic_download = gr.File(label="Mic 下载结果", visible=True)
                         system_mic_poll_timer = gr.Timer(value=0.6)
-                stream_state = gr.State({})
                 stream_mic_session = gr.State("")
 
 
@@ -4624,6 +4397,7 @@ def build_app(default_base_url: str, default_timeout: float):
                     with gr.Tab("运行资源", render_children=False) as service_resources_tab:
                         refresh_runtime_button = gr.Button("刷新运行资源", variant="secondary")
                         runtime_resources = gr.Markdown("### 运行资源\n\n点击“刷新运行资源”加载。")
+                        fuse_state_panel = gr.Markdown("### LLM 熔断状态\n\n点击“刷新运行资源”加载。")
                         service_raw_json = gr.Textbox(label="服务 / 资源原始状态", lines=10, max_lines=20)
 
                     with gr.Tab("任务队列", render_children=False) as service_workflows_tab:
@@ -4664,15 +4438,30 @@ def build_app(default_base_url: str, default_timeout: float):
             inputs=[base_url, timeout],
             outputs=[runtime_resources, workflow_queue_panel],
         )
+        check_button.click(
+            fn=safe_build_fuse_state_panel,
+            inputs=[base_url, timeout],
+            outputs=[fuse_state_panel],
+        )
         refresh_runtime_button.click(
             fn=safe_build_runtime_panels,
             inputs=[base_url, timeout],
             outputs=[runtime_resources, workflow_queue_panel],
         )
+        refresh_runtime_button.click(
+            fn=safe_build_fuse_state_panel,
+            inputs=[base_url, timeout],
+            outputs=[fuse_state_panel],
+        )
         refresh_workflow_queue_button.click(
             fn=safe_build_runtime_panels,
             inputs=[base_url, timeout],
             outputs=[runtime_resources, workflow_queue_panel],
+        )
+        refresh_workflow_queue_button.click(
+            fn=safe_build_fuse_state_panel,
+            inputs=[base_url, timeout],
+            outputs=[fuse_state_panel],
         )
         capability_filter.change(
             fn=safe_render_capabilities,

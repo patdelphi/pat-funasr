@@ -1,4 +1,4 @@
-﻿<#
+<#
 程序说明：
 批量测试脚本：将 "test\" 目录下的音视频文件，分别用每种 ASR 模型跑一遍，
 每种模型创建一个输出目录（目录名=模型名），并把 txt/srt/vtt/tsv/json/zip 输出写入对应目录。
@@ -48,6 +48,9 @@ if (-not $Inputs) {
   throw "目录中未找到音视频文件：""$TestDir"""
 }
 
+# 单模型超时上限（秒）：模型加载 + 全部文件转写，超时强制终止进程
+$TimeoutSec = 1800
+
 foreach ($Model in $Models) {
   $OutDir = Join-Path $TestDir $Model
   New-Item -ItemType Directory -Force -Path "$OutDir" | Out-Null
@@ -66,8 +69,21 @@ foreach ($Model in $Models) {
   ) -join " "
   ("[{0}] ps_cmd={1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $CmdLine) | Out-File -LiteralPath "$LogPath" -Encoding utf8
 
-  # 实际执行（把 test 目录下所有输入文件路径传给 python）
-  & "$Python" -u -X utf8 "$Runner" --model-alias "$Model" --out-dir "$OutDir" --log-path "$LogPath" @($Inputs.FullName)
+  # 执行（把 test 目录下所有输入文件路径传给 python）。
+  # 每个模型独立进程：进程退出即释放显存，避免多个模型串行常驻导致 OOM；
+  # 单模型超时自动杀进程，失败记录后继续下一个模型，不中断整批。
+  $ArgsList = @("-u", "-X", "utf8", "$Runner", "--model-alias", "$Model", "--out-dir", "$OutDir", "--log-path", "$LogPath") + @($Inputs.FullName)
+  try {
+    $Proc = Start-Process -FilePath "$Python" -ArgumentList $ArgsList -NoNewWindow -PassThru
+    if (-not $Proc.WaitForExit($TimeoutSec * 1000)) {
+      try { $Proc.Kill() } catch { }
+      Write-Host ("[{0}] 模型 {1} 超时（{2}s），已强制终止。" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $Model, $TimeoutSec)
+    } else {
+      Write-Host ("[{0}] 模型 {1} 完成，退出码 {2}。" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $Model, $Proc.ExitCode)
+    }
+  } catch {
+    Write-Host ("[{0}] 模型 {1} 执行失败：{2}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $Model, $_.Exception.Message)
+  }
 }
 
 Write-Host "OK. 输出目录：""$TestDir"""

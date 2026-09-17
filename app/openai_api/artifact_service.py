@@ -17,6 +17,8 @@ import renderers
 
 
 _TRANSCRIPT_FORMATS = ("json", "txt", "srt", "vtt", "tsv")
+# 可选扩展格式：不在 "all" 展开范围内，需显式选择（避免改变默认产物集合）
+_EXTRA_TRANSCRIPT_FORMATS = ("csv", "docx")
 
 
 def _make_timestamp() -> str:
@@ -316,9 +318,15 @@ def write_workflow_artifacts(
     root.mkdir(parents=True, exist_ok=True)
     selected: list[str] = []
     for item in formats:
-        expanded = _TRANSCRIPT_FORMATS if item == "all" else (item,)
+        # "all" 只展开基础 5 件套；csv/docx 必须显式选择
+        if item == "all":
+            expanded = _TRANSCRIPT_FORMATS
+        elif item in _TRANSCRIPT_FORMATS or item in _EXTRA_TRANSCRIPT_FORMATS:
+            expanded = (item,)
+        else:
+            expanded = ()
         for fmt in expanded:
-            if fmt in _TRANSCRIPT_FORMATS and fmt not in selected:
+            if fmt not in selected:
                 selected.append(fmt)
 
     payload = _public_result(result, include_raw_candidates)
@@ -340,10 +348,15 @@ def write_workflow_artifacts(
         "srt": lambda: renderers.render_srt(segments),
         "vtt": lambda: renderers.render_vtt(segments),
         "tsv": lambda: renderers.render_tsv(segments),
+        "csv": lambda: renderers.render_csv(segments),
     }
     for fmt in selected:
         path = root / _ts_name("transcript", fmt, timestamp)
-        _write_text(path, render_map[fmt]())
+        if fmt == "docx":
+            # DOCX 是二进制，不做 BOM/CRLF 转换
+            path.write_bytes(renderers.render_docx(segments))
+        else:
+            _write_text(path, render_map[fmt]())
         artifacts.append(_artifact(path, fmt))
 
     # 校对后全文（如果与原文不同则单独导出）

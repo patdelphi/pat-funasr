@@ -1,4 +1,4 @@
-﻿# 程序说明：Pat-FunASR 非 Docker 代码质量门禁，执行语法检查与自动化测试。
+# 程序说明：Pat-FunASR 非 Docker 代码质量门禁，执行语法检查与自动化测试。
 name: non-docker-ci
 
 on:
@@ -22,6 +22,7 @@ jobs:
       - name: Compile Python sources
         shell: pwsh
         run: python -m compileall -q "app" "scripts" "tests"
-      - name: Run tests
+      - name: Run tests with coverage gate
         shell: pwsh
-        run: python -m pytest -q
+        # 覆盖率门禁：核心 openai_api 模块低于 65% 即失败（基线 67%，留 2% 余量）
+        run: python -m pytest -q --cov=app/openai_api --cov-report=term-missing --cov-fail-under=65

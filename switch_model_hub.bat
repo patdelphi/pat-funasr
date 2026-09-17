@@ -52,4 +52,5 @@ if not defined FUNASR_MODEL_HUB (
 ) else (
   echo 当前默认模型来源："%FUNASR_MODEL_HUB%"
 )
-goto :menu
+pause
+exit /b 0

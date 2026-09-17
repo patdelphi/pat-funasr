@@ -39,10 +39,13 @@ except Exception:
 import argparse
 from datetime import datetime
 from functools import partial
+import copy
 import tempfile
 import time
 import os
 import re
+import asyncio
+import gc
 import logging
 import json
 import shutil
@@ -54,7 +57,7 @@ import urllib.request
 import numpy as np
 import uvicorn
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
 import renderers
@@ -135,65 +138,6 @@ _SUMMARY_PROMPT_STRICT = f"""请根据以下转录记录，**仅依据明确出�
 
 仅输出 JSON。"""
 
-# #region debug-point C:debug-report
-def is_debug_report_enabled() -> bool:
-    """判断是否启用本地调试事件上报；默认关闭，避免常规运行时访问调试端口。"""
-    return str(os.environ.get("FUNASR_DEBUG_REPORT", "")).strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _dbg_report(
-    *,
-    hypothesis_id: str,
-    msg: str,
-    location: str,
-    data: dict | None = None,
-    trace_id: str | None = None,
-    run_id: str = "pre-fix",
-) -> None:
-    """后台线程发送调试事件，避免阻塞 asyncio 事件循环。"""
-    if not is_debug_report_enabled():
-        return
-
-    def _send() -> None:
-        try:
-            root = Path(__file__).resolve().parents[2]
-            env_path = root / ".dbg" / "gradio-page-hung.env"
-            url = "http://127.0.0.1:7777/event"
-            session_id = "gradio-page-hung"
-            try:
-                content = env_path.read_text(encoding="utf-8", errors="replace")
-                for line in content.splitlines():
-                    if line.startswith("DEBUG_SERVER_URL="):
-                        url = line.split("=", 1)[1].strip() or url
-                    elif line.startswith("DEBUG_SESSION_ID="):
-                        session_id = line.split("=", 1)[1].strip() or session_id
-            except Exception:
-                pass
-            payload = {
-                "sessionId": session_id,
-                "runId": run_id,
-                "hypothesisId": hypothesis_id,
-                "location": location,
-                "msg": f"[DEBUG] {msg}",
-                "data": data or {},
-                "traceId": trace_id,
-                "ts": int(time.time() * 1000),
-            }
-            req = urllib.request.Request(
-                url,
-                data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-                headers={"Content-Type": "application/json"},
-                method="POST",
-            )
-            urllib.request.urlopen(req, timeout=2).read()
-        except Exception:
-            pass
-
-    threading.Thread(target=_send, daemon=True).start()
-
-
-# #endregion
-
 app = FastAPI(title="FunASR OpenAI-Compatible API", version="1.0.0")
 SERVER_START_EPOCH = int(time.time())
 
@@ -202,6 +146,10 @@ MODEL_LOAD_STATUS: dict[str, dict] = {}
 MODEL_LOAD_LOCK = threading.Lock()
 MODEL_LOAD_EVENTS: dict[str, threading.Event] = {}
 MODEL_LOAD_ERRORS: dict[str, str] = {}
+# ---- 模型闲置释放（5h）：registry_key -> 最后使用时间戳，超时由后台线程卸载 ----
+_MODEL_LAST_USED: dict[str, float] = {}
+_MODEL_IDLE_TTL_S = int(os.environ.get("FUNASR_MODEL_IDLE_TTL_S", "1800"))  # 0 = 禁用
+_MODEL_IDLE_SWEEP_S = max(10, int(os.environ.get("FUNASR_MODEL_IDLE_SWEEP_S", "60")))
 DEVICE = "cpu"
 
 from model_catalog import (
@@ -273,11 +221,17 @@ MAX_STREAM_CHUNK_BYTES = int(
 )
 WORKFLOW_TEMP_ROOT = Path(tempfile.gettempdir()) / "pat-funasr-workflows"
 WORKFLOW_TEMP_TTL_S = int(os.environ.get("FUNASR_WORKFLOW_TEMP_TTL_S", str(24 * 3600)))
+# 任务快照持久化：重启后恢复历史任务（workspace 已被 .gitignore 忽略）
+WORKFLOW_DB_PATH = os.environ.get(
+    "FUNASR_WORKFLOW_DB_PATH",
+    str(_PROJECT_ROOT / "workspace" / "workflow_jobs.db"),
+)
 WORKFLOW_MANAGER = workflow_service.WorkflowJobManager(
     max_workers=int(os.environ.get("FUNASR_WORKFLOW_MAX_WORKERS", "1")),
     terminal_callback=artifact_service.refresh_events_artifact,
     terminal_ttl_s=int(os.environ.get("FUNASR_WORKFLOW_JOB_TTL_S", str(24 * 3600))),
     max_terminal_jobs=int(os.environ.get("FUNASR_WORKFLOW_MAX_TERMINAL_JOBS", "100")),
+    db_path=WORKFLOW_DB_PATH,
 )
 
 
@@ -368,7 +322,14 @@ def _get_or_create_streaming_session(
     if not session_id:
         session_id = uuid.uuid4().hex
     if reset or session_id not in STREAMING_SESSIONS:
-        STREAMING_SESSIONS[session_id] = {"model": model, "cache": {}, "full_text": "", "updated_at": now}
+        STREAMING_SESSIONS[session_id] = {
+            "model": model,
+            "cache": {},
+            "full_text": "",
+            "updated_at": now,
+            # per-session 锁：串行化同会话的 generate + cache 读写，避免并发请求污染
+            "lock": threading.Lock(),
+        }
         return session_id, STREAMING_SESSIONS[session_id]
     state = STREAMING_SESSIONS[session_id]
     if state.get("model") != model:
@@ -451,6 +412,68 @@ def _is_model_ready(model_name: str) -> bool:
 def _loaded_model_names() -> list[str]:
     """返回已加载的模型主名列表，避免把内部变体 key 暴露到用户界面。"""
     return sorted({str(key).split("::", 1)[0] for key in MODEL_REGISTRY})
+
+
+def _sweep_idle_models() -> int:
+    """卸载超过空闲阈值的模型并释放显存，返回卸载数量。
+
+    只在 FUNASR_MODEL_IDLE_TTL_S > 0 时生效；错误单个跳过不影响其余模型。
+    """
+    if _MODEL_IDLE_TTL_S <= 0:
+        return 0
+    now = time.time()
+    with MODEL_LOAD_LOCK:
+        expired_keys = [
+            key
+            for key, last_used in list(_MODEL_LAST_USED.items())
+            if now - last_used > _MODEL_IDLE_TTL_S
+        ]
+    unloaded = 0
+    for key in expired_keys:
+        try:
+            with MODEL_LOAD_LOCK:
+                model = MODEL_REGISTRY.pop(key, None)
+                _MODEL_LAST_USED.pop(key, None)
+                if model is None:
+                    continue
+                # 主名可能是 "model" 或 "model::variant"，统一清理加载状态
+                base_name = str(key).split("::", 1)[0]
+                MODEL_LOAD_STATUS.pop(base_name, None)
+        except Exception as exc:
+            logger.warning("模型 %s 闲置卸载失败: %s", key, exc)
+            continue
+        # 引用释放后回收，显存仅对 CUDA 生效
+        del model
+        unloaded += 1
+        logger.info("模型 %s 闲置超过 %ss 已卸载", key, _MODEL_IDLE_TTL_S)
+    if unloaded:
+        gc.collect()
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            pass
+    return unloaded
+
+
+def _model_idle_reaper_loop() -> None:
+    """后台守护循环：周期扫描并卸载闲置模型，释放显存。"""
+    while True:
+        time.sleep(_MODEL_IDLE_SWEEP_S)
+        try:
+            _sweep_idle_models()
+        except Exception:
+            logger.exception("模型闲置释放扫描失败")
+
+
+def _start_model_idle_reaper() -> None:
+    """启动闲置释放后台线程（daemon，进程退出自动终止）。"""
+    threading.Thread(
+        target=_model_idle_reaper_loop,
+        name="pat-model-idle-reaper",
+        daemon=True,
+    ).start()
 
 
 class ModelNotDownloadedError(RuntimeError):
@@ -566,6 +589,8 @@ def load_model(
     is_loader = False
     with MODEL_LOAD_LOCK:
         if registry_key in MODEL_REGISTRY:
+            # 命中缓存：刷新最后使用时间（每次 ASR 请求都会走到这里）
+            _MODEL_LAST_USED[registry_key] = time.time()
             MODEL_LOAD_STATUS[model_name] = {"state": "ready", "error": None, "updated_at": time.time()}
             return MODEL_REGISTRY[registry_key]
         load_event = MODEL_LOAD_EVENTS.get(registry_key)
@@ -596,8 +621,10 @@ def load_model(
     try:
         if cfg.get("type") == "translation":
             device_val = cfg.get("device", DEVICE)
-            
-            model_dir = model_id
+
+            # 优先使用 resolve_local_model_path 写入的本地缓存路径，
+            # 避免 transformers 拿着原始模型 ID 尝试联网下载（无网时 500）
+            model_dir = str(cfg.get("model_path") or model_id)
 
             # 屏蔽 "Torch was not compiled with flash attention" 警告（自动回退到标准 SDPA，不影响功能）
             import warnings
@@ -618,18 +645,20 @@ def load_model(
 
                 def _translate_one(self, t: str, source_lang: str, target_lang: str, num_beams: int, max_length: int) -> str:
                     """翻译单段文本（≤500 字），NLLB max_length=512 硬限制"""
-                    self.tokenizer.src_lang = source_lang
-                    inputs = self.tokenizer(t, return_tensors="pt")
+                    # 浅拷贝 tokenizer 再设置 src_lang，避免并发翻译请求修改共享实例属性互相污染
+                    tokenizer = copy.copy(self.tokenizer)
+                    tokenizer.src_lang = source_lang
+                    inputs = tokenizer(t, return_tensors="pt")
                     if self.device != "cpu":
                         inputs = {k: v.to(self.device) for k, v in inputs.items()}
-                    target_lang_id = self.tokenizer.convert_tokens_to_ids(target_lang)
+                    target_lang_id = tokenizer.convert_tokens_to_ids(target_lang)
                     gen_out = self.model.generate(
                         **inputs,
                         forced_bos_token_id=target_lang_id,
                         max_length=max_length,
                         num_beams=num_beams,
                     )
-                    decoded = self.tokenizer.batch_decode(gen_out, skip_special_tokens=True)
+                    decoded = tokenizer.batch_decode(gen_out, skip_special_tokens=True)
                     return decoded[0] if decoded else ""
 
                 def translate(self, text, source_lang: str, target_lang: str, num_beams: int = 5, max_length: int = 512):
@@ -700,6 +729,7 @@ def load_model(
 
     with MODEL_LOAD_LOCK:
         MODEL_REGISTRY[registry_key] = model
+        _MODEL_LAST_USED[registry_key] = time.time()
         MODEL_LOAD_STATUS[model_name] = {"state": "ready", "error": None, "updated_at": time.time()}
         MODEL_LOAD_ERRORS.pop(registry_key, None)
         event = MODEL_LOAD_EVENTS.pop(registry_key, None)
@@ -1265,6 +1295,20 @@ def _default_batch_size_s(model: str) -> Optional[int]:
     return None
 
 
+# 运行时热词覆盖存储（5e 热词热更新）：model -> 热词字符串，免重启生效
+_HOTWORD_OVERRIDES: dict[str, str] = {}
+_HOTWORD_LOCK = threading.Lock()
+
+
+def _effective_hotword(model: str, explicit: Optional[str]) -> Optional[str]:
+    """解析生效热词：请求显式热词优先；否则用运行时覆盖（热更新）；都没有则 None。"""
+    if explicit is not None:
+        return explicit or None
+    with _HOTWORD_LOCK:
+        override = _HOTWORD_OVERRIDES.get(model, "")
+    return override or None
+
+
 def build_generate_kwargs(
     *,
     tmp_path: str,
@@ -1350,7 +1394,7 @@ def _run_asr(
     t0 = _time.time()
 
     if chunk_enabled:
-        # ---- chunking 模式 ----
+        # ---- 先尝试 ffmpeg 分块 ----
         from pat_funasr_webui.fine_transcription.transcription_pipeline import (
             _split_audio_ffmpeg,
             _merge_chunk_segments,
@@ -1360,6 +1404,13 @@ def _run_asr(
             chunk_seconds=chunk_seconds,
             overlap_seconds=overlap_seconds,
         )
+        if not chunks:
+            # 分块失败（ffmpeg 异常/源文件损坏等）：回退整文件单次识别，避免返回空结果
+            logger.warning("ffmpeg 分块失败（chunks=0），回退整文件单次识别: %s", source_path)
+            chunk_enabled = False
+
+    if chunk_enabled:
+        # ---- chunking 模式 ----
         all_segs: list[list[dict]] = []
         offsets: list[float] = []
         total_text_parts: list[str] = []
@@ -1372,9 +1423,8 @@ def _run_asr(
             seg = segmentation.build_segments(
                 result0=c0, duration_s=chunk_dur, clean_text=clean_text
             )
-            for s in seg:
-                s["start"] = float(s.get("start", 0)) + offset
-                s["end"] = float(s.get("end", 0)) + offset
+            # 注意：此处不给 segments 加 offset，统一由 _merge_chunk_segments(offsets)
+            # 内部按块偏移加上（含 start/end/words），避免双重偏移导致时间戳翻倍
             all_segs.append(seg)
             offsets.append(offset)
             total_text_parts.append(clean_text(c0.get("text", "")))
@@ -1572,7 +1622,7 @@ def _workflow_transcribe_model(
                 tmp_path=chunk_path,
                 model=model_config.model,
                 language=model_config.language,
-                hotword=model_config.hotword,
+                hotword=_effective_hotword(model_config.model, model_config.hotword or None),
                 use_itn=model_config.use_itn,
                 vad_preset=config.segmentation.vad_preset if config.segmentation.vad_enabled else None,
                 merge_vad=None,
@@ -1759,11 +1809,8 @@ def _resolve_workflow_llm(stage_config):
     return llm_config, selected_model
 
 
-def _workflow_llm_stage(stage_name: str, text: str, stage_config, *, context_title: str = ""):
-    """调用已配置的 LLM 执行校对、纪要或思维导图。
-
-    context_title: 可选，mindmap 时传入 summary 的 meeting_title，保证标题一致。
-    """
+def _workflow_llm_stage(stage_name: str, text: str, stage_config):
+    """调用已配置的 LLM 执行校对、纪要或思维导图。"""
     from pat_funasr_webui.fine_transcription.summary_processor import (
         generate_mindmap,
         generate_summary,
@@ -1803,9 +1850,6 @@ def _workflow_llm_stage(stage_name: str, text: str, stage_config, *, context_tit
             "meeting": _MM_MEETING + " " + _MM_BASE,
         }
         prompt = prompts[template_id]
-        # 如果有 summary 的 meeting_title，要求 mindmap 用同一个标题
-        if context_title:
-            prompt += f"\n\n**重要**：思维导图的 title 必须使用以下会议标题，**不要自己起标题**：\n{context_title}"
         return generate_mindmap(text, prompt, **common)
     raise RuntimeError(f"未知 LLM 阶段：{stage_name}")
 
@@ -1923,7 +1967,7 @@ async def transcribe(
             ),
         )
 
-    allowed_formats = {"json", "verbose_json", "txt", "srt", "vtt", "tsv", "all"}
+    allowed_formats = {"json", "verbose_json", "txt", "srt", "vtt", "tsv", "csv", "docx", "all"}
     if response_format not in allowed_formats:
         raise HTTPException(
             status_code=400,
@@ -1942,7 +1986,6 @@ async def transcribe(
         )
 
     # 分块保存上传文件，在写入过程中执行上限，避免整文件先进入内存。
-    trace_id = uuid.uuid4().hex
     with tempfile.TemporaryDirectory() as tmpdir:
         try:
             tmp_path, upload_bytes = await media_service.save_upload_file(
@@ -1954,20 +1997,6 @@ async def transcribe(
             raise HTTPException(status_code=413, detail=str(exc)) from exc
         except Exception as exc:
             raise HTTPException(status_code=400, detail=f"读取上传文件失败：{exc}") from exc
-
-        _dbg_report(
-            hypothesis_id="D",
-            msg="api_upload_saved",
-            location="openai_api/server.py:/v1/audio/transcriptions",
-            trace_id=trace_id,
-            data={
-                "model": model,
-                "response_format": response_format,
-                "filename": getattr(file, "filename", ""),
-                "upload_bytes": upload_bytes,
-                "tmp_bytes": os.path.getsize(tmp_path) if os.path.exists(tmp_path) else 0,
-            },
-        )
 
         try:
             try:
@@ -1994,7 +2023,7 @@ async def transcribe(
                     tmp_path=tmp_path,
                     model=model,
                     language=language,
-                    hotword=hotword,
+                    hotword=_effective_hotword(model, hotword),
                     use_itn=use_itn,
                     vad_preset=vad_preset,
                     merge_vad=merge_vad,
@@ -2016,20 +2045,18 @@ async def transcribe(
                 f"batch_size_threshold_s={batch_size_threshold_s or ''}, "
                 f"file={getattr(file, 'filename', '')}"
             )
-            _dbg_report(
-                hypothesis_id="D",
-                msg="api_generate_start",
-                location="openai_api/server.py:/v1/audio/transcriptions",
-                trace_id=trace_id,
-                data={
-                    "duration_s": duration_s,
-                    "generate_kwargs_keys": sorted(list(generate_kwargs.keys())),
-                },
-            )
 
             # ---- 统一用公共函数 _run_asr（transcribe API 和 workflow 共用）----
             _chunk_seconds = chunk_seconds if chunk_seconds is not None else 240
             _overlap = overlap_seconds if overlap_seconds is not None else 10
+
+            # 参数校验：对齐 workflow 校验规则（segmentation.overlap_seconds >= chunk_seconds 时报错）
+            if _chunk_seconds <= 0:
+                raise HTTPException(status_code=400, detail="chunk_seconds 必须大于 0")
+            if _overlap < 0:
+                raise HTTPException(status_code=400, detail="overlap_seconds 不能为负")
+            if _overlap >= _chunk_seconds:
+                raise HTTPException(status_code=400, detail="块间重叠秒数必须小于每块秒数")
 
             # ---- 外层 ffmpeg chunking 自动判定 ----
             # 外层 chunking 是「兜底机制」，只在模型自身无法处理长音频时才启用。
@@ -2038,7 +2065,8 @@ async def transcribe(
             #
             #  qwen3-asr / qwen3-asr-0.6b：
             #     qwen-asr 包原生 split_audio_into_chunks(MAX_ASR_INPUT_SECONDS=1200s, 静音边界切块)
-            #     + MODEL_CONFIGS 已去掉 vad_model（让 qwen-asr 自己管，避免三层分块）
+            #     + MODEL_CONFIGS 已配置 vad_model=fsmn-vad（FunASR VAD 先切 ~30s 段，
+            #       避免 max_new_tokens=512 截断），与 model_catalog 注释一致
             #     → 外层 chunking **默认完全关闭**
             #
             #  paraformer-zh-streaming：
@@ -2090,19 +2118,6 @@ async def transcribe(
             )
             if _auto_chunk:
                 logger.info(f"Auto chunk: duration={duration_s:.1f}s → chunking mode enabled")
-            _dbg_report(
-                hypothesis_id="D",
-                msg="api_generate_done",
-                location="openai_api/server.py:/v1/audio/transcriptions",
-                trace_id=trace_id,
-                data={
-                    "elapsed_s": round(elapsed, 3),
-                    "duration_s": round(duration_s, 3),
-                    "rtf": round(float(rtf), 4),
-                    "text_len": len(text or ""),
-                    "segments": len(segments) if isinstance(segments, list) else 0,
-                },
-            )
 
             verbose_payload = renderers.build_verbose_json_payload(
                 full_text=text,
@@ -2130,6 +2145,17 @@ async def transcribe(
             if response_format == "vtt":
                 resp_content = renderers.render_vtt(segments, max_line_width=max_line_width)
                 return Response(content=resp_content, media_type="text/vtt; charset=utf-8")
+            if response_format == "csv":
+                resp_content = renderers.render_csv(segments)
+                return Response(content=resp_content, media_type="text/csv; charset=utf-8")
+            if response_format == "docx":
+                resp_content = renderers.render_docx(segments)
+                headers = {"Content-Disposition": 'attachment; filename="transcript.docx"'}
+                return Response(
+                    content=resp_content,
+                    media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    headers=headers,
+                )
             if response_format == "all":
                 _ts = artifact_service._make_timestamp()
                 zbytes = renderers.render_all_zip(
@@ -2201,20 +2227,24 @@ async def transcribe_streaming(
     try:
         asr_model = await run_in_threadpool(load_model, model)
         speech_chunk = pcm16_bytes_to_float32_audio(chunk)
-        result = await run_in_threadpool(
-            partial(
-                asr_model.generate,
-                input=speech_chunk,
-                cache=state["cache"],
-                is_final=bool(is_final),
-                chunk_size=parsed_chunk_size,
-                encoder_chunk_look_back=int(encoder_chunk_look_back),
-                decoder_chunk_look_back=int(decoder_chunk_look_back),
+        # per-session 锁：同一会话的分片必须串行处理（cache 增量 + full_text 合并），
+        # 否则并发请求会互相覆盖 cache 导致流式结果错乱
+        session_lock = state.get("lock") or threading.Lock()
+        with session_lock:
+            result = await run_in_threadpool(
+                partial(
+                    asr_model.generate,
+                    input=speech_chunk,
+                    cache=state["cache"],
+                    is_final=bool(is_final),
+                    chunk_size=parsed_chunk_size,
+                    encoder_chunk_look_back=int(encoder_chunk_look_back),
+                    decoder_chunk_look_back=int(decoder_chunk_look_back),
+                )
             )
-        )
-        text = clean_text(result[0].get("text", "")) if result else ""
-        state["full_text"] = merge_streaming_text(state.get("full_text", ""), text)
-        state["updated_at"] = time.time()
+            text = clean_text(result[0].get("text", "")) if result else ""
+            state["full_text"] = merge_streaming_text(state.get("full_text", ""), text)
+            state["updated_at"] = time.time()
         return JSONResponse(
             {
                 "session_id": sid,
@@ -2506,6 +2536,55 @@ async def get_workflow_events(job_id: str, after_event_id: int = 0):
     )
 
 
+async def _workflow_event_stream(job_id: str, after_event_id: int):
+    """SSE 事件生成器：按增量轮询任务事件，终态后发送 done 事件并退出。
+
+    客户端断开时 asyncio.sleep 抛 CancelledError，生成器随之退出。
+    """
+    last_id = max(0, int(after_event_id))
+    while True:
+        try:
+            snapshot = WORKFLOW_MANAGER.get_events(job_id, after_event_id=last_id)
+        except KeyError:
+            # 任务在推送途中被清理（如 TTL prune），告知客户端后结束
+            yield f'event: error\ndata: {json.dumps({"error": "job not found"}, ensure_ascii=False)}\n\n'
+            return
+        for event in snapshot["events"]:
+            last_id = max(last_id, int(event.get("event_id", 0)))
+            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        if snapshot["status"] in workflow_service.WorkflowJobManager.TERMINAL_STATUSES:
+            yield (
+                "event: done\n"
+                f"data: {json.dumps({'status': snapshot['status'], 'job_id': job_id}, ensure_ascii=False)}\n\n"
+            )
+            return
+        # 心跳注释行，避免代理把长连接误判为超时
+        yield ": keep-alive\n\n"
+        await asyncio.sleep(0.5)
+
+
+@app.get("/v1/funasr/workflows/{job_id}/events/stream")
+async def stream_workflow_events(job_id: str, after_event_id: int = 0):
+    """SSE 事件推送：任务事件增量实时下发，终态后发送 done 事件。
+
+    与 /events 轮询端点共存：本端点仅新增推送通道，不改变轮询契约。
+    """
+    # 先校验任务存在，把 404 前置到响应头返回，而非流入 SSE 体
+    try:
+        WORKFLOW_MANAGER.get_events(job_id, after_event_id=after_event_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"Workflow job not found: {job_id}") from exc
+    return StreamingResponse(
+        _workflow_event_stream(job_id, after_event_id),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
+
+
 @app.post("/v1/funasr/workflows/{job_id}/cancel")
 async def cancel_workflow(job_id: str):
     """请求取消工作流任务。"""
@@ -2632,6 +2711,56 @@ class TranslationRequest(BaseModel):
     model: str = "nllb-200-distilled-600m"
     num_beams: int = 5
     max_length: int = 512
+
+
+class HotwordUpdateRequest(BaseModel):
+    hotword: str = ""
+
+
+@app.get("/v1/funasr/hotwords")
+def list_hotwords():
+    """查询全部运行时热词覆盖（5e 热词热更新，免重启生效）。"""
+    with _HOTWORD_LOCK:
+        return {"hotwords": dict(_HOTWORD_OVERRIDES)}
+
+
+@app.put("/v1/funasr/hotwords/{model}")
+def update_hotword(model: str, req: HotwordUpdateRequest):
+    """热更新指定模型的热词：空串表示清除覆盖，恢复模型默认行为。"""
+    model = model.strip()
+    if not model:
+        raise HTTPException(status_code=400, detail="model 不能为空")
+    value = str(req.hotword or "").strip()
+    with _HOTWORD_LOCK:
+        if value:
+            _HOTWORD_OVERRIDES[model] = value
+        else:
+            _HOTWORD_OVERRIDES.pop(model, None)
+    return {"model": model, "hotword": value}
+
+
+@app.delete("/v1/funasr/hotwords/{model}")
+def clear_hotword(model: str):
+    """清除指定模型的运行时热词覆盖。"""
+    model = model.strip()
+    with _HOTWORD_LOCK:
+        removed = _HOTWORD_OVERRIDES.pop(model, None)
+    return {"model": model, "removed": removed is not None}
+
+
+@app.get("/v1/funasr/llm/fuse-state")
+def get_llm_fuse_state():
+    """返回 LLM 熔断状态只读快照（5b 熔断状态可视化）。
+
+    用 openai_api.llm_client 的同一模块实例，与真实调用链共享状态。
+    """
+    try:
+        from openai_api import llm_client
+        snapshot = llm_client.fuse_state_snapshot()
+    except Exception as exc:
+        logger.error(f"Failed to read fuse state: {exc}")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return {"fuse_state": snapshot}
 
 
 @app.post("/v1/translations")
@@ -2796,6 +2925,10 @@ def main():
 
     global DEVICE
     DEVICE = args.device
+
+    if _MODEL_IDLE_TTL_S > 0:
+        _start_model_idle_reaper()
+        logger.info(f"  Model idle release: TTL={_MODEL_IDLE_TTL_S}s sweep={_MODEL_IDLE_SWEEP_S}s")
 
     logger.info(f"FunASR API server starting on http://{args.host}:{args.port}")
     logger.info(f"  Device: {DEVICE}")

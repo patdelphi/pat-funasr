@@ -4018,3 +4018,125 @@ efine_transcript_streaming，每块前 yield progress(0.50~0.68, "🧠 LLM 优�
 ### Codex
 
 已关闭本项目 API/WebUI 托管进程；确认 8000 和 7861 端口均已释放，未影响浏览器或其他项目进程。
+
+## 2026-09-16 16:59:47
+
+### User
+
+- github主页增加内容，关联 AI 录音卡产品 https://nextproto.top/products/ai-record-card（readme、项目链接等），随后 commit push 并提交社区作品栏
+
+### Assistant
+
+- README.md：新增 GitHub 项目徽章 + "配套硬件：AI 录音卡" 章节（含产品页与仓库链接），全文统一为 UTF-8 BOM + CRLF
+- git commit 0fa24de 并 push 至 main（1 file changed）
+- NextProto 开发者社区提交作品成功（https://nextproto.top/community?submitted=1，待后台审核）
+- 未完成：仓库 homepage 设置失败（gh repo edit 403，当前 token 无仓库元数据权限），需手动在 GitHub Settings → About → Website 填入产品页
+
+## 2026-09-16 17:49:37
+
+### User
+
+- 全面 review 项目：逻辑错误、代码错误、冗余代码、可优化内容、可增加功能（不着急，多思考几轮）
+
+### Assistant
+
+- 4 个子代理分模块只读审查 + 主代理逐行复核关键问题
+- 输出审查报告 Docs/code-review-20260916.md（高优先级 7 项 / 中优先级 23 项 / 低优先级若干 / 功能建议 8 项 / 测试缺口）
+- 已确认关键 bug：server.py 分块时间戳双重偏移、WebUI _simple_status 未定义 NameError、diarization 空 asr_model 校验误报、audio_sync_js fallback XSS
+- 未修改任何代码，等待用户决定修复范围
+
+## 2026-09-16 17:54:46
+
+### User
+
+- 先不急修复，仔细再检查发现的问题，查看对应模型文档/类似项目，多验证推导确保判断正确
+
+### Assistant
+
+- 主代理逐行复核关键代码 + 查阅 app/funasr 第三方库源码（qwen3_asr/model.py、auto/auto_model.py）+ 与历史结论交叉比对，输出第二轮验证记录（报告第七章）
+- 确认 5 项（分块双重偏移/影响面精确化、_simple_status、diarization 空校验/影响面扩大、fallback XSS、start_services 演示页）
+- 证伪 3 项（summary_processor 异常未捕获、qwen3-asr max_new_tokens 质疑、vad_model 矛盾→改为注释过时）
+- 保留 3 项需确认（NLLB src_lang、流式缓存锁、_fuse_state 计数）
+- 未修改任何代码，待用户决定修复
+
+## 2026-09-16 18:04:49
+
+### User
+
+- 重新出一份正确的 review 文档
+
+### Assistant
+
+- 基于两轮验证结论生成修正版报告 Docs/code-review-20260916-v2.md（v1 保留供对照）
+- 关键修正：撤销 summary_processor 异常项、撤销 qwen3-asr max_new_tokens 质疑、vad_model 矛盾改为注释过时、_fuse_state 降级、bug#1 影响面精确化
+- 高优先级 7 项（均复核确认）、中 21 项、低若干、功能建议 8 项、测试缺口，附 v1/v2 差异表
+- 未修改代码
+
+## 2026-09-16 18:16:31
+
+### User
+
+- 出一下项目优化执行计划，然后分阶段执行（阶段 1 已确认执行）
+
+### Assistant
+
+- 阶段 1 高优先级 7 项修复全部落地：
+  1a. server.py 分块时间戳双重偏移修复（删除 _run_asr 手动加偏移，统一由 _merge_chunk_segments 按块偏移加）
+  1b. server.py NLLB tokenizer 并发防护（copy.copy(tokenizer) 后设置 src_lang）
+  1c. server.py 流式 per-session 锁（会话 state 增加 lock，串行化同会话 generate + cache 读写）
+  1d. gradio_app.py 定义 _simple_status（修复 3 处调用 NameError）
+  1e. workflow_service.py 空 asr_model 跳过能力校验（复用 primary 场景不再误报 MODEL_NOT_FOUND）
+  1f. audio_sync_js.py fallback 节点 title html.escape（防 HTML 标签注入）
+  1g. start_services.py 删除（启动 API 演示页的遗留入口，经确认无代码引用）
+- 回归测试：新增 3 个单测（分块时间戳单偏移、空 asr_model 校验跳过、fallback 转义）；修复 2 个测试文件缺 app 目录 sys.path 的收集错误
+- 验证：全量 pytest 245 passed（40.57s）
+- 未执行：阶段 2（健壮性）/ 阶段 3（测试补强）/ 阶段 4（清理）待用户指示
+## 2026-09-16 18:58 阶段 2/3/4 执行完成（恢复会话）
+- 阶段 2（健壮性）：server.py overlap/chunk 参数校验、_workflow_llm_stage 死参数、_run_asr 分块失败回退单次识别；renderers summary.md CRLF；llm_config .env 去引号；summary_processor.chunk_text 参数防护；translation_utils 段落降级；gradio_app 重复调用去重 + 麦克风懒加载；model_catalog paraformer 死映射修正；batch_transcribe wav 统一转码 + 输出名扁平化；run_test_all_models.ps1 超时强制 Kill；switch_model_hub.bat 死循环修复；.gitignore 补 .env.local.bat —— 245 passed
+- 阶段 3（测试补强）：熔断恢复/fallback 链 5 测试；分块合并边界 7 测试；测试自身修复（_TEST_TS 移入 setUpModule/tearDownModule、硬编码路径改临时文件、裸 sleep 改轮询等待）—— 257 passed
+- 阶段 4（清理）：4a 调试埋点移除（gradio_app 3 个 region 定义 + 5 处调用点，server.py _dbg_report/is_debug_report_enabled 定义 + 3 处调用点 + trace_id 死变量）；4b 未绑定组件死代码清理 6 处（read_runtime_logs_ui_guard、start/stop_system_microphone_stream、safe_check、safe_recognize_diarization、build_reserved_feature_tab、stream_state），被测试引用的 3 个保留；4c 重复工具抽取评估后不执行（跨模块抽取收益低）；4d 16 个无引用诊断脚本移入 aipython/archive/，测试引用的 5 个留原地；4e 全量回归 254 passed（较 257 减少 3 个随埋点删除的测试）
+- 验证：全量 pytest 254 passed（26.13s）
+- 未执行：阶段 5 功能新增（需单独确认）；4c 判定不执行
+
+## 2026-09-16 21:32:49 阶段 5 功能新增 8 项全部完成（恢复会话）
+
+### User
+
+- 好的，执行阶段 5 功能新增
+
+### Assistant
+
+- 5d. DOCX/CSV 导出：renderers.py 新增 render_csv/render_docx（纯标准库拼装最小 DOCX），render_all_zip/render_fine_all_zip 增加 extra_formats 参数；artifact_service.py 新增 _EXTRA_TRANSCRIPT_FORMATS；workflow_service.py ExportConfig.formats 增加 csv/docx；server.py allowed_formats 与响应链支持 csv/docx 下载
+- 5e. 热词热更新 API：server.py 新增 _HOTWORD_OVERRIDES 运行时覆盖表，_effective_hotword 优先级（显式 > 运行时覆盖 > 无）；GET /v1/funasr/hotwords、PUT/DELETE /v1/funasr/hotwords/{model} 端点
+- 5b. 熔断状态可视化：llm_client.py 新增 fuse_state_snapshot()（base_url+model 维度快照，加锁）；server.py GET /v1/funasr/llm/fuse-state；gradio_app.py 运行资源 tab 增加 fuse_state_panel
+- 5c. 按说话人导出音频切片：gradio_app.py build_speaker_audio_slices（ffmpeg atrim+asetpts+concat 按 speaker 拼 mp3，失败跳过记 warning），build_diarization_export_files 可选 audio_path 时把切片追加进 ZIP speakers/ 目录
+- 5a. 任务队列持久化：workflow_service.py 新增 _JobStore（SQLite WAL + synchronous=NORMAL + 事务），WorkflowJobManager 增加 db_path 参数（默认 None 兼容旧行为），submit/running/终态/cancel/prune 均持久化，重启恢复时非终态任务标记 failed（WORKFLOW_INTERRUPTED_BY_RESTART）；server.py 默认 db_path=workspace/workflow_jobs.db（环境变量 FUNASR_WORKFLOW_DB_PATH 可覆盖）
+- 5g. SSE 事件推送：server.py 新增 GET /v1/funasr/workflows/{job_id}/events/stream（text/event-stream，增量事件 + keep-alive 心跳 + 终态 done 事件自动关闭），保留原 /events 轮询端点
+- 5h. 模型显存释放：server.py 新增 _MODEL_LAST_USED 时间戳跟踪 + _sweep_idle_models 后台守护线程（FUNASR_MODEL_IDLE_TTL_S 默认 1800s，0 禁用），load_model 缓存命中/加载完成刷新时间戳，卸载后清理加载状态并 torch.cuda.empty_cache()
+- 5f. CI 覆盖率门禁：Docs/requirements-ci.txt 加 pytest-cov==7.1.0；ci.yml Run tests 改为 --cov=app/openai_api --cov-fail-under=65（基线 67%）
+- 新增测试 11 个：test_workflow_job_persistence.py（5）、test_server_workflow_sse.py（2）、test_server_model_idle_release.py（4），另有 5d/5e/5b/5c 期间新增的 hotword/fuse-state/renderers/artifact/diarization 切片测试
+- 验证：全量 pytest 278 passed；覆盖率门禁本地验证 66.83% >= 65%
+- 未执行：git commit/push（需用户确认）
+## 2026-09-17 09:50:04 清理测试与临时文件
+
+### User
+
+- 清理一下测试与临时文件
+
+### Assistant
+
+- 已删除：workspace 下 10 个调试/测试脚本（_debug_*、_final_proofread_test.py、_proofread_report.json、_refactor_summary.py、_submit_workflow_test.py、_test_inject.js、_test_mindmap.*、_test_proofread.py）、api_test.log、gradio_test.log、根目录 .pytest_cache 与 .coverage
+- 未删除（受限）：workspace/workflow_jobs.db(-shm/-wal) 被运行中 python 进程占用（5676/14440/15036）；%TEMP% 下 222 个历史 pat-funasr-* 测试目录（148 log-test + 74 large-preview）ACL 拒绝访问，takeown 需管理员权限
+- 保留：workspace/models 模型缓存目录
+## 2026-09-17 11:23:32 修复跨语言翻译 500（NLLB 本地缓存加载）
+
+### User
+
+- 跨语言翻译报错（上传 美国中期选举推演.md，NLLB-200-Distilled 600M，中→英，HTTP 500）
+
+### Assistant
+
+- 根因：funasr-api.log 显示 `Failed to load translation model 'nllb-200-distilled-600m': We couldn't connect to huggingface.co ... could not find cached files`。模型已存在本地 modelscope 缓存（facebook/nllb-200-distilled-600m），resolve_local_model_path 也已正确写入 cfg['model_path']，但 load_model 的 translation 分支 `model_dir = model_id` 忽略了 model_path，导致 transformers 用原始 ID 尝试联网下载（失败 500）
+- 修复：app/openai_api/server.py 625-627 行 `model_dir = str(cfg.get('model_path') or model_id)`
+- 测试：test_server_translation_endpoint.py 新增 TestTranslationLoadsFromLocalCache（mock transformers 验证 from_pretrained 收到本地缓存绝对路径，先红后绿）
+- 验证：全量 pytest 279 passed（原 278 + 新 1）；真实 tokenizer 从缓存路径加载成功（eng_Latn id=256047）

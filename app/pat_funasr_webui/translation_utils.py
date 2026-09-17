@@ -365,12 +365,19 @@ def translate_text_preserving_paragraphs(
     
     if isinstance(translated_all, str):
         translated_all = [translated_all]
-        
+    if not translated_all:
+        # 翻译请求失败或返回为空：降级返回原文，避免后续切片对 None/空 报错
+        return text
+
     # 拼回段落
     paragraph_translations = []
     for p_idx, start_idx, end_idx in mapping:
         para_trans_chunks = translated_all[start_idx:end_idx]
-        paragraph_translations.append("".join(para_trans_chunks))
+        joined = "".join(para_trans_chunks)
+        if not joined:
+            # API 返回项数不足导致该段为空：降级保留原文段落，避免静默丢内容
+            joined = paragraphs_to_translate[p_idx]
+        paragraph_translations.append(joined)
         
     # 组装回原样
     translated_map = {}

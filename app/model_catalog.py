@@ -214,7 +214,8 @@ MODEL_CAPABILITIES = {
 
 
 MODELSCOPE_MODEL_ALIASES = {
-    "paraformer": "iic/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch",
+    # paraformer 与 paraformer-zh 同指 seaco 版，与 MODEL_CONFIGS["paraformer"]["model"] 保持一致，避免解析出旧版模型
+    "paraformer": "iic/speech_seaco_paraformer_large_asr_nat-zh-cn-16k-common-vocab8404-pytorch",
     "paraformer-zh": "iic/speech_seaco_paraformer_large_asr_nat-zh-cn-16k-common-vocab8404-pytorch",
     "paraformer-en": "iic/speech_paraformer-large-vad-punc_asr_nat-en-16k-common-vocab10020",
     "paraformer-zh-streaming": "iic/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-online",

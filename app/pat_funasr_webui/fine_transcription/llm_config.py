@@ -40,7 +40,8 @@ def _parse_env() -> dict[int, LLMConfig]:
                     continue
                 if "=" in line:
                     key, _, value = line.partition("=")
-                    env[key.strip()] = value.strip()
+                    # 去掉值两侧可能存在的引号（.env 中常写 BASE_URL="..."）
+                    env[key.strip()] = value.strip().strip('"').strip("'")
 
     # 兼容 os.environ（覆盖文件值）
     for k, v in os.environ.items():

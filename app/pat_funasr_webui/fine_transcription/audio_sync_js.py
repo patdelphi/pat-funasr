@@ -11,6 +11,7 @@
 - 后续通过 setAudioSrc / renderTranscript 增量推送，不重建 iframe
 """
 
+import html
 import json
 
 
@@ -378,15 +379,16 @@ def get_markmap_html(markmap_json: str) -> str:
     def _render_fallback(node: dict, level: int = 0) -> str:
         colors = ["#4B3FE3", "#6b5ce7", "#8b7ce7", "#a89ce7", "#c4bce7"]
         color = colors[min(level, len(colors) - 1)]
-        title = node.get("title", "(空)")
-        html = (
+        # title 来自模型输出，拼进 HTML 前必须转义，防止 </div> 或标签注入破坏页面
+        title = html.escape(str(node.get("title", "(空)")))
+        div = (
             f'<div style="margin:3px 0 3px {level*16}px; padding:4px 10px; '
             f'border-left:2px solid {color}; font-size:{"14" if level<2 else "13" if level<3 else "12"}px; '
             f'font-weight:{"600" if level<2 else "400"};">{title}</div>'
         )
         for child in node.get("children", []):
-            html += _render_fallback(child, level + 1)
-        return html
+            div += _render_fallback(child, level + 1)
+        return div
 
     fallback_html = _render_fallback(root)
     safe_md = json.dumps(markdown_text, ensure_ascii=False).replace("</script>", "<\\/script>")

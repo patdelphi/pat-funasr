@@ -72,4 +72,6 @@ app/funasr_v1.*_backup/
 
 # 环境变量（含 API Key，禁止提交）
 .env
+# switch_model_hub.bat 生成的本地运行时环境
+.env.local.bat
 *.db

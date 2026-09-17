@@ -166,40 +166,6 @@ class TestServerGenerateKwargs(unittest.TestCase):
                 punc_mode="auto",
             )
 
-    def test_debug_report_is_disabled_by_default(self):
-        old_value = os.environ.pop("FUNASR_DEBUG_REPORT", None)
-        try:
-            self.assertFalse(self.server.is_debug_report_enabled())
-        finally:
-            if old_value is not None:
-                os.environ["FUNASR_DEBUG_REPORT"] = old_value
-
-    def test_debug_report_can_be_enabled_by_env(self):
-        old_value = os.environ.get("FUNASR_DEBUG_REPORT")
-        try:
-            os.environ["FUNASR_DEBUG_REPORT"] = "1"
-            self.assertTrue(self.server.is_debug_report_enabled())
-            os.environ["FUNASR_DEBUG_REPORT"] = "true"
-            self.assertTrue(self.server.is_debug_report_enabled())
-            os.environ["FUNASR_DEBUG_REPORT"] = "0"
-            self.assertFalse(self.server.is_debug_report_enabled())
-        finally:
-            if old_value is None:
-                os.environ.pop("FUNASR_DEBUG_REPORT", None)
-            else:
-                os.environ["FUNASR_DEBUG_REPORT"] = old_value
-        with self.assertRaises(ValueError):
-            self.server.build_model_runtime_config(
-                model_name="paraformer",
-                device=None,
-                hub=None,
-                disable_update=None,
-                ncpu=None,
-                log_level="trace",
-                disable_pbar=None,
-                punc_mode="auto",
-            )
-
 
 if __name__ == "__main__":
     unittest.main()

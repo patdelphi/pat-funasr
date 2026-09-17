@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -50,10 +51,37 @@ _FUSE_PASS_RESULT = ""
 # key: (base_url.rstrip('/'), model)
 # value: {'fail_streak': int, 'open_until': 0.0, 'last_reason': str}
 _fuse_state: Dict[Tuple[str, str], Dict[str, Any]] = {}
+# 熔断状态读写锁：防止可视化快照遍历时与 setdefault 扩容并发
+_fuse_lock = threading.Lock()
 
 
 def _get_fuse_state(key: Tuple[str, str]) -> Dict[str, Any]:
-    return _fuse_state.setdefault(key, {"fail_streak": 0, "open_until": 0.0, "last_reason": ""})
+    with _fuse_lock:
+        return _fuse_state.setdefault(key, {"fail_streak": 0, "open_until": 0.0, "last_reason": ""})
+
+
+def fuse_state_snapshot() -> Dict[str, Dict[str, Any]]:
+    """返回熔断状态只读快照（供 WebUI/API 可视化，不暴露内部可变引用）。
+
+    输出结构：{"{base_url}|{model}": {base_url, model, fail_streak, open_until,
+    remaining_seconds, active, last_reason}}
+    """
+    now = time.time()
+    with _fuse_lock:
+        items = list(_fuse_state.items())
+    snapshot: Dict[str, Dict[str, Any]] = {}
+    for (base_url, model), state in items:
+        open_until = float(state.get("open_until") or 0)
+        snapshot[f"{base_url}|{model}"] = {
+            "base_url": base_url,
+            "model": model,
+            "fail_streak": int(state.get("fail_streak") or 0),
+            "open_until": open_until,
+            "remaining_seconds": max(0, int(open_until - now)) if open_until > 0 else 0,
+            "active": open_until > now,
+            "last_reason": str(state.get("last_reason") or ""),
+        }
+    return snapshot
 
 
 def _is_fused(key: Tuple[str, str]) -> Optional[str]:

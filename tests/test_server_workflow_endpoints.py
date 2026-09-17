@@ -30,8 +30,20 @@ _APP_DIR = _ROOT / "app"
 sys.path.insert(0, str(_APP_DIR))
 sys.path.insert(0, str(_OPENAI_API_DIR))
 import artifact_service as _artifact_service  # noqa: E402
-_artifact_service._TEST_TS = "20260903_180245"
-_TS = _artifact_service._TEST_TS
+
+
+def setUpModule():
+    """固定 artifact_service._make_timestamp 输出，确保产物名可预测。
+
+    放在 setUpModule 而非模块级：pytest 先收集全部文件的模块级代码再逐文件运行，
+    模块级赋值会被其他文件的 tearDownModule 提前清空。
+    """
+    _artifact_service._TEST_TS = "20260903_180245"
+
+
+def tearDownModule():
+    """恢复 _TEST_TS 全局后门，避免污染其他测试的时间戳命名。"""
+    _artifact_service._TEST_TS = None
 
 
 def _load_server_module():
@@ -193,11 +205,11 @@ class TestServerWorkflowEndpoints(unittest.TestCase):
             )
             artifact = next(
                 item for item in private_snapshot["result"]["artifacts"]
-                if item["name"] == f"transcript_{_TS}.json"
+                if item["name"] == f"transcript_{_artifact_service._TEST_TS}.json"
             )
             artifact_root = Path(artifact["path"]).parent.parent
             download = self.client.get(
-                f"/v1/funasr/workflows/{job_id}/artifacts/transcript_{_TS}.json"
+                f"/v1/funasr/workflows/{job_id}/artifacts/transcript_{_artifact_service._TEST_TS}.json"
             )
             self.assertEqual(download.status_code, 200)
             self.assertIn("测试完成", download.content.decode("utf-8-sig"))

@@ -1,4 +1,4 @@
-﻿"""
+"""
 程序说明：
 工作流配置、任务状态和事件协议测试。
 
@@ -87,6 +87,20 @@ class TestWorkflowConfig(unittest.TestCase):
         codes = {item["code"] for item in errors}
         self.assertIn("DIARIZATION_REQUIRES_TIMESTAMPS", codes)
         self.assertIn("SUBTITLE_REQUIRES_TIMESTAMPS", codes)
+
+    def test_diarization_empty_asr_model_skips_capability_check(self):
+        """diarization.asr_model 为空（复用 primary）时不应报 MODEL_NOT_FOUND。"""
+        config = parse_workflow_config(
+            {
+                "transcription": {"primary": {"model": "primary"}},
+                "timestamps": {"level": "segment"},
+                "diarization": {"enabled": True, "asr_model": ""},
+            }
+        )
+        errors, _warnings = validate_workflow_config(config, MODEL_CAPABILITIES)
+        codes = {item["code"] for item in errors}
+        self.assertNotIn("MODEL_NOT_FOUND", codes)
+        self.assertNotIn("MODEL_CAPABILITY_MISMATCH", codes)
 
     def test_parse_rejects_unknown_fields(self):
         with self.assertRaises(WorkflowConfigError):
@@ -244,7 +258,12 @@ class TestWorkflowJobManager(unittest.TestCase):
                 source = Path(tmpdir) / "audio.wav"
                 source.write_bytes(b"audio")
                 job_id = manager.submit(config={}, source_path=str(source), runner=runner)
-                time.sleep(0.05)
+                # 等 runner 真正进入 running 再取消，避免取消先于启动导致竞态
+                deadline = time.monotonic() + 1
+                while time.monotonic() < deadline:
+                    if manager.get_snapshot(job_id)["status"] == "running":
+                        break
+                    time.sleep(0.01)
                 manager.cancel(job_id)
                 snapshot = manager.wait_for_terminal(job_id, timeout=3)
 

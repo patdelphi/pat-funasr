@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 import unittest
 from pathlib import Path
@@ -51,6 +52,22 @@ class TestAudioSyncSecurity(unittest.TestCase):
         self.assertNotIn("&", output)
         self.assertIn("\\u003c/script\\u003e", output)
         self.assertIn("\\u2028", output)
+
+    def test_markmap_fallback_escapes_node_titles(self):
+        """CDN fallback 树中节点 title 需 html.escape，防止标签注入执行。"""
+        payload = json.dumps(
+            {
+                "title": "根",
+                "children": [{"title": "<img src=x onerror=alert(1)>", "children": []}],
+            },
+            ensure_ascii=False,
+        )
+        output = get_markmap_html(payload)
+        # 节点 title 先 html.escape（&lt;）再经 srcdoc 属性转义（& → &amp;），
+        # 最终应出现 &amp;lt;img；若未转义只会是 &lt;img，能被还原成真实标签
+        self.assertIn("&amp;lt;img", output)
+        # markmap data JSON 仍保留原文（srcdoc 属性转义为 &lt;img，与 fallback 的 &amp;lt;img 区分）
+        self.assertIn("&lt;img src=x onerror=alert(1)&gt;", output)
 
 
 if __name__ == "__main__":

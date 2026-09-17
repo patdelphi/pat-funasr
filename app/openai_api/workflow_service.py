@@ -8,21 +8,28 @@
 - 维护追加式事件日志、单调进度、取消和任务快照。
 
 说明：
-当前使用进程内任务存储，避免未经确认修改 SQLite；进程重启后任务不会恢复。
+默认使用进程内任务存储（db_path=None，兼容旧行为）；
+传入 db_path 时启用 SQLite 快照持久化，进程重启后任务可恢复。
 """
 
 from __future__ import annotations
 
 import copy
+import json
+import logging
 import re
+import sqlite3
 import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Callable, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
+
+logger = logging.getLogger(__name__)
 
 
 def _safe_error_message(error: Exception) -> str:
@@ -71,13 +78,6 @@ def _build_summary_message(
     header = f"[{status_label}] 开始 {start_str} → 结束 {end_str}，共耗时 {_format_duration(elapsed)}"
     # 分阶段耗时
     if stage_timings:
-        parts: list[str] = []
-        for t in stage_timings:
-            stage = t.get("stage", "?")
-            model = t.get("model", "")
-            dur = _format_duration(t.get("duration_s", 0))
-            label = f"{stage}[{model}]" if model else stage
-            parts.append(f"{label}={dur}")
         # 合并同类 stage（如多个 reviewer 都是 transcription.reviewers）
         merged: dict[str, float] = {}
         for t in stage_timings:
@@ -217,7 +217,7 @@ class EmotionStageConfig(_StrictModel):
 
 
 class ExportConfig(_StrictModel):
-    formats: list[Literal["json", "txt", "srt", "vtt", "tsv", "all"]] = Field(
+    formats: list[Literal["json", "txt", "srt", "vtt", "tsv", "csv", "docx", "all"]] = Field(
         default_factory=lambda: ["json", "txt", "srt", "vtt", "tsv"]
     )
     include_raw_candidates: bool = False
@@ -332,31 +332,33 @@ def validate_workflow_config(
             )
 
     if config.diarization.enabled:
-        capabilities = model_capabilities.get(config.diarization.asr_model)
-        if capabilities is None:
-            errors.append(
-                _issue(
-                    "MODEL_NOT_FOUND",
-                    "diarization.asr_model",
-                    f"未知说话人辅助 ASR 模型：{config.diarization.asr_model}",
+        # asr_model 为空 = 复用 primary ASR 结果（执行层回退 primary.model），跳过能力校验
+        if config.diarization.asr_model:
+            capabilities = model_capabilities.get(config.diarization.asr_model)
+            if capabilities is None:
+                errors.append(
+                    _issue(
+                        "MODEL_NOT_FOUND",
+                        "diarization.asr_model",
+                        f"未知说话人辅助 ASR 模型：{config.diarization.asr_model}",
+                    )
                 )
-            )
-        elif not capabilities.get("diarization", False):
-            errors.append(
-                _issue(
-                    "MODEL_CAPABILITY_MISMATCH",
-                    "diarization.asr_model",
-                    f"模型 {config.diarization.asr_model} 不支持说话人分离",
+            elif not capabilities.get("diarization", False):
+                errors.append(
+                    _issue(
+                        "MODEL_CAPABILITY_MISMATCH",
+                        "diarization.asr_model",
+                        f"模型 {config.diarization.asr_model} 不支持说话人分离",
+                    )
                 )
-            )
-        elif capabilities.get("downloaded") is False:
-            errors.append(
-                _issue(
-                    "MODEL_NOT_DOWNLOADED",
-                    "diarization.asr_model",
-                    f"说话人辅助模型 {config.diarization.asr_model} 尚未下载",
+            elif capabilities.get("downloaded") is False:
+                errors.append(
+                    _issue(
+                        "MODEL_NOT_DOWNLOADED",
+                        "diarization.asr_model",
+                        f"说话人辅助模型 {config.diarization.asr_model} 尚未下载",
+                    )
                 )
-            )
         if config.timestamps.level == "off":
             errors.append(
                 _issue(
@@ -566,6 +568,83 @@ class WorkflowRunContext:
         return self._manager._emit(self.job_id, **event)
 
 
+class _JobStore:
+    """SQLite 任务快照存储：WAL 模式 + 显式事务，支持进程重启后恢复。"""
+
+    # 不入库的进程内字段：无法 JSON 序列化或在恢复时重建
+    EXCLUDED_KEYS = {"cancel_event", "future", "next_event_id", "_active_timing"}
+
+    def __init__(self, db_path: str):
+        self._path = str(db_path)
+        Path(self._path).parent.mkdir(parents=True, exist_ok=True)
+        self._conn = sqlite3.connect(self._path, check_same_thread=False)
+        # WAL 模式替代回滚日志，减少 IO 开销（用户规则）
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("PRAGMA synchronous=NORMAL")
+        self._conn.execute(
+            "CREATE TABLE IF NOT EXISTS workflow_jobs "
+            "(job_id TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at TEXT NOT NULL)"
+        )
+        self._conn.commit()
+        # SQLite 连接跨线程复用需要独立的写锁，保证事务串行
+        self._write_lock = threading.Lock()
+
+    def upsert(self, job_id: str, payload: dict[str, Any]) -> None:
+        """写入或覆盖一条任务快照（单条事务）。"""
+        with self._write_lock:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO workflow_jobs (job_id, payload, updated_at) "
+                "VALUES (?, ?, ?)",
+                (
+                    job_id,
+                    json.dumps(payload, ensure_ascii=False),
+                    str(payload.get("updated_at") or ""),
+                ),
+            )
+            self._conn.commit()
+
+    def delete(self, job_id: str) -> None:
+        """删除一条任务快照（单条事务）。"""
+        with self._write_lock:
+            self._conn.execute("DELETE FROM workflow_jobs WHERE job_id = ?", (job_id,))
+            self._conn.commit()
+
+    def load_all(self) -> dict[str, dict[str, Any]]:
+        """读取全部历史快照；个别损坏记录跳过并告警。"""
+        result: dict[str, dict[str, Any]] = {}
+        try:
+            rows = self._conn.execute(
+                "SELECT job_id, payload FROM workflow_jobs"
+            ).fetchall()
+        except Exception:
+            return result
+        for job_id, raw in rows:
+            try:
+                data = json.loads(raw)
+            except Exception:
+                logger.warning("跳过损坏的 workflow 快照：%s", job_id)
+                continue
+            if isinstance(data, dict):
+                result[job_id] = data
+        return result
+
+    def close(self) -> None:
+        """关闭数据库连接，忽略关闭异常。"""
+        try:
+            self._conn.close()
+        except Exception:
+            pass
+
+
+def _serialize_job(job: dict[str, Any]) -> dict[str, Any]:
+    """把进程内 job 转为可入库的 JSON 快照，剔除运行时字段。"""
+    return {
+        key: copy.deepcopy(value)
+        for key, value in job.items()
+        if key not in _JobStore.EXCLUDED_KEYS
+    }
+
+
 class WorkflowJobManager:
     """进程内工作流任务队列。"""
 
@@ -578,6 +657,7 @@ class WorkflowJobManager:
         terminal_callback: Callable[[dict[str, Any]], None] | None = None,
         terminal_ttl_s: int = 24 * 3600,
         max_terminal_jobs: int = 100,
+        db_path: str | None = None,
     ):
         self._lock = threading.RLock()
         self._jobs: dict[str, dict[str, Any]] = {}
@@ -588,6 +668,10 @@ class WorkflowJobManager:
             max_workers=max(1, int(max_workers)),
             thread_name_prefix="pat-workflow",
         )
+        # db_path 为空 = 保持进程内存储（兼容旧行为/测试）
+        self._store = _JobStore(db_path) if db_path else None
+        if self._store is not None:
+            self._restore_jobs()
 
     def submit(
         self,
@@ -630,6 +714,8 @@ class WorkflowJobManager:
             )
             future = self._executor.submit(self._execute, job_id, runner)
             self._jobs[job_id]["future"] = future
+            # 提交即入库，保证 queued 快照在崩溃后可见
+            self._persist_locked(job_id)
         return job_id
 
     def _execute(
@@ -643,6 +729,7 @@ class WorkflowJobManager:
             with self._lock:
                 job = self._jobs[job_id]
                 job["status"] = "running"
+                self._persist_locked(job_id)
             context.emit(
                 level="progress",
                 stage="workflow",
@@ -675,12 +762,14 @@ class WorkflowJobManager:
             self._run_terminal_callback(job_id)
             with self._lock:
                 self._jobs[job_id]["status"] = "completed"
+                self._persist_locked(job_id)
         except WorkflowCancelled as exc:
             safe_message = _safe_error_message(exc)
             with self._lock:
                 job = self._jobs[job_id]
                 job["status"] = "cancelled"
                 job["error"] = safe_message
+                self._persist_locked(job_id)
             now_iso = datetime.now(timezone.utc).isoformat()
             with self._lock:
                 timings = self._finalize_stage_timing(job_id, now_iso)
@@ -704,6 +793,7 @@ class WorkflowJobManager:
                 job = self._jobs[job_id]
                 job["status"] = "failed"
                 job["error"] = safe_message
+                self._persist_locked(job_id)
             now_iso = datetime.now(timezone.utc).isoformat()
             with self._lock:
                 timings = self._finalize_stage_timing(job_id, now_iso)
@@ -731,6 +821,66 @@ class WorkflowJobManager:
         except Exception:
             # 终态回调只负责补充审计产物，不能反向改变已完成任务状态。
             return
+
+    def _persist_locked(self, job_id: str) -> None:
+        """把任务快照写入 SQLite（仅在启用持久化时生效）。
+
+        必须在持有 self._lock 时调用；写入失败只记日志，不影响任务执行。
+        """
+        if self._store is None or job_id not in self._jobs:
+            return
+        try:
+            self._store.upsert(job_id, _serialize_job(self._jobs[job_id]))
+        except Exception as exc:
+            logger.warning("workflow 快照持久化失败 job=%s: %s", job_id, exc)
+
+    def _restore_jobs(self) -> None:
+        """从 SQLite 恢复历史任务；非终态任务统一标记失败并写回。"""
+        now_iso = datetime.now(timezone.utc).isoformat()
+        for job_id, data in self._store.load_all().items():
+            status = str(data.get("status") or "queued")
+            events = list(data.get("events") or [])
+            if status not in self.TERMINAL_STATUSES:
+                # 上次进程退出时任务未完成：标记失败，避免假活
+                data["status"] = "failed"
+                data["error"] = "服务重启，未完成任务已标记失败"
+                data["updated_at"] = now_iso
+                last_event_id = max(
+                    (int(e.get("event_id", 0)) for e in events), default=0
+                )
+                events.append(
+                    {
+                        "event_id": last_event_id + 1,
+                        "job_id": job_id,
+                        "timestamp": now_iso,
+                        "level": "error",
+                        "stage": "workflow",
+                        "stage_status": "error",
+                        "progress": None,
+                        "model": "",
+                        "current": None,
+                        "total": None,
+                        "message": "服务重启，未完成任务已标记失败",
+                        "error_code": "WORKFLOW_INTERRUPTED_BY_RESTART",
+                        "retryable": False,
+                        "trace_id": data.get("trace_id", ""),
+                        "details": {},
+                    }
+                )
+                data["events"] = events
+                try:
+                    self._store.upsert(job_id, data)
+                except Exception as exc:
+                    logger.warning("workflow 失败状态写回失败 job=%s: %s", job_id, exc)
+            # 重建进程内运行字段；恢复的任务不会再被执行
+            data["cancel_event"] = threading.Event()
+            data["future"] = None
+            data["next_event_id"] = (
+                max((int(e.get("event_id", 0)) for e in data.get("events") or []), default=0)
+                + 1
+            )
+            data["_active_timing"] = None
+            self._jobs[job_id] = data
 
     def _get_private(self, job_id: str) -> dict[str, Any]:
         with self._lock:
@@ -902,6 +1052,11 @@ class WorkflowJobManager:
             removable.update(job_id for job_id, _job in remaining[:overflow])
             for job_id in removable:
                 self._jobs.pop(job_id, None)
+                if self._store is not None:
+                    try:
+                        self._store.delete(job_id)
+                    except Exception as exc:
+                        logger.warning("workflow 快照删除失败 job=%s: %s", job_id, exc)
             return len(removable)
 
     def queue_summary(self) -> dict[str, Any]:
@@ -950,6 +1105,7 @@ class WorkflowJobManager:
                 error_code="WORKFLOW_CANCEL_REQUESTED",
                 retryable=False,
             )
+            self._persist_locked(job_id)
         return self.get_snapshot(job_id)
 
     def wait_for_terminal(self, job_id: str, *, timeout: float) -> dict[str, Any]:
@@ -963,3 +1119,8 @@ class WorkflowJobManager:
 
     def shutdown(self, *, wait: bool) -> None:
         self._executor.shutdown(wait=bool(wait), cancel_futures=False)
+        if self._store is not None:
+            try:
+                self._store.close()
+            except Exception:
+                pass

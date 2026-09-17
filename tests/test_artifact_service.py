@@ -81,6 +81,51 @@ class TestArtifactService(unittest.TestCase):
             )
             self.assertIn("events.jsonl", names)
 
+    def test_writes_csv_and_docx_formats(self):
+        """显式选择 csv/docx 时应写出对应产物；'all' 不包含它们（保持原 5 件套）。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            artifacts = artifact_service.write_workflow_artifacts(
+                output_dir=tmpdir,
+                result={
+                    "text": "你好",
+                    "segments": [
+                        {"start": 0.0, "end": 1.2, "text": "你好", "speaker": "S1"},
+                    ],
+                },
+                config={},
+                events=[],
+                formats=["csv", "docx"],
+                include_raw_candidates=False,
+                include_config_snapshot=False,
+            )
+            names = {item["name"] for item in artifacts}
+            self.assertIn("transcript.csv", names)
+            self.assertIn("transcript.docx", names)
+
+            csv_text = (Path(tmpdir) / "transcript.csv").read_text(encoding="utf-8-sig")
+            self.assertEqual(csv_text.splitlines()[0], "start,end,speaker,text")
+            self.assertIn("S1", csv_text)
+
+            # DOCX 是合法 ZIP 且含 document.xml
+            import zipfile
+            with zipfile.ZipFile(Path(tmpdir) / "transcript.docx") as zf:
+                self.assertIn("word/document.xml", zf.namelist())
+
+        # 'all' 仍然只展开为基础 5 件套，不引入 csv/docx
+        with tempfile.TemporaryDirectory() as tmpdir:
+            artifacts = artifact_service.write_workflow_artifacts(
+                output_dir=tmpdir,
+                result={"text": "A", "segments": [{"start": 0, "end": 1, "text": "A"}]},
+                config={},
+                events=[],
+                formats=["all"],
+                include_raw_candidates=True,
+                include_config_snapshot=False,
+            )
+            names = {item["name"] for item in artifacts}
+            self.assertNotIn("transcript.csv", names)
+            self.assertNotIn("transcript.docx", names)
+
     def test_refresh_events_artifact_writes_terminal_events(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             events_path = Path(tmpdir) / "events.jsonl"
