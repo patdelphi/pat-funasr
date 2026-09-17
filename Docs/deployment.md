@@ -1,4 +1,4 @@
-#
+﻿#
 本地运行与部署建议（Deployment）
 
 ## 推荐启动方式
@@ -22,14 +22,20 @@
 ### 自动下载（默认行为）
 
 - API 启动后不预加载模型；首次请求对应能力时才会按需加载
-- 缓存目录被固定到工程内（见 ["requirements.md"](./requirements.md)）
+- 模型统一存入**本机共享缓存**（ModelScope / HuggingFace 全局目录），查找顺序见 ["requirements.md"](./requirements.md)
+- 语音模型默认走 ModelScope 源；翻译模型（TranslateGemma 含 GGUF）本地未命中时自动下载到 HF 全局缓存
 
 ### 手动下载（离线准备）
 
-- ModelScope/HF 均可将模型提前下载到 "workspace/models" 对应目录
-- 参考模型自带 README（例如 SenseVoiceSmall 的 "workspace/models/models/iic/SenseVoiceSmall/README.md"）
+- 语音模型：运行 `scripts\prefetch_models.py`（默认预取 sensevoice / paraformer / fun-asr-nano / qwen3-asr）
+- 单模型：运行 `scripts\download_model.py`（SenseVoiceSmall）
+- 也可直接把模型放入本机共享缓存（见 requirements.md 的查找顺序）或 `workspace\models` 兜底目录
 
-- 当前已移除辅助下载 BAT；如需离线准备，直接把模型放入 "workspace/models" 对应目录
+### 加载环境（GPU 优先，自动回退 CPU）
+
+- 语音/情感/说话人模型：FunASR AutoModel，device 取启动参数（默认 cuda）
+- NLLB 翻译：fp16 加载 GPU，失败回退 CPU
+- TranslateGemma GGUF：llama.cpp 推理，显存不足时先卸载 FunASR 腾显存，仍不足回退 CPU
 
 ## 跑批测试（test 目录）
 

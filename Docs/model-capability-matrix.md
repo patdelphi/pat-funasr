@@ -1,4 +1,4 @@
-#
+﻿#
 ASR 模型能力矩阵与 API 参数说明
 
 目的：让你快速理解“不同模型能做到什么/不能做到什么”，以及在本项目里“可调用的 API、可用参数、可得到的输出格式”分别是什么。
@@ -6,7 +6,7 @@ ASR 模型能力矩阵与 API 参数说明
 范围：
 
 - 当前项目已接入的 OpenAI 兼容 API（FastAPI）："app/openai_api/server.py"
-- 当前 API 已内置的模型别名（model 参数）：sensevoice / paraformer / paraformer-en / paraformer-zh-streaming / fun-asr-nano / qwen3-asr / qwen3-asr-0.6b / emotion2vec-plus-large / nllb-200-distilled-600m / nllb-200-distilled-1.3b
+- 当前 API 已内置的模型别名（model 参数）：sensevoice / paraformer / paraformer-en / paraformer-zh-streaming / fun-asr-nano / qwen3-asr / qwen3-asr-0.6b / emotion2vec-plus-large / nllb-200-distilled-600m / nllb-200-distilled-1.3b / translategemma-4b-it / translategemma-4b-it-gguf
 - 输出格式：json / verbose_json / txt / srt / vtt / tsv / all(zip)
 
 ## 命名说明（重要）
@@ -83,6 +83,8 @@ API 实现：[server.py](../app/openai_api/server.py)
 | emotion2vec-plus-large | iic/emotion2vec_plus_large | iic/emotion2vec_plus_large | ms | 官方 README 强调跨语种/跨场景鲁棒性，但未公开逐项语言与中文方言名单 | ❌ | ❌ | ❌ | ❌ | 独立情感识别 |
 | nllb-200-distilled-600m | facebook/nllb-200-distilled-600m | facebook/nllb-200-distilled-600m | ms | 多语种翻译：支持 200+ 语言互译（NLLB-200 覆盖语种清单） | ❌ | ❌ | ❌ | ❌ | 多语种文本翻译（600M 轻量版） |
 | nllb-200-distilled-1.3b | facebook/nllb-200-distilled-1.3b | facebook/nllb-200-distilled-1.3b | ms | 多语种翻译：支持 200+ 语言互译（NLLB-200 覆盖语种清单） | ❌ | ❌ | ❌ | ❌ | 多语种文本翻译（1.3B 高精度版） |
+| translategemma-4b-it | google/translategemma-4b-it | google/translategemma-4b-it | hf | 多语种翻译：Gemma3 系指令模型，语言码为 ISO 639-1（zho_Hans→zh 等 FLORES→ISO 映射） | ❌ | ❌ | ❌ | ❌ | 多语种文本翻译（transformers 版，需 HF gated token） |
+| translategemma-4b-it-gguf | mradermacher/translategemma-4b-it-GGUF | mradermacher/translategemma-4b-it-GGUF | hf | 多语种翻译：与 translategemma-4b-it 同能力，Q4_K_M 量化（llama.cpp 推理） | ❌ | ❌ | ❌ | ❌ | 多语种文本翻译（GGUF 量化版，免 gated token，WebUI 默认） |
 
 流式模型候选说明：
 

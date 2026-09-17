@@ -1,4 +1,4 @@
-#
+﻿#
 OpenAI 兼容 API 说明（API）
 
 实现文件：["app/openai_api/server.py"](../app/openai_api/server.py)
@@ -29,7 +29,11 @@ OpenAI 兼容 API 说明（API）
     "fun-asr-nano",
     "qwen3-asr",
     "qwen3-asr-0.6b",
-    "emotion2vec-plus-large"
+    "emotion2vec-plus-large",
+    "nllb-200-distilled-600m",
+    "nllb-200-distilled-1.3b",
+    "translategemma-4b-it",
+    "translategemma-4b-it-gguf"
   ]
 }
 ```
@@ -123,7 +127,7 @@ OpenAI 兼容 API 说明（API）
 
 ### POST "/v1/funasr/translate"
 
-用途：文本翻译（NLLB 本地模型，200+ 语言互译）。
+用途：文本翻译（本地模型，200+ 语言互译）。支持 NLLB 600M/1.3B（BCP-47 语言码）与 TranslateGemma-4B-IT 及 GGUF 量化版（ISO 639-1 语言码）。
 
 请求类型：application/json
 
@@ -139,9 +143,9 @@ OpenAI 兼容 API 说明（API）
 字段说明：
 
 - "text"（必填）：待翻译文本（字符串或字符串数组）
-- "source_lang"（必填）：源语言代码（NLLB BCP-47 格式，如 `zho_Hans`、`eng_Latn`）
+- "source_lang"（必填）：源语言代码（NLLB 用 BCP-47 格式，如 `zho_Hans`、`eng_Latn`；TranslateGemma 用 ISO 639-1，如 `zh`、`en`）
 - "target_lang"（必填）：目标语言代码
-- "model"（可选，默认 "nllb-200-distilled-600m"）：NLLB 模型名
+- "model"（可选，默认 "nllb-200-distilled-600m"）：翻译模型名，可选 `nllb-200-distilled-600m` / `nllb-200-distilled-1.3b` / `translategemma-4b-it` / `translategemma-4b-it-gguf`
 
 响应：
 
@@ -149,7 +153,7 @@ OpenAI 兼容 API 说明（API）
 {"text": "Hello, welcome to Pat-FunASR", "model": "nllb-200-distilled-600m"}
 ```
 
-长文本自动分块：`NLLBTranslationModel.translate()` 内部自动按。！？!?\. 和换行切分，≤500 字/块逐块翻译后拼接。外部调用者直接传全文即可，无需手动拆分。
+长文本自动分块：翻译模型内部自动按。！？!?\. 和换行切分逐块翻译后拼接（NLLB ≤500 字/块、TranslateGemma ≤1200 字/块），外部调用者直接传全文即可，无需手动拆分。
 
 ### POST "/v1/funasr/workflows"
 

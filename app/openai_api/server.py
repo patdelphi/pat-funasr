@@ -482,10 +482,12 @@ class ModelNotDownloadedError(RuntimeError):
 
 def _model_cache_roots() -> list[Path]:
     roots = [
-        _PROJECT_ROOT / "workspace" / "models",
+        # 本机共享缓存优先：ModelScope 全局缓存
         Path.home() / ".cache" / "modelscope" / "hub" / "models",
         # HuggingFace Hub 默认缓存目录（支持 models--Org--Name/snapshots/<hash>/ 布局）
         Path.home() / ".cache" / "huggingface" / "hub",
+        # 备选：项目工作区模型目录
+        _PROJECT_ROOT / "workspace" / "models",
     ]
     # 环境变量可覆写 HF 缓存路径
     configured_hf = os.environ.get("HUGGINGFACE_HUB_CACHE", "").strip()
@@ -556,6 +558,75 @@ def _model_load_state(model_name: str) -> dict:
     }
 
 
+def _unload_translation_models_except(keep_model: str) -> None:
+    """卸载除 keep_model 外的所有已驻留翻译模型，释放 GPU 显存。
+
+    翻译为串行任务，同一时刻仅保留一个翻译模型，避免 NLLB 1.3B/600M (fp16)
+    与 TranslateGemma GGUF 同时驻留挤占显存。FunASR 不在此卸载，避免打断
+    并发进行的转录任务。
+    """
+    import torch
+    for key in list(MODEL_REGISTRY):
+        model_name = key.split("::", 1)[0]
+        if model_name == keep_model:
+            continue
+        model = MODEL_REGISTRY.get(key)
+        if model is None or not hasattr(model, "translate"):
+            continue
+        # llama.cpp 实例显式释放底层 context（GGUF 分支）
+        llm = getattr(model, "llm", None)
+        close = getattr(llm, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception:
+                logger.warning("关闭 GGUF 实例失败（无害）", exc_info=True)
+        # 释放 transformers 模型权重（NLLB / TranslateGemma transformers 分支）
+        model_obj = getattr(model, "model", None)
+        if model_obj is not None:
+            try:
+                del model_obj
+            except Exception:
+                pass
+        MODEL_REGISTRY.pop(key, None)
+        _MODEL_LAST_USED.pop(key, None)
+        if model_name in MODEL_LOAD_STATUS:
+            MODEL_LOAD_STATUS[model_name] = {"state": "unloaded", "error": None, "updated_at": time.time()}
+        logger.info("翻译模型 %s 已卸载（切换到 %s）", model_name, keep_model)
+        del model
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+
+def _unload_funasr_models() -> None:
+    """卸载所有已驻留的非翻译模型（FunASR），腾出显存。
+
+    仅在翻译模型（尤其 GGUF/llama.cpp）加载前显存余量不足时调用：
+    llama.cpp 在显存不足时会在 C++ 层 abort() 直接杀死进程（网关 502，Python
+    无法捕获）。ASR 模型下次转录时由 load_model 自动重新加载。
+    """
+    import torch
+    for key in list(MODEL_REGISTRY):
+        model = MODEL_REGISTRY.get(key)
+        if model is None or hasattr(model, "translate"):
+            continue
+        model_name = key.split("::", 1)[0]
+        model_obj = getattr(model, "model", None)
+        if model_obj is not None:
+            try:
+                del model_obj
+            except Exception:
+                pass
+        MODEL_REGISTRY.pop(key, None)
+        _MODEL_LAST_USED.pop(key, None)
+        if model_name in MODEL_LOAD_STATUS:
+            MODEL_LOAD_STATUS[model_name] = {"state": "unloaded", "error": None, "updated_at": time.time()}
+        logger.info("FunASR 模型 %s 已卸载（翻译模型需要显存）", model_name)
+        del model
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+
 def load_model(
     model_name: str,
     *,
@@ -588,6 +659,10 @@ def load_model(
 
     is_loader = False
     with MODEL_LOAD_LOCK:
+        # B: 翻译为串行任务，切换模型时先卸载其他翻译模型（FunASR 保留，
+        #    避免打断并发转录）；GGUF 显存不足时再单独卸载 FunASR
+        if cfg.get("type") == "translation":
+            _unload_translation_models_except(model_name)
         if registry_key in MODEL_REGISTRY:
             # 命中缓存：刷新最后使用时间（每次 ASR 请求都会走到这里）
             _MODEL_LAST_USED[registry_key] = time.time()
@@ -625,88 +700,390 @@ def load_model(
             # 优先使用 resolve_local_model_path 写入的本地缓存路径，
             # 避免 transformers 拿着原始模型 ID 尝试联网下载（无网时 500）
             model_dir = str(cfg.get("model_path") or model_id)
+            # 本地缓存存在则禁止联网；否则允许联网下载（如 HF gated 模型）
+            local_only = bool(cfg.get("model_path"))
 
             # 屏蔽 "Torch was not compiled with flash attention" 警告（自动回退到标准 SDPA，不影响功能）
             import warnings
             warnings.filterwarnings("ignore", message=".*Torch was not compiled with flash attention.*", category=UserWarning)
 
-            from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
-            logger.info(f"Loading tokenizer & Seq2Seq model from {model_dir}...")
-            tokenizer = AutoTokenizer.from_pretrained(model_dir, local_files_only=True)
-            model_obj = AutoModelForSeq2SeqLM.from_pretrained(model_dir, local_files_only=True)
-            if device_val != "cpu":
-                model_obj = model_obj.to(device_val)
-
-            class NLLBTranslationModel:
-                def __init__(self, tokenizer, model, device):
-                    self.tokenizer = tokenizer
-                    self.model = model
-                    self.device = device
-
-                def _translate_one(self, t: str, source_lang: str, target_lang: str, num_beams: int, max_length: int) -> str:
-                    """翻译单段文本（≤500 字），NLLB max_length=512 硬限制"""
-                    # 浅拷贝 tokenizer 再设置 src_lang，避免并发翻译请求修改共享实例属性互相污染
-                    tokenizer = copy.copy(self.tokenizer)
-                    tokenizer.src_lang = source_lang
-                    inputs = tokenizer(t, return_tensors="pt")
-                    if self.device != "cpu":
-                        inputs = {k: v.to(self.device) for k, v in inputs.items()}
-                    target_lang_id = tokenizer.convert_tokens_to_ids(target_lang)
-                    gen_out = self.model.generate(
-                        **inputs,
-                        forced_bos_token_id=target_lang_id,
-                        max_length=max_length,
-                        num_beams=num_beams,
+            gemma_model = None
+            if cfg.get("format") == "gguf":
+                # ---- TranslateGemma GGUF 量化版（llama.cpp 推理，免 HF gated token）----
+                # 在 resolve 出的本地缓存目录中定位 .gguf 权重文件（排除多模态 mmproj）
+                gguf_path = None
+                if model_dir and os.path.isdir(model_dir):
+                    candidates = [
+                        os.path.join(model_dir, f)
+                        for f in os.listdir(model_dir)
+                        if f.endswith(".gguf") and ".mmproj" not in f
+                    ]
+                    if candidates:
+                        gguf_path = candidates[0]
+                if not gguf_path:
+                    # 本地缓存未命中：自动下载到本机共享缓存（HF 全局缓存），下载后重新定位 .gguf
+                    try:
+                        from huggingface_hub import snapshot_download
+                        snapshot_dir = snapshot_download(repo_id=cfg.get("model", model_id))
+                    except Exception as exc:
+                        raise FileNotFoundError(
+                            f"GGUF 模型下载失败 {cfg.get('model', model_id)}: {exc}"
+                        ) from exc
+                    if snapshot_dir and os.path.isdir(snapshot_dir):
+                        candidates = [
+                            os.path.join(snapshot_dir, f)
+                            for f in os.listdir(snapshot_dir)
+                            if f.endswith(".gguf") and ".mmproj" not in f
+                        ]
+                        if candidates:
+                            gguf_path = candidates[0]
+                if not gguf_path:
+                    raise FileNotFoundError(
+                        f"GGUF 模型权重未找到（请先下载 {cfg.get('model', model_id)} 到本地缓存）: {model_dir}"
                     )
-                    decoded = tokenizer.batch_decode(gen_out, skip_special_tokens=True)
-                    return decoded[0] if decoded else ""
+                from llama_cpp import Llama as LlamaCpp
+                logger.info(f"Loading TranslateGemma GGUF from {gguf_path}...")
+                # 优先 GPU 全量 offload；显存余量不足或 GPU 加载失败时回退 CPU。
+                # 关键：llama.cpp 在显存不足时会在 C++ 层 abort() 直接杀死进程（Python 无法捕获，
+                # 表现为网关 502 Bad Gateway），因此必须在加载前主动检查显存余量。
+                n_gpu_layers = -1
+                try:
+                    import torch
+                    if torch.cuda.is_available():
+                        free_bytes, _ = torch.cuda.mem_get_info()
+                        if free_bytes < 4 * 1024 ** 3:
+                            # 显存不足：先卸载 FunASR 腾出显存再重试 GPU；仍不足才回退 CPU。
+                            # 关键：llama.cpp 显存不足时会在 C++ 层 abort() 直接杀死进程
+                            # （Python 无法捕获，表现为网关 502），必须提前腾出足够显存。
+                            logger.warning(
+                                "GPU 显存余量不足（%.1fGB < 4GB），先卸载 FunASR 模型腾出显存",
+                                free_bytes / 1024 ** 3,
+                            )
+                            _unload_funasr_models()
+                            free_bytes, _ = torch.cuda.mem_get_info()
+                            if free_bytes < 4 * 1024 ** 3:
+                                logger.warning(
+                                    "卸载 FunASR 后显存仍不足（%.1fGB），GGUF 回退 CPU 推理",
+                                    free_bytes / 1024 ** 3,
+                                )
+                                n_gpu_layers = 0
+                except Exception:
+                    pass
+                try:
+                    llm_obj = LlamaCpp(model_path=gguf_path, n_ctx=2048, n_gpu_layers=n_gpu_layers, verbose=False)
+                except Exception as exc:
+                    logger.warning("GGUF GPU 加载失败（%s），回退 CPU", exc)
+                    llm_obj = LlamaCpp(model_path=gguf_path, n_ctx=2048, n_gpu_layers=0, verbose=False)
 
-                def translate(self, text, source_lang: str, target_lang: str, num_beams: int = 5, max_length: int = 512):
-                    """翻译文本：自动长文本分块（≤500字/块，按句号/感叹号/问号/换行切分），避免 NLLB max_length=512 截断"""
-                    import re as _re
-                    is_list = isinstance(text, list)
-                    texts = text if is_list else [text]
-                    outputs = []
-                    for t in texts:
-                        if not t:
-                            outputs.append("")
-                            continue
-                        # 短文本直接走
-                        if len(t) <= 500:
-                            outputs.append(self._translate_one(t, source_lang, target_lang, num_beams, max_length))
-                            continue
-                        # 长文本：按换行/句号切分，累计 ≤500 字成一块
-                        raw_parts = t.split("\n")
-                        chunks: list[str] = []
-                        cur = ""
-                        for part in raw_parts:
-                            # 换行内的句子再按。！？切分
-                            sentences = _re.split(r"(?<=[。！？!?\.])\s*", part.strip())
-                            for s in sentences:
-                                if not s:
-                                    continue
-                                if len(cur) + len(s) > 500:
-                                    if cur:
-                                        chunks.append(cur)
-                                    # 单句超 500 字直接放一块（NLLB 会截断但不影响整体）
-                                    if len(s) > 500:
-                                        chunks.append(s)
-                                        cur = ""
+                class TranslateGemmaGgufTranslationModel:
+                    """TranslateGemma Q4_K_M GGUF 量化版翻译模型：llama.cpp 推理。
+
+                    免 HF gated token（社区量化仓库），语言码映射为 ISO 639-1，
+                    prompt 手动拼 Gemma3 chat template（<start_of_turn>...）。
+                    """
+
+                    # FLORES-200 码 → ISO 639-1 码（与 transformers 版一致）
+                    _FLORES_TO_ISO = {
+                        "zho_Hans": "zh",
+                        "zho_Hant": "zh-Hant",
+                        "eng_Latn": "en",
+                        "jpn_Jpan": "ja",
+                        "kor_Kore": "ko",
+                        "fra_Latn": "fr",
+                        "tha_Thai": "th",
+                        "zsm_Latn": "ms",
+                        "vie_Latn": "vi",
+                    }
+
+                    def __init__(self, llm):
+                        self.llm = llm
+
+                    def _to_iso(self, lang: str) -> str:
+                        """FLORES 码映射为 ISO 639-1；不支持时抛错。"""
+                        iso = self._FLORES_TO_ISO.get(lang)
+                        if not iso:
+                            raise ValueError(
+                                f"TranslateGemma 不支持语言码 {lang!r}，支持: {sorted(self._FLORES_TO_ISO)}"
+                            )
+                        return iso
+
+                    def _translate_one(self, t: str, source_lang: str, target_lang: str, max_tokens: int) -> str:
+                        """翻译单段文本（≤1200 字）：Gemma3 prompt + greedy 解码。"""
+                        src_iso = self._to_iso(source_lang)
+                        tgt_iso = self._to_iso(target_lang)
+                        prompt = (
+                            f"<start_of_turn>user\nTranslate the following text from {src_iso} to {tgt_iso}:\n"
+                            f"{t}<end_of_turn>\n<start_of_turn>model\n"
+                        )
+                        out = self.llm(prompt, max_tokens=max_tokens, temperature=0.0, stop=["<end_of_turn>"])
+                        choices = (out or {}).get("choices") or []
+                        return (choices[0].get("text") or "").strip() if choices else ""
+
+                    def translate(self, text, source_lang: str, target_lang: str, num_beams: int = 1, max_length: int = 512):
+                        """翻译文本：自动分块（≤1200 字/块）；num_beams 对 decoder-only 无效，max_length 作 max_tokens 下限。"""
+                        import re as _re
+                        max_tokens = max(int(max_length), 1024)
+                        is_list = isinstance(text, list)
+                        texts = text if is_list else [text]
+                        outputs = []
+                        for t in texts:
+                            if not t:
+                                outputs.append("")
+                                continue
+                            # 短文本直接走
+                            if len(t) <= 1200:
+                                outputs.append(self._translate_one(t, source_lang, target_lang, max_tokens))
+                                continue
+                            # 长文本：按换行/句号切分，累计 ≤1200 字成一块
+                            raw_parts = t.split("\n")
+                            chunks: list[str] = []
+                            cur = ""
+                            for part in raw_parts:
+                                sentences = _re.split(r"(?<=[。！？!?\.])\s*", part.strip())
+                                for s in sentences:
+                                    if not s:
+                                        continue
+                                    if len(cur) + len(s) > 1200:
+                                        if cur:
+                                            chunks.append(cur)
+                                        if len(s) > 1200:
+                                            chunks.append(s)
+                                            cur = ""
+                                        else:
+                                            cur = s
                                     else:
-                                        cur = s
-                                else:
-                                    cur += s
-                            cur += "\n"
-                        if cur.strip():
-                            chunks.append(cur.strip())
-                        # 逐块翻译
-                        translated_parts = []
-                        for chunk in chunks:
-                            translated_parts.append(self._translate_one(chunk, source_lang, target_lang, num_beams, max_length))
-                        outputs.append("\n".join(translated_parts))
-                    return outputs if is_list else outputs[0]
+                                        cur += s
+                                cur += "\n"
+                            if cur.strip():
+                                chunks.append(cur.strip())
+                            # 逐块翻译
+                            translated_parts = []
+                            for chunk in chunks:
+                                translated_parts.append(self._translate_one(chunk, source_lang, target_lang, max_tokens))
+                            outputs.append("\n".join(translated_parts))
+                        return outputs if is_list else outputs[0]
 
-            model = NLLBTranslationModel(tokenizer, model_obj, device_val)
+                gemma_model = TranslateGemmaGgufTranslationModel(llm_obj)
+            elif "translategemma" in model_id:
+                # ---- TranslateGemma（Gemma3 decoder-only，chat template 驱动，与 NLLB 编码方式不同）----
+                from transformers import AutoModelForImageTextToText, AutoProcessor
+                logger.info(f"Loading TranslateGemma processor & model from {model_dir}...")
+                processor = AutoProcessor.from_pretrained(model_dir, local_files_only=local_only)
+                model_obj = AutoModelForImageTextToText.from_pretrained(model_dir, local_files_only=local_only)
+                # 优先 GPU：CUDA 不可用或显存不足时回退 CPU
+                if device_val != "cpu":
+                    try:
+                        model_obj = model_obj.to(device_val)
+                    except Exception as exc:
+                        logger.warning("模型 %s 无法加载到 %s（%s），回退 CPU", model_name, device_val, exc)
+                        device_val = "cpu"
+                        model_obj = model_obj.to("cpu")
+                else:
+                    model_obj = model_obj.to("cpu")
+
+                class TranslateGemmaTranslationModel:
+                    """Gemma3 decoder-only 翻译模型：chat template 构造 prompt，语言码映射为 ISO 639-1。
+
+                    与 NLLB 的 encoder-decoder + src_lang/tgt_lang 编码方式不同。
+                    """
+
+                    # FLORES-200 码 → TranslateGemma 的 ISO 639-1 码
+                    _FLORES_TO_ISO = {
+                        "zho_Hans": "zh",
+                        "zho_Hant": "zh-Hant",
+                        "eng_Latn": "en",
+                        "jpn_Jpan": "ja",
+                        "kor_Kore": "ko",
+                        "fra_Latn": "fr",
+                        "tha_Thai": "th",
+                        "zsm_Latn": "ms",
+                        "vie_Latn": "vi",
+                    }
+
+                    def __init__(self, processor, model, device):
+                        self.processor = processor
+                        self.model = model
+                        self.device = device
+
+                    def _to_iso(self, lang: str) -> str:
+                        """FLORES 码映射为 ISO 639-1；不支持时抛错（模型卡规定）。"""
+                        iso = self._FLORES_TO_ISO.get(lang)
+                        if not iso:
+                            raise ValueError(
+                                f"TranslateGemma 不支持语言码 {lang!r}，支持: {sorted(self._FLORES_TO_ISO)}"
+                            )
+                        return iso
+
+                    def _translate_one(self, t: str, source_lang: str, target_lang: str, max_new_tokens: int) -> str:
+                        """翻译单段文本（≤1200 字）：chat template + generate + decode。"""
+                        import torch
+                        src_iso = self._to_iso(source_lang)
+                        tgt_iso = self._to_iso(target_lang)
+                        messages = [
+                            {
+                                "role": "user",
+                                "content": [
+                                    {
+                                        "type": "text",
+                                        "source_lang_code": src_iso,
+                                        "target_lang_code": tgt_iso,
+                                        "text": t,
+                                    }
+                                ],
+                            }
+                        ]
+                        inputs = self.processor.apply_chat_template(
+                            messages,
+                            tokenize=True,
+                            add_generation_prompt=True,
+                            return_dict=True,
+                            return_tensors="pt",
+                        )
+                        if self.device != "cpu":
+                            inputs = {k: v.to(self.device) for k, v in inputs.items()}
+                        input_len = int(inputs["input_ids"].shape[-1])
+                        with torch.inference_mode():
+                            gen_out = self.model.generate(**inputs, do_sample=False, max_new_tokens=max_new_tokens)
+                        decoded = self.processor.decode(gen_out[0][input_len:], skip_special_tokens=True)
+                        return decoded.strip() if decoded else ""
+
+                    def translate(self, text, source_lang: str, target_lang: str, num_beams: int = 1, max_length: int = 512):
+                        """翻译文本：自动分块（≤1200 字/块），TranslateGemma 上下文 2K tokens。
+
+                        num_beams 对 decoder-only 模型无效，忽略；max_length 作为 max_new_tokens 下限。
+                        """
+                        import re as _re
+                        max_new_tokens = max(int(max_length), 1024)
+                        is_list = isinstance(text, list)
+                        texts = text if is_list else [text]
+                        outputs = []
+                        for t in texts:
+                            if not t:
+                                outputs.append("")
+                                continue
+                            # 短文本直接走
+                            if len(t) <= 1200:
+                                outputs.append(self._translate_one(t, source_lang, target_lang, max_new_tokens))
+                                continue
+                            # 长文本：按换行/句号切分，累计 ≤1200 字成一块
+                            raw_parts = t.split("\n")
+                            chunks: list[str] = []
+                            cur = ""
+                            for part in raw_parts:
+                                # 换行内的句子再按。！？切分
+                                sentences = _re.split(r"(?<=[。！？!?\.])\s*", part.strip())
+                                for s in sentences:
+                                    if not s:
+                                        continue
+                                    if len(cur) + len(s) > 1200:
+                                        if cur:
+                                            chunks.append(cur)
+                                        # 单句超 1200 字直接放一块
+                                        if len(s) > 1200:
+                                            chunks.append(s)
+                                            cur = ""
+                                        else:
+                                            cur = s
+                                    else:
+                                        cur += s
+                                cur += "\n"
+                            if cur.strip():
+                                chunks.append(cur.strip())
+                            # 逐块翻译
+                            translated_parts = []
+                            for chunk in chunks:
+                                translated_parts.append(self._translate_one(chunk, source_lang, target_lang, max_new_tokens))
+                            outputs.append("\n".join(translated_parts))
+                        return outputs if is_list else outputs[0]
+
+                gemma_model = TranslateGemmaTranslationModel(processor, model_obj, device_val)
+
+            if gemma_model is None:
+                from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+                logger.info(f"Loading tokenizer & Seq2Seq model from {model_dir}...")
+                tokenizer = AutoTokenizer.from_pretrained(model_dir, local_files_only=True)
+                model_obj = AutoModelForSeq2SeqLM.from_pretrained(model_dir, local_files_only=True)
+                if device_val != "cpu":
+                    # A: NLLB 用 fp16 加载（显存减半），翻译质量损失可忽略；缓解多翻译模型挤爆显存
+                    try:
+                        model_obj = model_obj.half().to(device_val)
+                    except Exception as exc:
+                        # CUDA 上下文异常（如与 llama.cpp 混用后上下文损坏）时回退 CPU，避免翻译请求 500
+                        logger.warning("NLLB GPU 加载失败（%s），回退 CPU", exc)
+                        device_val = "cpu"
+
+                class NLLBTranslationModel:
+                    def __init__(self, tokenizer, model, device):
+                        self.tokenizer = tokenizer
+                        self.model = model
+                        self.device = device
+
+                    def _translate_one(self, t: str, source_lang: str, target_lang: str, num_beams: int, max_length: int) -> str:
+                        """翻译单段文本（≤500 字），NLLB max_length=512 硬限制"""
+                        # 浅拷贝 tokenizer 再设置 src_lang，避免并发翻译请求修改共享实例属性互相污染
+                        tokenizer = copy.copy(self.tokenizer)
+                        tokenizer.src_lang = source_lang
+                        inputs = tokenizer(t, return_tensors="pt")
+                        if self.device != "cpu":
+                            inputs = {k: v.to(self.device) for k, v in inputs.items()}
+                        target_lang_id = tokenizer.convert_tokens_to_ids(target_lang)
+                        gen_out = self.model.generate(
+                            **inputs,
+                            forced_bos_token_id=target_lang_id,
+                            max_length=max_length,
+                            num_beams=num_beams,
+                        )
+                        decoded = tokenizer.batch_decode(gen_out, skip_special_tokens=True)
+                        return decoded[0] if decoded else ""
+
+                    def translate(self, text, source_lang: str, target_lang: str, num_beams: int = 5, max_length: int = 512):
+                        """翻译文本：自动长文本分块（≤500字/块，按句号/感叹号/问号/换行切分），避免 NLLB max_length=512 截断"""
+                        import re as _re
+                        is_list = isinstance(text, list)
+                        texts = text if is_list else [text]
+                        outputs = []
+                        for t in texts:
+                            if not t:
+                                outputs.append("")
+                                continue
+                            # 短文本直接走
+                            if len(t) <= 500:
+                                outputs.append(self._translate_one(t, source_lang, target_lang, num_beams, max_length))
+                                continue
+                            # 长文本：按换行/句号切分，累计 ≤500 字成一块
+                            raw_parts = t.split("\n")
+                            chunks: list[str] = []
+                            cur = ""
+                            for part in raw_parts:
+                                # 换行内的句子再按。！？切分
+                                sentences = _re.split(r"(?<=[。！？!?\.])\s*", part.strip())
+                                for s in sentences:
+                                    if not s:
+                                        continue
+                                    if len(cur) + len(s) > 500:
+                                        if cur:
+                                            chunks.append(cur)
+                                        # 单句超 500 字直接放一块（NLLB 会截断但不影响整体）
+                                        if len(s) > 500:
+                                            chunks.append(s)
+                                            cur = ""
+                                        else:
+                                            cur = s
+                                    else:
+                                        cur += s
+                                cur += "\n"
+                            if cur.strip():
+                                chunks.append(cur.strip())
+                            # 逐块翻译
+                            translated_parts = []
+                            for chunk in chunks:
+                                translated_parts.append(self._translate_one(chunk, source_lang, target_lang, num_beams, max_length))
+                            outputs.append("\n".join(translated_parts))
+                        return outputs if is_list else outputs[0]
+
+                model = NLLBTranslationModel(tokenizer, model_obj, device_val)
+            else:
+                model = gemma_model
         else:
             from funasr import AutoModel
             model = AutoModel(**cfg)

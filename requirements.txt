@@ -1,0 +1,35 @@
+﻿# Pat-FunASR 运行时依赖清单（2026-09-17 对齐 runtime\python 虚拟环境）
+# 用途：描述便携包内置 Python 运行时的包版本，供排查/重建环境参考。
+# 说明：
+#   - 本项目为 Windows 便携包，内置运行时位于 runtime\python，此清单与其保持一致；
+#   - 核心 ASR 框架 funasr 为本地源码（app/funasr），不走 pip 安装；
+#   - torch/torchaudio 使用 CUDA 12.1 版本（+cu121），CPU 环境可降为纯 CPU 版；
+#   - CI 最小测试依赖请见 Docs/requirements-ci.txt。
+
+# === 核心框架 ===
+torch==2.5.1+cu121
+torchaudio==2.5.1+cu121
+transformers==4.57.6
+modelscope==1.37.1
+huggingface_hub==0.36.2
+
+# === ASR 推理链路（funasr 源码依赖） ===
+numpy==2.4.6
+librosa==0.11.0
+soundfile==0.13.1
+scipy==1.17.1
+sentencepiece==0.2.1
+einops==0.8.2
+scikit-learn==1.8.0
+
+# === 翻译模型（TranslateGemma GGUF，llama.cpp 推理） ===
+llama_cpp_python==0.3.30
+
+# === API / WebUI ===
+fastapi==0.136.3
+uvicorn==0.48.0
+gradio==6.15.2
+python-multipart==0.0.29
+pydantic==2.13.4
+httpx==0.28.1
+requests==2.34.2

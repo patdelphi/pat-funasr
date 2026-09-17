@@ -86,6 +86,17 @@ MODEL_CONFIGS = {
         "hub": "ms",
         "type": "translation",
     },
+    "translategemma-4b-it": {
+        "model": "google/translategemma-4b-it",
+        "hub": "hf",
+        "type": "translation",
+    },
+    "translategemma-4b-it-gguf": {
+        "model": "mradermacher/translategemma-4b-it-GGUF",
+        "hub": "hf",
+        "type": "translation",
+        "format": "gguf",
+    },
 }
 
 
@@ -210,6 +221,30 @@ MODEL_CAPABILITIES = {
         "forced_alignment": False,
         "notes": "多语种文本翻译；1.3B 参数高精度版",
     },
+    "translategemma-4b-it": {
+        "kind": "translation",
+        "offline_asr": False,
+        "streaming_asr": False,
+        "diarization": False,
+        "emotion": False,
+        "vad": False,
+        "punc": False,
+        "translation": True,
+        "forced_alignment": False,
+        "notes": "Gemma3 系多语种文本翻译；4B 参数，优先 GPU，语言码为 ISO 639-1",
+    },
+    "translategemma-4b-it-gguf": {
+        "kind": "translation",
+        "offline_asr": False,
+        "streaming_asr": False,
+        "diarization": False,
+        "emotion": False,
+        "vad": False,
+        "punc": False,
+        "translation": True,
+        "forced_alignment": False,
+        "notes": "TranslateGemma Q4_K_M GGUF 量化版（llama.cpp 推理，免 HF gated token）；语言码为 ISO 639-1",
+    },
 }
 
 
@@ -226,10 +261,17 @@ MODELSCOPE_MODEL_ALIASES = {
 
 
 def _has_model_payload(path: Path) -> bool:
-    """判断缓存目录是否包含配置和权重类文件。"""
+    """判断缓存目录是否包含配置和权重类文件。
+
+    兼容两类仓库：
+    - 常规仓库：config(yaml/json) + 权重文件；
+    - GGUF 仓库（如 TranslateGemma 量化版）：仅含 .gguf 文件，无 config.json。
+    """
     if not path.is_dir():
         return False
     names = {item.name for item in path.iterdir() if item.is_file()}
+    if any(name.endswith(".gguf") for name in names):
+        return True
     has_config = bool({"config.yaml", "configuration.json", "config.json"} & names)
     has_payload = any(
         name.endswith((".pt", ".bin", ".safetensors"))

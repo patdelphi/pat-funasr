@@ -1,4 +1,4 @@
-﻿"""
+"""
 程序说明：
 模型别名与 model id 映射的单元测试（unittest）。
 
@@ -149,6 +149,41 @@ class TestModelConfigs(unittest.TestCase):
             resolved = server.resolve_local_model_path("cam++", [temp_dir])
 
             self.assertEqual(resolved, model_dir.resolve())
+
+    def test_model_cache_roots_prefer_shared_cache(self):
+        """模型查找顺序：本机共享缓存优先（ModelScope→HuggingFace），项目 workspace 目录兜底。"""
+        server = _load_server_module()
+        roots = [str(p).replace("\\", "/") for p in server._model_cache_roots()]
+        ms_idx = next(i for i, r in enumerate(roots) if ".cache/modelscope/hub/models" in r)
+        hf_idx = next(i for i, r in enumerate(roots) if ".cache/huggingface/hub" in r)
+        ws_idx = next(i for i, r in enumerate(roots) if r.endswith("workspace/models"))
+        self.assertLess(ms_idx, hf_idx, "ModelScope 共享缓存应先于 HuggingFace 缓存")
+        self.assertLess(hf_idx, ws_idx, "共享缓存应先于项目 workspace/models")
+
+    def test_resolve_local_model_path_matches_hf_snapshot_layout(self):
+        """HF Hub 缓存布局（models--Org--Name/snapshots/<hash>/）可被解析。
+
+        GGUF 仓库（如 TranslateGemma 量化版）只有 .gguf 文件、无 config.json，
+        也应视为有效的模型目录。
+        """
+        from tempfile import TemporaryDirectory
+
+        server = _load_server_module()
+        with TemporaryDirectory() as temp_dir:
+            snapshot = (
+                Path(temp_dir)
+                / "models--mradermacher--translategemma-4b-it-GGUF"
+                / "snapshots"
+                / "35a7486e128b19642cdc72d7b91b21ba388aaf42"
+            )
+            snapshot.mkdir(parents=True)
+            (snapshot / "translategemma-4b-it.Q4_K_M.gguf").write_bytes(b"gguf")
+
+            resolved = server.resolve_local_model_path(
+                "mradermacher/translategemma-4b-it-GGUF", [temp_dir]
+            )
+
+            self.assertEqual(resolved, snapshot.resolve())
 
     def test_concurrent_first_load_uses_single_flight(self):
         server = _load_server_module()

@@ -4140,3 +4140,101 @@ efine_transcript_streaming，每块前 yield progress(0.50~0.68, "🧠 LLM 优�
 - 修复：app/openai_api/server.py 625-627 行 `model_dir = str(cfg.get('model_path') or model_id)`
 - 测试：test_server_translation_endpoint.py 新增 TestTranslationLoadsFromLocalCache（mock transformers 验证 from_pretrained 收到本地缓存绝对路径，先红后绿）
 - 验证：全量 pytest 279 passed（原 278 + 新 1）；真实 tokenizer 从缓存路径加载成功（eng_Latn id=256047）
+## 2026-09-17 11:58:27 阶段6：TranslateGemma 集成
+
+### User
+
+- 查看 google/translategemma-4b-it 调用方法（与 NLLB 不同）并规划集成；确认：新增可选模型、本地优先/联网下载、优先 GPU
+
+### Assistant
+
+- 6a model_catalog.py：新增 translategemma-4b-it 配置与能力表
+- 6b server.py：translation 分支按模型分派；新增 TranslateGemmaTranslationModel（AutoProcessor + AutoModelForImageTextToText + apply_chat_template；FLORES→ISO639 映射；本地缓存存在禁止联网、否则允许联网下载；GPU 优先、CUDA 失败回退 CPU；1200字分块；num_beams 忽略、max_length→max_new_tokens）
+- 6c /v1/translations 端点零改动
+- 6d gradio_app.py：两处翻译模型下拉增加 TranslateGemma-4B-IT
+- 6e 新增 test_server_translategemma.py 7 用例（注册/加载分支/联网下载/语言码映射/未知码报错/分块/GPU回退）
+- 6f 全量回归 286 passed（原 279 + 7）；变更摘要 Docs/phase6-translategemma-20260917.md
+- 注意：gated 模型需 HF token，当前环境无法连接 HF，首次加载需代理/token 或手动放置缓存
+
+## 2026-09-17 12:09:17 下载 TranslateGemma 到 C 盘全局缓存（受阻）
+
+### User
+
+- - 下载模型，下到 C 盘作为全局缓存；坚持认为不用 token 也能下载
+
+### Assistant
+
+- - 检查：HF token 无（env 与 ~/.cache/huggingface/token 均无）；网络通（huggingface.co 与 hf-mirror.com 均 200）；huggingface_hub 0.35.3 已装
+- 探测 google/translategemma-4b-it：gated=manual（需网页同意许可 + read token）
+- 实测：hf.co 无 token → GatedRepoError 401；hf-mirror.com 同样失败（LocalEntryNotFoundError，gated 不因镜像绕过）
+- 结论：该 gated 模型无 token 无法下载，请用户提供 token（写入 ~/.cache/huggingface/token，仅本机，不进代码）或自行配置后继续
+
+## 2026-09-17 12:09:17 GGUF 替代方案调研（mradermacher/translategemma-4b-it-GGUF）
+
+### User
+
+- - 查看 https://huggingface.co/mradermacher/translategemma-4b-it-GGUF 的 Q4_K_M 能否用、当前环境是否支持
+
+### Assistant
+
+- - 模型卡：非 gated 社区量化版，Q4_K_M 2.6GB（fast, recommended），另有 Q4_K_S/Q5/Q6/Q8/f16 等；License gemma
+- 环境检查：本机默认 python C:\Python313 为 torch 2.9.0+cpu（CUDA 不可用）→ 一度误判无 GPU；py3.11/3.12 无 torch；llama-cpp-python 未安装
+- 结论：GGUF 需 llama-cpp-python 推理，CUDA 版 wheel 约 400-600MB（静态 cuBLAS 免编译），模型 2.6GB 下到 C 盘缓存；NLLB 保持默认，GGUF 分支并行集成
+
+## 2026-09-17 12:09:17 确认项目虚拟环境与 GPU（纠正误判）
+
+### User
+
+- - 指出本机有 GPU、funasr 均为 GPU 跑；批评未查看项目虚拟环境
+
+### Assistant
+
+- - 查实：项目虚拟环境为 y:\NewStore\AI\pat-funasr\runtime\python（torch 2.5.1+cu121，cuda available=True，NVIDIA GeForce RTX 3080 10GB）；用户判断正确，之前用系统 C:\Python313 检测属误判
+- 教训：后续测试与依赖安装应统一用 runtime\python；此前 286 passed 回归在系统 python 下跑过，后续回归改用 runtime 环境
+- 方案：runtime\python 装 llama-cpp-python cu121 wheel + 下载 Q4_K_M 到 C 盘全局缓存 + server.py 加 GGUF 翻译分支 + 测试（待用户确认执行）## 2026-09-17 12:40:00 按 GGUF 方案执行（阶段 6-GGUF 完成）
+
+### User
+
+- - 好的，按 GGUF 方案执行
+
+### Assistant
+
+- - 修复 app/model_catalog.py `_has_model_payload`：GGUF 仓库仅含 .gguf 文件、无 config.json，导致 HF 快照布局解析返回 None；现识别 .gguf 即视为有效模型目录
+- - 真实加载冒烟测试通过：server.load_model('translategemma-4b-it-gguf', device='cuda') 加载 2.7s（GPU）、翻译 0.5s，输出 "The weather is great today, let's go for a walk in the park together."
+- - 补充测试：test_model_configs.py 新增 HF 快照布局解析用例；test_server_translategemma_gguf.py 7 用例全过；全量回归 293 passed（后台任务确认 exit 0）
+- - 删除临时冒烟脚本 tests/smoke_gguf_load.py
+- - 更新 todo.md（6g-6m 勾选）、Docs/phase6-translategemma-20260917.md（追加 GGUF 部分）
+- - 未执行：git commit/push（需用户确认）
+- - 备注：llama-cpp-python 进程退出时 Llama.__del__ 报 TypeError 为库自身清理噪音，不影响功能
+
+## 2026-09-17 会话记录（模型缓存与 UI 适配）
+
+- 用户确认：语音/翻译模型查找顺序为本机共享缓存优先（ModelScope→HF 全局缓存），项目 workspace/models 兜底；加载自适应 hf/ms 布局；找不到需下载时优先 ms 其次 hf、落共享缓存
+- 修改 app/openai_api/server.py：_model_cache_roots() 共享缓存优先；GGUF 分支本地未命中自动 snapshot_download 到 HF 共享缓存后加载（下载失败抛 FileNotFoundError）
+- 修改 app/pat_funasr_webui/gradio_app.py：精细转录 tab 与跨语言翻译 tab 翻译模型下拉只保留 "TranslateGemma-4B-IT (GGUF)"（移除 NLLB 600M/1.3B 与非 GGUF gemma3；注册与 API 保留）
+- 测试：test_server_translategemma_gguf.py 新增自动下载/下载失败/缺文件用例；test_model_configs.py 新增 roots 顺序断言 —— 相关 21 passed
+- 期间排查：测试曾误触发真实下载（16 文件，后台卡住约 5 分钟，已停）；GPU 高占用为测试瞬时负载与桌面软件（ToDesk/Feishu/浏览器），nvidia-smi 实测 12%
+- 未执行：git commit/push（需确认）
+
+## 2026-09-17 会话记录（包版本核对与文档更新）
+
+- 用户请求：检查项目包文件是否对应最新虚拟环境（runtime\python）的包版本；更新 readme 与 Docs 技术文档，写清模型查找、下载、加载环境
+- 包版本核对（Docs\requirements-ci.txt vs venv）：fastapi 0.136.3 / gradio 6.15.2 / httpx 0.28.1 / pydantic 2.13.4 / pytest 9.1.1 / requests 2.34.2 / scipy 1.17.1 / torch 2.5.1 一致
+- 更新 requirements-ci.txt：numpy 1.26.4→2.4.6、python-multipart 0.0.20→0.0.29（对齐 venv）
+- 用户确认后安装 pytest-cov==7.1.0 到 venv（CI 覆盖率门禁所需，本地此前缺失）；venv 现有运行侧关键依赖 llama_cpp_python 0.3.30 / modelscope 1.37.1 / transformers 4.57.6 / torchaudio 2.5.1+cu121 / huggingface_hub 0.36.2
+- 更新 Docs\requirements.md：模型统一本机共享缓存（ModelScope→HF 全局），查找顺序=环境变量→ModelScope→HF→workspace\models 兜底；下载位置（语音走 ms、翻译走 hf snapshot_download）；加载环境（FunASR GPU 优先、NLLB fp16 回退 CPU、GGUF 显存不足先卸 FunASR 再回退 CPU）；关键环境变量补充
+- 更新 README.md：12 个本地模型清单、翻译章节补 TranslateGemma、ZIP 打包 8 件套、新增"模型：查找、下载与加载环境"章节、模型能力矩阵补 qwen3-asr-0.6b 与 translategemma-4b-it-gguf、项目结构移除已删除的 start_services.py
+- 更新 Docs\model-capability-matrix.md：模型别名列表与矩阵补 translategemma-4b-it / translategemma-4b-it-gguf（hub=hf、ISO 639-1、GGUF 免 gated token）
+- 更新 Docs\api.md：health models_available 补全 12 模型；/v1/funasr/translate 补 TranslateGemma 语言码与模型选项
+- 更新 Docs\deployment.md：缓存目录改本机共享缓存、手动预下载脚本、加载环境说明
+- 未执行：git commit/push（需确认）
+
+## 2026-09-17 会话记录（清理与 requirements 整理）
+
+- 用户请求：test/tests 目录处理、清理临时文件、requirements 是否放根目录、文档更新
+- 确认决策：tests/（pytest 单元测试，CI 覆盖率门禁依赖）不 ignore 保留；清理根目录临时文件 + logs 目录；requirements 放根目录完整清单
+- 新增根目录 requirements.txt：运行时完整依赖清单（对齐 runtime\python），含 torch 2.5.1+cu121 / torchaudio / transformers 4.57.6 / modelscope 1.37.1 / huggingface_hub 0.36.2 / llama_cpp_python 0.3.30 / numpy 2.4.6 / librosa 0.11.0 / soundfile 0.13.1 / fastapi 0.136.3 / gradio 6.15.2 等；funasr 为本地源码不走 pip
+- 清理：根目录 .coverage、funasr-api.log(31MB)、funasr-ui.log、gradio_stderr.log、workflow-artifacts.zip、trae-debug-log-bat-startup-failure.txt、logs/ 目录，以及全部 1805 个 __pycache__
+- .gitignore 补充：logs/、.coverage（test/ 音视频样本原本已 ignore）
+- 文档更新：README 项目结构加入 requirements.txt；Docs/requirements.md 目标形态补充根 requirements.txt 与 CI 清单引用
+- 未执行：git commit/push（需确认）

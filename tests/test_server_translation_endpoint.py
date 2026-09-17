@@ -217,5 +217,182 @@ class TestTranslationLoadsFromLocalCache(unittest.TestCase):
         self.assertTrue(hasattr(model, "translate"))
 
 
+class TestNllbFp16AndTranslationUnload(unittest.TestCase):
+    """验证 A+B 修复：
+
+    - A: NLLB 在 GPU 上以 fp16 加载（显存减半）。
+    - B: 切换翻译模型时自动卸载其他翻译模型，释放显存。
+    """
+
+    def setUp(self):
+        self.server = _load_server_module()
+        self.server.MODEL_REGISTRY.clear()
+        self.server._MODEL_LAST_USED.clear()
+        self.server.MODEL_LOAD_STATUS.clear()
+        self.server.MODEL_LOAD_ERRORS.clear()
+
+    def tearDown(self):
+        self.server.MODEL_REGISTRY.clear()
+        self.server._MODEL_LAST_USED.clear()
+        self.server.MODEL_LOAD_STATUS.clear()
+        self.server.MODEL_LOAD_ERRORS.clear()
+        for key in list(self.server.MODEL_LOAD_EVENTS):
+            self.server.MODEL_LOAD_EVENTS.pop(key, None)
+
+    def _patch_nllb(self, fake_model):
+        """mock transformers，返回 fake_model 作为 Seq2Seq 模型。"""
+        from unittest import mock
+        return mock.patch(
+            "transformers.AutoTokenizer.from_pretrained",
+            side_effect=lambda *a, **k: object(),
+        ), mock.patch(
+            "transformers.AutoModelForSeq2SeqLM.from_pretrained",
+            return_value=fake_model,
+        )
+
+    def test_nllb_gpu_load_uses_half(self):
+        """GPU 加载 NLLB 时模型转 fp16 并加载到指定设备。"""
+        from unittest import mock
+
+        class _FakeSeq2Seq:
+            def __init__(self):
+                self.half_called = 0
+                self.to_device = None
+
+            def half(self):
+                self.half_called += 1
+                return self
+
+            def to(self, device):
+                self.to_device = device
+                return self
+
+        fake_model = _FakeSeq2Seq()
+        p1, p2 = self._patch_nllb(fake_model)
+        with p1, p2:
+            model = self.server.load_model("nllb-200-distilled-600m", device="cuda")
+
+        self.assertTrue(hasattr(model, "translate"))
+        self.assertEqual(fake_model.half_called, 1)
+        self.assertEqual(fake_model.to_device, "cuda")
+
+    def test_switching_translation_model_unloads_previous(self):
+        """切换翻译模型时，先前驻留的翻译模型被卸载。"""
+        from unittest import mock
+
+        p1, p2 = self._patch_nllb(_FakeNllbWeight())
+        with p1, p2:
+            model_600m = self.server.load_model("nllb-200-distilled-600m", device="cuda")
+        self.assertTrue(hasattr(model_600m, "translate"))
+
+        # 加载 1.3B 前 600M 驻留
+        self.assertTrue(
+            any(k.startswith("nllb-200-distilled-600m") for k in self.server.MODEL_REGISTRY)
+        )
+
+        with p1, p2:
+            model_1_3b = self.server.load_model("nllb-200-distilled-1.3b", device="cuda")
+
+        self.assertTrue(hasattr(model_1_3b, "translate"))
+        self.assertFalse(
+            any(k.startswith("nllb-200-distilled-600m") for k in self.server.MODEL_REGISTRY),
+            msg="600M 未被卸载",
+        )
+        self.assertTrue(
+            any(k.startswith("nllb-200-distilled-1.3b") for k in self.server.MODEL_REGISTRY)
+        )
+        self.assertEqual(
+            self.server.MODEL_LOAD_STATUS["nllb-200-distilled-600m"]["state"], "unloaded"
+        )
+
+    def test_unload_calls_gguf_close_and_keeps_funasr(self):
+        """切换翻译模型时卸载 GGUF（调 llama close），但保留 FunASR（避免打断并发转录）。"""
+        from unittest import mock
+
+        class _FakeLlamaWithClose:
+            def __init__(self):
+                self.closed = 0
+
+            def close(self):
+                self.closed += 1
+
+        class _FakeGgufModel:
+            def __init__(self):
+                self.llm = _FakeLlamaWithClose()
+
+            def translate(self, *a, **k):
+                return ""
+
+        class _FakeFunasrModel:
+            def transcribe(self, *a, **k):
+                return {}
+
+        gguf_model = _FakeGgufModel()
+        self.server.MODEL_REGISTRY["translategemma-4b-it-gguf::device=cuda"] = gguf_model
+        self.server.MODEL_REGISTRY["sensevoice::device=cuda"] = _FakeFunasrModel()
+        self.server.MODEL_LOAD_STATUS["translategemma-4b-it-gguf"] = {
+            "state": "ready", "error": None, "updated_at": 0.0,
+        }
+        self.server.MODEL_LOAD_STATUS["sensevoice"] = {
+            "state": "ready", "error": None, "updated_at": 0.0,
+        }
+
+        p1, p2 = self._patch_nllb(_FakeNllbWeight())
+        with p1, p2:
+            self.server.load_model("nllb-200-distilled-600m", device="cuda")
+
+        self.assertEqual(gguf_model.llm.closed, 1, "GGUF llama close 未被调用")
+        self.assertNotIn("translategemma-4b-it-gguf::device=cuda", self.server.MODEL_REGISTRY)
+        self.assertIn("sensevoice::device=cuda", self.server.MODEL_REGISTRY, "FunASR 应保留")
+        self.assertEqual(
+            self.server.MODEL_LOAD_STATUS["translategemma-4b-it-gguf"]["state"], "unloaded"
+        )
+        self.assertEqual(self.server.MODEL_LOAD_STATUS["sensevoice"]["state"], "ready")
+
+    def test_nllb_gpu_load_failure_falls_back_to_cpu(self):
+        """NLLB GPU 加载失败（CUDA 上下文异常）时回退 CPU，不抛 500。"""
+        from unittest import mock
+
+        class _FakeSeq2Seq:
+            def half(self):
+                raise RuntimeError("CUDA error: invalid argument (mock)")
+
+            def to(self, device):
+                return self
+
+        p1, p2 = self._patch_nllb(_FakeSeq2Seq())
+        with p1, p2:
+            model = self.server.load_model("nllb-200-distilled-1.3b", device="cuda")
+
+        self.assertTrue(hasattr(model, "translate"))
+        self.assertEqual(model.device, "cpu")
+
+    def test_unload_keeps_requested_model(self):
+        """卸载逻辑保留当前请求的模型。"""
+        class _FakeGgufModel:
+            def __init__(self):
+                self.llm = _FakeLlama()
+            def translate(self, *a, **k):
+                return ""
+
+        class _FakeLlama:
+            def close(self):
+                pass
+
+        self.server.MODEL_REGISTRY["nllb-200-distilled-600m::device=cuda"] = _FakeGgufModel()
+        self.server._unload_translation_models_except("nllb-200-distilled-600m")
+        self.assertIn("nllb-200-distilled-600m::device=cuda", self.server.MODEL_REGISTRY)
+
+
+class _FakeNllbWeight:
+    """NLLB 权重假对象：支持 .half()/.to()。"""
+
+    def half(self):
+        return self
+
+    def to(self, device):
+        return self
+
+
 if __name__ == "__main__":
     unittest.main()

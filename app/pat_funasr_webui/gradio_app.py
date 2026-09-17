@@ -3401,8 +3401,10 @@ def build_app(default_base_url: str, default_timeout: float):
                                     ft_translation_enabled = gr.Checkbox(label="启用翻译", value=False)
                                     ft_translation_model = gr.Dropdown(
                                         label="翻译模型",
-                                        choices=["nllb-200-distilled-600m", "nllb-200-distilled-1.3b"],
-                                        value="nllb-200-distilled-600m",
+                                        choices=[
+                                            "translategemma-4b-it-gguf",
+                                        ],
+                                        value="translategemma-4b-it-gguf",
                                     )
                                     with gr.Row():
                                         ft_source_lang = gr.Textbox(label="源语言代码", value="zho_Hans")
@@ -4263,10 +4265,9 @@ def build_app(default_base_url: str, default_timeout: float):
                                 trans_model = gr.Dropdown(
                                     label="翻译模型",
                                     choices=[
-                                        ("NLLB-200-Distilled 600M", "nllb-200-distilled-600m"),
-                                        ("NLLB-200-Distilled 1.3B", "nllb-200-distilled-1.3b"),
+                                        ("TranslateGemma-4B-IT (GGUF)", "translategemma-4b-it-gguf"),
                                     ],
-                                    value="nllb-200-distilled-600m",
+                                    value="translategemma-4b-it-gguf",
                                 )
                                 trans_model_source_hint = gr.HTML(
                                     value=get_model_source_hint_html(model_status_text),

@@ -25,7 +25,7 @@
 
 - **长音频分块识别**：>5 分钟音频自动 ffmpeg 切片（默认 4 分钟/块，10 秒重叠），每块独立 ASR 后通过"文本指纹 + 2×重叠时间窗口"去重合并，2 小时录音识别完整度从 4000 字提升到 50000+ 字（+1200%）
 
-- **9 个本地模型**：SenseVoice、Paraformer（中文）、Paraformer-EN、Paraformer-ZH-Streaming、Fun-ASR-Nano、Qwen3-ASR 1.7B / 0.6B
+- **12 个本地模型**：7 个 ASR（SenseVoice、Paraformer-中文、Paraformer-EN、Paraformer-ZH-Streaming、Fun-ASR-Nano、Qwen3-ASR 1.7B / 0.6B）、1 个情感识别（emotion2vec-plus-large）、4 个翻译（NLLB 600M / 1.3B、TranslateGemma-4B-IT、TranslateGemma-4B-IT GGUF 量化版）
 
 - **双模型对照**：主模型 + 一个或多个校对模型并行/串行运行，`primary_first` 或 `weighted_consensus` 策略自动对齐，避免单一模型系统性错误
 
@@ -53,13 +53,15 @@
 
 - **思维导图（mindmap）**：`title / children` 嵌套 JSON，Gradio 端使用 iframe srcdoc + markmap 渲染，空结果显示黄色警告卡片；多块文本 children 自动合并到同一根节点
 
-### 🌐 翻译（NLLB 本地模型）
+### 🌐 翻译（本地模型）
 
 - NLLB-200-Distilled 600M / 1.3B，支持 200+ 语言互译
 
-- **长文本自动分块翻译**：按句号/感叹号/问号切分，≤500 字/块逐块翻译，避免 NLLB `max_length=512` 导致的长文本截断与卡死
+- **TranslateGemma-4B-IT**：Gemma3 系多语种翻译，支持 GGUF Q4_K_M 量化版（llama.cpp 推理，免 HF gated token）
 
-- 翻译源/目标语言代码严格匹配 NLLB 原生 BCP-47（如 `zho_Hans`、`eng_Latn`）
+- **长文本自动分块翻译**：按句号/感叹号/问号切分，NLLB ≤500 字/块、TranslateGemma ≤1200 字/块逐块翻译，避免模型长度上限导致的长文本截断与卡死
+
+- 翻译源/目标语言代码：NLLB 严格匹配原生 BCP-47（如 `zho_Hans`、`eng_Latn`）；TranslateGemma 使用 ISO 639-1（如 `zh`、`en`）
 
 ### ❤️ 情感识别
 
@@ -71,7 +73,7 @@
 
 - **单格式**：JSON / TXT / SRT / VTT / TSV
 
-- **ZIP 打包（精细转录）**：output.txt、transcript\_segments.txt、transcript\_refined.txt、output.tsv、output.srt、output.vtt、output.json、summary.md、mindmap.json —— 共 9 个文件
+- **ZIP 打包（精细转录）**：transcript.json、transcript.txt、transcript.srt、transcript.vtt、transcript.tsv、transcript\_refined.txt、summary.md、mindmap.json —— 共 8 个文件（文件名带时间戳，可选追加 csv/docx）
 
 - UTF-8 BOM，Windows 换行符，无乱码
 
@@ -161,7 +163,38 @@ LLM_2_MODELS=qwen3.7-plus
 
 WebUI 会自动显示已启用的 Provider/模型选项。`.env` 已加入 `.gitignore`。
 
-模型全部下载到 **`C:\Users\<你>\.cache\modelscope\hub\models`** 作为全局缓存，多项目共享。
+## 🧩 模型：查找、下载与加载环境
+
+### 模型缓存位置（本机共享，多项目复用）
+
+| 缓存目录 | 存放模型 | 说明 |
+| --- | --- | --- |
+| `C:\Users\<你>\.cache\modelscope\hub\models` | 语音模型（SenseVoice、Paraformer、Qwen3-ASR、Fun-ASR-Nano、emotion2vec 等） | ModelScope 全局缓存，**默认优先** |
+| `C:\Users\<你>\.cache\huggingface\hub` | 翻译模型（TranslateGemma-4B-IT 及 GGUF 量化版） | HF 全局缓存（`models--Org--Name/snapshots/<hash>/` 布局） |
+| `workspace\models` | 兜底目录 | 仅当上述共享缓存未命中时使用 |
+
+### 查找顺序
+
+1. 环境变量 `MODELSCOPE_CACHE` / `HUGGINGFACE_HUB_CACHE`（若已设置，优先级最高）
+2. ModelScope 全局缓存
+3. HuggingFace 全局缓存
+4. 项目 `workspace\models` 兜底
+
+模型别名解析兼容 ModelScope 布局（`Org/Name`、`Org___Name`）与 HF 布局（`models--Org--Name/snapshots/<hash>/`）；纯 `.gguf` 仓库（无 config.json）同样可识别。
+
+### 下载行为
+
+- **语音模型**：默认 ModelScope 源（hub=ms），首次加载由 FunASR 内部下载到 ModelScope 全局缓存
+- **翻译模型**（TranslateGemma 含 GGUF）：仅存在于 HuggingFace，本地未命中时 server 自动 `snapshot_download` 到 HF 全局缓存后加载
+- 已下载的模型默认 `check_latest=False`，不会主动联网校验；GGUF 量化版**免 HF gated token**
+- 手动预下载：运行 `scripts\prefetch_models.py`（语音模型）或 `scripts\download_model.py`
+
+### 加载环境（GPU 优先，自动回退 CPU）
+
+- **语音/情感/说话人模型**：FunASR `AutoModel`，device 取启动参数（默认 `cuda`，可用 `FunASR_pat.bat cpu` 切 CPU）
+- **NLLB 翻译**：fp16 加载到 GPU，加载失败自动回退 CPU
+- **TranslateGemma GGUF**：llama.cpp 推理（`n_gpu_layers=-1`）；显存余量 <4GB 时先自动卸载 FunASR 模型腾显存重试，仍不足回退 CPU（防止 llama.cpp 显存不足直接 abort 进程）
+- 切换翻译模型时自动卸载其他翻译模型；模型闲置默认 1800s 自动释放（`FUNASR_MODEL_IDLE_TTL_S` 可调）
 
 ## 🧪 快速测试
 
@@ -193,9 +226,11 @@ python -m pytest tests/test_renderers.py -x -q                   # 产物导出
 | paraformer-zh-streaming |   -  |   ✅  |   -   |   -  |   -  | 中文/英文                    |
 | fun-asr-nano            |   ✅  |   -  |   ✅   |   -  |   -  | 中文/英文/日文 + 7 种方言         |
 | qwen3-asr               |   ✅  |   -  |   -   |   -  |   -  | 30 种语言 + 22 种中文方言        |
+| qwen3-asr-0.6b          |   ✅  |   -  |   -   |   -  |   -  | 30 种语言 + 22 种中文方言（轻量）   |
 | emotion2vec-plus-large  |   -  |   -  |   -   |   ✅  |   -  | 跨语种                      |
 | nllb-200-distilled-600m |   -  |   -  |   -   |   -  |   ✅  | 200+ 语言互译                |
 | nllb-200-distilled-1.3b |   -  |   -  |   -   |   -  |   ✅  | 200+ 语言互译                |
+| translategemma-4b-it-gguf |   -  |   -  |   -   |   -  |   ✅  | 多语种（ISO 639-1 语言码）       |
 
 详见 [模型能力矩阵](Docs/model-capability-matrix.md)。
 
@@ -257,11 +292,11 @@ pat-funasr/
 ├── workspace/                        # 运行时产物、临时文件、本地测试结果
 ├── aipython/                         # Python 工具脚本
 ├── scripts/                          # 启动/下载/探测脚本
+├── requirements.txt                  # 运行时依赖清单（与内置虚拟环境对齐）
 ├── .env.sample                       # LLM 配置模板
-├── start_services.py                 # 托管启动
 ├── FunASR_pat.bat                    # 一键启动（推荐）
 ├── run_api.bat / run_ui_pat.bat      # 分别启动
-└── README.md / README_zh.md
+└── README.md
 ```
 
 ## 📚 文档索引

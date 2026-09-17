@@ -58,6 +58,8 @@ b5_outputs*/
 *.tmp
 *.temp
 trae-debug-log-*.txt
+logs/
+.coverage
 
 # IDE/系统文件
 .vscode/
